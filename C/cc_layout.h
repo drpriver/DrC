@@ -37,9 +37,9 @@ cc_type_sizeof_complete(const CcTargetConfig* tc, CcQualType type, uint32_t* out
         case CC_STRUCT: case CC_UNION:
             if(ccqt_as_struct(type)->is_incomplete) return _cc_not_constant_error;
             *out = ccqt_as_struct(type)->size; return 0;
+        case CC_VECTOR: *out = ccqt_as_vector(type)->vector_size; return 0;
         case CC_ARRAY:{
             CcArray* a = ccqt_as_array(type);
-            if(a->is_vector){ *out = a->vector_size; return 0; }
             if(a->is_incomplete) return _cc_not_constant_error;
             uint32_t element_size;
             int err = cc_type_sizeof_complete(tc, a->element, &element_size);
@@ -58,16 +58,16 @@ cc_field_path_resolve(const CcTargetConfig* target, CcQualType type, CcFieldPath
         uint32_t index = cc_field_path_component(path, i);
         CcTypeKind kind = ccqt_kind(type);
         if(bitfield) return _cc_not_constant_error;
-        if(kind == CC_ARRAY){
-            CcArray* array = ccqt_as_array(type);
-            if(!array->is_incomplete && index >= array->length) return _cc_not_constant_error;
+        if(kind == CC_ARRAY || kind == CC_VECTOR){
+            if(!ccqt_array_incomplete(type) && index >= ccqt_sequence_length(type))
+                return _cc_not_constant_error;
             uint32_t size;
-            int err = cc_type_sizeof_complete(target, array->element, &size);
+            int err = cc_type_sizeof_complete(target, ccqt_array_element(type), &size);
             if(err) return err;
             uint64_t delta;
             if(mul_overflow((uint64_t)index, (uint64_t)size, &delta)
                 || add_overflow(offset, delta, &offset)) return _cc_overflow_error;
-            type = array->element;
+            type = ccqt_array_element(type);
         }
         else if(kind == CC_STRUCT || kind == CC_UNION){
             CcStruct* aggregate = ccqt_as_struct(type);

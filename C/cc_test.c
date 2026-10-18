@@ -3860,6 +3860,18 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "vector: identity and lane reflection stay distinct from arrays", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));\n"
+                "typedef int W __attribute__((vector_size(16))); typedef int A[4];\n"
+                "_Static_assert(V==W && V!=A && V.is_vector && !V.is_array);\n"
+                "_Static_assert(A.is_array && !A.is_vector && !V.is_incomplete);\n"
+                "_Static_assert(V.count==4 && V.element_type==int && _Countof(V)==4);\n"
+                "constexpr V v={1,2,3,4};\n"
+                "_Static_assert(v[2]==3 && typeof(v[0])==const int);\n"
+                "struct S {V values[2];};\n"
+                "_Static_assert(__builtin_offsetof(struct S,values[1][2])==24);\n"),
+        },
+        {
             "vector: alignof", __LINE__,
             SVI("typedef int v4si __attribute__((vector_size(16)));\n"
                "int a[_Alignof(v4si)];\n"),

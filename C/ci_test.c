@@ -15203,6 +15203,26 @@ TestFunction(test_interpreter){
             .exit_code = 8,
         },
         {
+            "vector: runtime reflection distinguishes arrays", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16))); typedef int A[4];\n"
+                "int check(_Type v,_Type a){return v.is_vector && !v.is_array\n"
+                " && a.is_array && !a.is_vector && !v.is_incomplete\n"
+                " && v.count==4 && v.element_type==int && v!=a;}\n"
+                "return check(V,A);\n"),
+            .exit_code = 1,
+        },
+        {
+            "vector: copies and function values preserve lanes", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));\n"
+                "V change(V v){v[1]=9; return v;}\n"
+                "struct S {V v[2]; int tail;};\n"
+                "struct S s={{{1,2,3,4},{5,6}},7};\n"
+                "V copy=change(s.v[0]); s.v[1]=copy; copy[0]=8;\n"
+                "return s.v[0][1]==2 && s.v[1][0]==1 && s.v[1][1]==9\n"
+                " && s.v[1][3]==4 && copy[0]==8 && s.tail==7;\n"),
+            .exit_code = 1,
+        },
+        {
             "extern array regression", __LINE__,
             SVI(
                 "const int array[2] = {1, 2};\n"

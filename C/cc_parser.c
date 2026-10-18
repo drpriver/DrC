@@ -504,7 +504,7 @@ static
 int
 cc_check_atomic_type_specifier_type(CcParser* p, CcQualType type, SrcLoc loc){
     CcTypeKind kind = ccqt_kind(type);
-    if(kind == CC_ARRAY || kind == CC_VLA)
+    if(kind == CC_ARRAY || kind == CC_VECTOR || kind == CC_VLA)
         return cc_error(p, loc, "_Atomic type name shall not refer to an array type");
     if(kind == CC_FUNCTION)
         return cc_error(p, loc, "_Atomic type name shall not refer to a function type");
@@ -553,7 +553,7 @@ cc_deref_type(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc, _Bool subs
             *out = ccqt_as_ptr(t)->pointee;
             return 0;
         }
-        if(kind == CC_VLA || (kind == CC_ARRAY && (subscript || !ccqt_as_array(t)->is_vector))){
+        if(kind == CC_VLA || kind == CC_ARRAY || (subscript && kind == CC_VECTOR)){
             *out = cc_array_element_type(t);
             return 0;
         }
@@ -615,9 +615,10 @@ cc_any_payload_type(CcParser* p, CcQualType t){
             return !ccqt_as_union(t)->is_incomplete && ccqt_as_union(t)->size <= sizeof(((CiRtAny*)0)->payload);
         case CC_ENUM:
             return !ccqt_as_enum(t)->is_incomplete && cc_any_payload_type(p, ccqt_as_enum(t)->underlying);
-        case CC_ARRAY: {
-            CcArray* a = ccqt_as_array(t);
-            return a->is_vector && a->vector_size <= sizeof ((CiRtAny*)0)->payload;
+        case CC_ARRAY: return 0;
+        case CC_VECTOR: {
+            CcVector* a = ccqt_as_vector(t);
+            return a->vector_size <= sizeof ((CiRtAny*)0)->payload;
         }
         case CC_FUNCTION: case CC_SLICE:
             return 0;
@@ -630,11 +631,7 @@ _Bool
 cc_any_convertible(CcParser* p, CcQualType from){
     CcTypeKind k = ccqt_kind(from);
     if(k == CC_FUNCTION || k == CC_VLA) return 1;
-    if(k == CC_ARRAY){
-        CcArray* a = ccqt_as_array(from);
-        if(!a->is_vector) return 1;
-        return a->vector_size <= sizeof ((CiRtAny*)0)->payload;
-    }
+    if(k == CC_ARRAY) return 1;
     return cc_any_payload_type(p, from);
 }
 
@@ -785,11 +782,17 @@ cc_types_match(CcQualType a, CcQualType b, unsigned depth, const CcTypePair* _Nu
         case CC_SLICE:
             return ccqt_as_slice(a)->restrict_ == ccqt_as_slice(b)->restrict_
                 && cc_types_match(ccqt_as_slice(a)->pointee, ccqt_as_slice(b)->pointee, depth+1, pairs, (CcTypesMatchFlags){0});
+        case CC_VECTOR: {
+            CcVector* x = ccqt_as_vector(a);
+            CcVector* y = ccqt_as_vector(b);
+            return x->vector_size == y->vector_size
+                && x->length == y->length
+                && cc_types_match(x->element, y->element, depth+1, pairs, (CcTypesMatchFlags){.unqual=flags.unqual});
+        }
         case CC_ARRAY: {
             CcArray* x = ccqt_as_array(a);
             CcArray* y = ccqt_as_array(b);
-            return x->is_vector == y->is_vector && x->vector_size == y->vector_size
-                && (x->is_incomplete || y->is_incomplete || x->length == y->length)
+            return (x->is_incomplete || y->is_incomplete || x->length == y->length)
                 // Array qualification belongs to the element type, including
                 // nested arrays; pointer pointee qualifications still matter.
                 && cc_types_match(x->element, y->element, depth+1, pairs, (CcTypesMatchFlags){.unqual=flags.unqual});
@@ -926,7 +929,7 @@ cc_implicit_convertible(CcParser* p, CcQualType from, CcQualType to){
         if(fk == CC_FUNCTION) return 1;
         if(fk == CC_BASIC && ccqt_basic_kind(from) == CCBT_nullptr_t) return 1;
     }
-    if(fk == CC_ARRAY && tk == CC_ARRAY && ccqt_as_array(from)->is_vector && ccqt_as_array(to)->is_vector)
+    if(fk == CC_VECTOR && tk == CC_VECTOR)
         return from.unqual == to.unqual;
     return 0;
 }
@@ -1279,7 +1282,6 @@ cc_check_array_element_alignment(CcParser* p, CcQualType type, SrcLoc loc){
             }
             case CC_ARRAY: {
                 CcArray* array = ccqt_as_array(type);
-                if(array->is_vector) return 0;
                 CcQualType element = array->element;
                 if(ccqt_raw_kind(element) == CC_ALIGNED){
                     uint32_t size;
@@ -1769,6 +1771,8 @@ cc_type_contains_composite(CcQualType candidate, CcQualType other, unsigned dept
     if(ccqt_kind(candidate) != ccqt_kind(other) && ccqt_is_array(candidate) && ccqt_is_array(other))
         return ccqt_kind(candidate) == CC_VLA;
     switch(ccqt_kind(candidate)){
+        case CC_VECTOR:
+            return cc_type_contains_composite(ccqt_as_vector(candidate)->element, ccqt_as_vector(other)->element, depth+1, pairs);
         case CC_VLA: return ccqt_is_array(other) && cc_type_contains_composite(ccqt_array_element(candidate), ccqt_array_element(other), depth+1, pairs);
         case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_POINTER:
@@ -1843,19 +1847,18 @@ cc_merge_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* ou
     if(kind != ccqt_kind(new_) || old.quals != new_.quals) return CC_SYNTAX_ERROR;
     switch(kind){
         case CC_VLA: return cc_types_compatible(old, new_, 0) ? 0 : CC_SYNTAX_ERROR;
+        case CC_VECTOR: return cc_types_compatible(old, new_, 0) ? 0 : CC_SYNTAX_ERROR;
         case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_ARRAY: {
             CcArray* a = ccqt_as_array(old);
             CcArray* b = ccqt_as_array(new_);
-            if(a->is_vector != b->is_vector || a->vector_size != b->vector_size)
-                return CC_SYNTAX_ERROR;
             if(!a->is_incomplete && !b->is_incomplete && a->length != b->length)
                 return CC_SYNTAX_ERROR;
             CcQualType element;
             int err = cc_merge_decl_types(p, a->element, b->element, &element, pairs);
             if(err) return err;
             CcArray* bound = b->is_incomplete ? a : b;
-            CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), element, bound->length, bound->is_static, bound->is_incomplete, bound->is_vector, bound->vector_size);
+            CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), element, bound->length, bound->is_static, bound->is_incomplete);
             if(!arr) return CC_OOM_ERROR;
             *out = (CcQualType){.bits = (uintptr_t)arr | new_.quals};
             return 0;
@@ -2092,15 +2095,16 @@ cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Non
             *out = node;
             return 0;
         }
-        case CC_ARRAY:{
+        case CC_VECTOR: {
+            CcVector* arr = ccqt_as_vector(t);
+            CcExpr* node = cc_value_expr(p, loc, size_type);
+            if(!node) return CC_OOM_ERROR;
+            node->uinteger = arr->vector_size;
+            *out = node;
+            return 0;
+        }
+        case CC_ARRAY: {
             CcArray* arr = ccqt_as_array(t);
-            if(arr->is_vector){
-                CcExpr* node = cc_value_expr(p, loc, size_type);
-                if(!node) return CC_OOM_ERROR;
-                node->uinteger = arr->vector_size;
-                *out = node;
-                return 0;
-            }
             if(arr->is_incomplete)
                 return cc_error(p, loc, "sizeof applied to incomplete array type");
             CcExpr* elem_size;
@@ -2190,12 +2194,13 @@ cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
             *out = 2*tgt->sizeof_[CCBT_nullptr_t];
             return 0;
         }
+        case CC_VECTOR: {
+            CcVector* arr = ccqt_as_vector(t);
+            *out = arr->vector_size;
+            return 0;
+        }
         case CC_ARRAY: {
             CcArray* arr = ccqt_as_array(t);
-            if(arr->is_vector){
-                *out = arr->vector_size;
-                return 0;
-            }
             if(arr->is_incomplete)
                 return cc_error(p, loc, "Taking sizeof of an incomplete type");
             uint32_t elem_size;
@@ -2267,12 +2272,13 @@ cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
         case CC_SLICE:
             *out = tgt->alignof_[CCBT_nullptr_t];
             return 0;
+        case CC_VECTOR: {
+            CcVector* arr = ccqt_as_vector(t);
+            *out = arr->vector_size > tgt->max_align ? tgt->max_align:arr->vector_size;
+            return 0;
+        }
         case CC_ARRAY: {
             CcArray* arr = ccqt_as_array(t);
-            if(arr->is_vector){
-                *out = arr->vector_size > tgt->max_align ? tgt->max_align:arr->vector_size;
-                return 0;
-            }
             return cc_alignof_as_uint(p, arr->element, loc, out);
         }
         case CC_STRUCT: {
@@ -3234,7 +3240,7 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
                         else if(object->kind == CC_EXPR_COMMA) object = object->values[0];
                         else break;
                     }
-                    if(val->kind == CC_EXPR_VALUE && ccqt_kind(val->type) != CC_ARRAY){
+                    if(val->kind == CC_EXPR_VALUE && !ccqt_is_fixed_sequence(val->type)){
                         // eg &3. Desugar to &(int){3}.
                         err = cc_wrap_to_desugared_compound_literal(p, flags, operand, &operand);
                         if(err) return err;
@@ -3771,7 +3777,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                 case CC_U8STRING: elem_type = CCBT_unsigned_char; break;
                 DRP_CASES_EXHAUSTED;
             }
-            CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(elem_type), tok.str.length, 0, 0, 0, 0);
+            CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(elem_type), tok.str.length, 0, 0);
             if(!sa) return CC_OOM_ERROR;
             node->type = (CcQualType){.bits = (uintptr_t)sa};
             node->is_lvalue = 1;
@@ -3897,9 +3903,8 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                             if(next.type != CC_PUNCTUATOR || next.punct.punct != '[')
                                 break;
                             cc_next_token(p, &next);
-                            if(ccqt_kind(cur) != CC_ARRAY)
+                            if(!ccqt_is_fixed_sequence(cur))
                                 return cc_error(p, next.loc, "subscript in __builtin_offsetof requires array type");
-                            CcArray* arr = ccqt_as_array(cur);
                             CcExpr* idx_expr = NULL;
                             err = cc_parse_assignment_expr(p, flags, &idx_expr, CCQT_NONE);
                             if(err) return err;
@@ -3910,10 +3915,10 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                             if(err)
                                 return cc_error(p, next.loc, "array index in __builtin_offsetof must be a constant integer");
                             uint32_t elem_size;
-                            err = cc_sizeof_as_uint(p, arr->element, next.loc, &elem_size);
+                            err = cc_sizeof_as_uint(p, ccqt_array_element(cur), next.loc, &elem_size);
                             if(err) return err;
                             offset += (uint64_t)idx * elem_size;
-                            cur = arr->element;
+                            cur = ccqt_array_element(cur);
                             err = cc_expect_punct(p, CC_rbracket);
                             if(err) return err;
                         }
@@ -3992,7 +3997,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     Atom name = p->current_func ? p->current_func->name : NULL;
                     const char* s = name ? name->data : "";
                     uint32_t len = name ? name->length : 0;
-                    CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), len + 1, 0, 0, 0, 0);
+                    CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), len + 1, 0, 0);
                     if(!sa) return CC_OOM_ERROR;
                     CcQualType type = {.bits = (uintptr_t)sa};
                     CcExpr* node = cc_value_expr(p, tok.loc, type);
@@ -4806,7 +4811,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                 case CC_SYM_VAR:{
                     if(flags.parsing_default_arg && sym.var->automatic && !sym.var->constexpr_)
                         return cc_error(p, tok.loc, "default argument may not use automatic variable '%.*s'", tok.ident.ident->length, tok.ident.ident->data);
-                    if(flags.vc == CC_CONSTEXPR_VALUE && !flags.static_rebind && !sym.var->constexpr_ && ccqt_kind(sym.var->type) != CC_ARRAY)
+                    if(flags.vc == CC_CONSTEXPR_VALUE && !flags.static_rebind && !sym.var->constexpr_ && !ccqt_is_fixed_sequence(sym.var->type))
                         return cc_error(p, tok.loc, "expression '%s' is not a constant expression", tok.ident.ident->data);
                     if(flags.vc == CC_LINKTIME_VALUE && sym.var->automatic)
                         return cc_error(p, tok.loc, "expression '%s' is not a constant expression", tok.ident.ident->data);
@@ -5108,15 +5113,14 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                 countof_have_type:;
                 if(ccqt_kind(arr_type) == CC_VLA)
                     return cc_clone_expr(p, ccqt_as_vla(arr_type)->bound, 0, tok.loc, 0, out);
-                if(ccqt_kind(arr_type) != CC_ARRAY)
+                if(!ccqt_is_fixed_sequence(arr_type))
                     return cc_error(p, tok.loc, "_Countof requires an array type");
-                CcArray* arr = ccqt_as_array(arr_type);
-                if(arr->is_incomplete)
+                if(ccqt_array_incomplete(arr_type))
                     return cc_error(p, tok.loc, "_Countof applied to incomplete array type");
                 CcQualType size_type = ccqt_basic(cc_target(p)->size_type);
                 CcExpr* node = cc_value_expr(p, tok.loc, size_type);
                 if(!node) return CC_OOM_ERROR;
-                node->uinteger = (uint64_t)arr->length;
+                node->uinteger = (uint64_t)ccqt_sequence_length(arr_type);
                 *out = node;
                 return 0;
             }
@@ -5318,13 +5322,11 @@ cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out)
         CcTypeKind tk = ccqt_kind(tswitch);
         switch(tk){
         case CC_VLA: err = cc_pointer_of(p, cc_array_element_type(tswitch), &tswitch); if(err) return err; break;
+        case CC_VECTOR: break;
         case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_ARRAY:{
-            CcArray* arr = ccqt_as_array(tswitch);
-            if(!arr->is_vector){
-                err = cc_pointer_of(p, cc_array_element_type(tswitch), &tswitch);
-                if(err) return err;
-            }
+            err = cc_pointer_of(p, cc_array_element_type(tswitch), &tswitch);
+            if(err) return err;
             break;
         }
         case CC_FUNCTION:{
@@ -5457,7 +5459,7 @@ int
 cc_pack_call_args(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType slice, Parray(CcExpression)* args, uint32_t start){
     uint32_t count = (uint32_t)args->count - start;
     CcQualType element = ccqt_as_slice(slice)->pointee;
-    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element, count, 0, 0, 0, 0);
+    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element, count, 0, 0);
     if(!array) return CC_OOM_ERROR;
     for(uint32_t i = start; i < args->count; i++){
         CcExpr** arg = (CcExpr**)&args->data[i];
@@ -8839,7 +8841,7 @@ cc_constexpr_string_slice_expr(CcParser* p, SrcLoc loc, Atom name, _Bool include
     il->count = 2;
     count = cc_uint64_expr(p, loc, ccqt_basic(cc_target(p)->size_type), name->length+include_nul);
     if(!count) goto oom;
-    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_as_ptr(p->const_char_star)->pointee, name->length + 1, 0, 0, 0, 0);
+    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_as_ptr(p->const_char_star)->pointee, name->length + 1, 0, 0);
     if(!array) goto oom;
     literal = cc_value_expr(p, loc, (CcQualType){.bits=(uintptr_t)array});
     if(!literal) goto oom;
@@ -9467,37 +9469,38 @@ cc_sysv_classify_type(const CcTargetConfig* tc, CcQualType type, uint32_t off, C
             return cc_sysv_classify_fields(tc, ccqt_as_struct(type)->fields, ccqt_as_struct(type)->field_count, off, cls);
         case CC_UNION:
             return cc_sysv_classify_fields(tc, ccqt_as_union(type)->fields, ccqt_as_union(type)->field_count, off, cls);
-        case CC_ARRAY:{
-            CcArray* arr = ccqt_as_array(type);
-            if(arr->is_vector){
-                uint32_t sz = arr->vector_size;
-                if((sz != 1 && sz != 2 && sz != 4 && sz != 8 && sz != 16 && sz != 32 && sz != 64) || off % sz) return 1;
-                CcBasicTypeKind elem = ccqt_basic_kind(arr->element);
-                if(sz < 8){
-                    // Clang coerces small vectors to integers. GCC uses SSE
-                    // for two half-precision elements, but passes other small
-                    // floating vectors in memory.
-                    if(tc->os != CC_OS_MACOS && ccbt_is_float(elem)){
-                        if(sz == 4 && (elem == CCBT_float16 || elem == CCBT_bfloat16))
-                            return cc_sysv_mark(cls, off, sz, CC_SYSV_SSE);
-                        return 1;
-                    }
-                    return cc_sysv_mark(cls, off, sz, CC_SYSV_INTEGER);
-                }
-                if(sz == 8){
-                    if(elem == CCBT_double) return 1; // single-double vector
-                    if(tc->os == CC_OS_MACOS && tc->sizeof_[elem] == 8 && ccbt_is_integer(elem))
-                        return cc_sysv_mark(cls, off, sz, CC_SYSV_INTEGER);
-                    return cc_sysv_mark(cls, off, sz, CC_SYSV_SSE);
-                }
-                // GCC passes wide vectors of 128-bit integers in memory even with AVX enabled.
-                if(sz > 16 && tc->os != CC_OS_MACOS && ccbt_is_integer(elem) && tc->sizeof_[elem] == 16)
+        case CC_VECTOR: {
+            CcVector* arr = ccqt_as_vector(type);
+            uint32_t sz = arr->vector_size;
+            if((sz != 1 && sz != 2 && sz != 4 && sz != 8 && sz != 16 && sz != 32 && sz != 64) || off % sz) return 1;
+            CcBasicTypeKind elem = ccqt_basic_kind(arr->element);
+            if(sz < 8){
+                // Clang coerces small vectors to integers. GCC uses SSE
+                // for two half-precision elements, but passes other small
+                // floating vectors in memory.
+                if(tc->os != CC_OS_MACOS && ccbt_is_float(elem)){
+                    if(sz == 4 && (elem == CCBT_float16 || elem == CCBT_bfloat16))
+                        return cc_sysv_mark(cls, off, sz, CC_SYSV_SSE);
                     return 1;
-                if(cc_sysv_mark(cls, off, 8, CC_SYSV_SSE)) return 1;
-                for(uint32_t i = 8; i < sz; i += 8)
-                    if(cc_sysv_mark(cls, off+i, 8, CC_SYSV_SSEUP)) return 1;
-                return 0;
+                }
+                return cc_sysv_mark(cls, off, sz, CC_SYSV_INTEGER);
             }
+            if(sz == 8){
+                if(elem == CCBT_double) return 1; // single-double vector
+                if(tc->os == CC_OS_MACOS && tc->sizeof_[elem] == 8 && ccbt_is_integer(elem))
+                    return cc_sysv_mark(cls, off, sz, CC_SYSV_INTEGER);
+                return cc_sysv_mark(cls, off, sz, CC_SYSV_SSE);
+            }
+            // GCC passes wide vectors of 128-bit integers in memory even with AVX enabled.
+            if(sz > 16 && tc->os != CC_OS_MACOS && ccbt_is_integer(elem) && tc->sizeof_[elem] == 16)
+                return 1;
+            if(cc_sysv_mark(cls, off, 8, CC_SYSV_SSE)) return 1;
+            for(uint32_t i = 8; i < sz; i += 8)
+                if(cc_sysv_mark(cls, off+i, 8, CC_SYSV_SSEUP)) return 1;
+            return 0;
+        }
+        case CC_ARRAY: {
+            CcArray* arr = ccqt_as_array(type);
             // Clang and GCC disagree on what FAMs do,
             // so follow GCC on Linux (ignore FAMs) and Clang on AppleOS (MEMORY).
             if(arr->is_incomplete) return tc->os == CC_OS_MACOS;
@@ -9628,15 +9631,16 @@ cc_arm64_homogeneous(const CcTargetConfig* tc, CcQualType type, CcArm64Aggregate
             if(n == 2) cc_arm64_set_member_offset(out, 1, out->member_size);
             return 1;
         }
-        case CC_ARRAY:{
+        case CC_VECTOR: {
+            CcVector* arr = ccqt_as_vector(type);
+            if(arr->vector_size != 8 && arr->vector_size != 16) return 0;
+            out->hva_count = 1;
+            out->hfa_type = CCBT_INVALID;
+            out->member_size = (uint8_t)arr->vector_size;
+            return 1;
+        }
+        case CC_ARRAY: {
             CcArray* arr = ccqt_as_array(type);
-            if(arr->is_vector){
-                if(arr->vector_size != 8 && arr->vector_size != 16) return 0;
-                out->hva_count = 1;
-                out->hfa_type = CCBT_INVALID;
-                out->member_size = (uint8_t)arr->vector_size;
-                return 1;
-            }
             if(arr->is_incomplete)
                 return 0;
             // Zero-length array members disqualify Clang HFAs.
@@ -9712,7 +9716,7 @@ cc_arm64_empty_type(CcQualType type){
             return ccqt_as_struct(type)->arm64.is_empty;
         case CC_ARRAY:{
             const CcArray* arr = ccqt_as_array(type);
-            return !arr->is_vector && (!arr->length || cc_arm64_empty_type(arr->element));
+            return !arr->length || cc_arm64_empty_type(arr->element);
         }
         default: return 0;
     }
@@ -9734,9 +9738,10 @@ static
 _Bool
 cc_type_has_wide_vector(CcQualType type){
     switch(ccqt_kind(type)){
+        case CC_VECTOR: return ccqt_as_vector(type)->vector_size > 16;
         case CC_ARRAY:{
             CcArray* arr = ccqt_as_array(type);
-            return arr->is_vector ? arr->vector_size > 16 : cc_type_has_wide_vector(arr->element);
+            return cc_type_has_wide_vector(arr->element);
         }
         case CC_STRUCT: case CC_UNION:
             return ccqt_as_struct(type)->has_wide_vector;
@@ -10514,7 +10519,7 @@ cc_init_apply_value(CcParser* p, CcParseFlags flags, CcQualType field_type, CcEx
         value->kind = CC_EXPR_INIT_LIST;
     CcQualType unqual = {.unqual=field_type.unqual};
     CcTypeKind ftk = ccqt_kind(unqual);
-    if(ftk == CC_STRUCT || ftk == CC_UNION || ftk == CC_ARRAY){
+    if(ftk == CC_STRUCT || ftk == CC_UNION || ftk == CC_ARRAY || ftk == CC_VECTOR){
         if(cc_implicit_convertible(p, value->type, unqual))
             return cc_push_scalar(p, value, unqual, buf, path);
         return cc_parse_init(p, flags, field_type, 0, loc, buf, NULL, value, path);
@@ -10550,7 +10555,7 @@ int
 cc_parse_init_value(CcParser* p, CcParseFlags flags, CcQualType field_type, _Bool positional, SrcLoc loc, Marray(CcInitEntry)* buf, Marray(uint32_t)* path){
     int err;
     CcTypeKind ftk = ccqt_kind(field_type);
-    if(ftk == CC_STRUCT || ftk == CC_UNION || ftk == CC_ARRAY){
+    if(ftk == CC_STRUCT || ftk == CC_UNION || ftk == CC_ARRAY || ftk == CC_VECTOR){
         CcToken peek;
         err = cc_peek(p, &peek);
         if(err) return err;
@@ -10852,67 +10857,68 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
             if(err) return err;
         }
     } break;
+    case CC_VECTOR: {
+        CcQualType elem = ccqt_as_vector(unqual)->element;
+        uint32_t length = (uint32_t)ccqt_as_vector(unqual)->length;
+        uint32_t ai = 0;
+        for(;;){
+            path->count = path_depth;
+            CcToken peek;
+            err = cc_peek(p, &peek);
+            if(err) return err;
+            if(braced){
+                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rbrace){
+                    cc_next_token(p, &peek);
+                    break;
+                }
+                if(peek.type == CC_EOF)
+                    return cc_error(p, loc, "unterminated initializer list");
+                if(peek.type == CC_PUNCTUATOR && (peek.punct.punct == '.' || peek.punct.punct == CC_lbracket))
+                    return cc_error(p, peek.loc, "designators not allowed in vector initializer");
+            }
+            else {
+                _Bool stop;
+                err = cc_is_parent_token(p, &stop);
+                if(err) return err;
+                if(stop) break;
+            }
+            if(ai >= length){
+                if(braced)
+                    return cc_error(p, peek.loc, "excess elements in vector initializer");
+                break;
+            }
+            CcExpr* v;
+            err = cc_parse_scalar_value(p, flags, elem, &v);
+            if(err) return err;
+            if(ma_push(uint32_t)(path, cc_allocator(p), ai)) return CC_OOM_ERROR;
+            err = cc_push_scalar(p, v, elem, buf, path);
+            if(err) return err;
+            ai++;
+            if(braced){
+                err = cc_init_list_comma(p);
+                if(err) return err;
+            }
+            else {
+                if(ai >= length) break;
+                err = cc_peek(p, &peek);
+                if(err) return err;
+                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ',')
+                    cc_next_token(p, &peek);
+                else break;
+            }
+        }
+        break;
+    }
     case CC_ARRAY: {
         CcArray* arr = ccqt_as_array(unqual);
         CcQualType elem = arr->element;
         uint32_t elem_size = 0;
         err = cc_sizeof_as_uint(p, elem, loc, &elem_size);
         if(err) return err;
-        if(!arr->is_incomplete && !arr->is_vector){
+        if(!arr->is_incomplete){
             uint32_t size;
             err = cc_sizeof_as_uint(p, unqual, loc, &size);
             if(err) return err;
-        }
-        if(arr->is_vector){
-            uint32_t length = (uint32_t)arr->length;
-            uint32_t ai = 0;
-            for(;;){
-                path->count = path_depth;
-                CcToken peek;
-                err = cc_peek(p, &peek);
-                if(err) return err;
-                if(braced){
-                    if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rbrace){
-                        cc_next_token(p, &peek);
-                        break;
-                    }
-                    if(peek.type == CC_EOF)
-                        return cc_error(p, loc, "unterminated initializer list");
-                    if(peek.type == CC_PUNCTUATOR && (peek.punct.punct == '.' || peek.punct.punct == CC_lbracket))
-                        return cc_error(p, peek.loc, "designators not allowed in vector initializer");
-                }
-                else {
-                    _Bool stop;
-                    err = cc_is_parent_token(p, &stop);
-                    if(err) return err;
-                    if(stop) break;
-                }
-                if(ai >= length){
-                    if(braced)
-                        return cc_error(p, peek.loc, "excess elements in vector initializer");
-                    break;
-                }
-                CcExpr* v;
-                err = cc_parse_scalar_value(p, flags, elem, &v);
-                if(err) return err;
-                if(ma_push(uint32_t)(path, cc_allocator(p), ai)) return CC_OOM_ERROR;
-                err = cc_push_scalar(p, v, elem, buf, path);
-                if(err) return err;
-                ai++;
-                if(braced){
-                    err = cc_init_list_comma(p);
-                    if(err) return err;
-                }
-                else {
-                    if(ai >= length) break;
-                    err = cc_peek(p, &peek);
-                    if(err) return err;
-                    if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ',')
-                        cc_next_token(p, &peek);
-                    else break;
-                }
-            }
-            break;
         }
         uint32_t ai = 0, max_ai = 0;
         for(;;){
@@ -10928,7 +10934,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                     uint32_t next, size;
                     if(add_overflow(ai, n, &next) || cc_layout_array_size(elem_size, next, &size))
                         return cc_error(p, packed.loc, "object size exceeds 32-bit layout limit");
-                    CcArray* type = cc_intern_array(&p->type_cache, cc_allocator(p), elem, n, 0, 0, 0, 0);
+                    CcArray* type = cc_intern_array(&p->type_cache, cc_allocator(p), elem, n, 0, 0);
                     if(!type) return CC_OOM_ERROR;
                     CcExpr* blob = cc_make_expr(p, CC_EXPR_BLOB, packed.loc, (CcQualType){.bits=(uintptr_t)type}, 0);
                     if(!blob) return CC_OOM_ERROR;
@@ -11117,7 +11123,7 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
             CcArray* target = ccqt_as_array(target_type);
             CcArray* source = ccqt_as_array(value->type);
             if(target->is_incomplete){
-                CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), target->element, source->length, target->is_static, 0, 0, 0);
+                CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), target->element, source->length, target->is_static, 0);
                 if(!array) return CC_OOM_ERROR;
                 resolved_type = (CcQualType){.bits = (uintptr_t)array | target_type.quals};
             }
@@ -11208,7 +11214,7 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
         if(tk == CC_ARRAY){
             CcArray* arr = ccqt_as_array(target_type);
             if(arr->is_incomplete){
-                CcArray* new_arr = cc_intern_array(&p->type_cache, cc_allocator(p), arr->element, max_index, arr->is_static, 0, 0, 0);
+                CcArray* new_arr = cc_intern_array(&p->type_cache, cc_allocator(p), arr->element, max_index, arr->is_static, 0);
                 if(!new_arr){
                     err = CC_OOM_ERROR;
                     goto release_list;
@@ -11244,7 +11250,7 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
             if(j == n) break;
             uint32_t index = cc_field_path_component(entry->path, j);
             CcTypeKind kind = ccqt_kind(sub);
-            if(kind == CC_ARRAY) sub = ccqt_array_element(sub);
+            if(kind == CC_ARRAY || kind == CC_VECTOR) sub = ccqt_array_element(sub);
             else if(kind == CC_STRUCT || kind == CC_UNION) sub = ccqt_as_struct(sub)->fields[index].type;
             else break;
         }
@@ -14194,7 +14200,7 @@ cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
         return cc_error(p, b.loc, "restrict requires a pointer type");
     if(b.type.is_atomic){
         CcTypeKind tk = ccqt_kind(b.type);
-        if(tk == CC_ARRAY || tk == CC_VLA)
+        if(tk == CC_ARRAY || tk == CC_VECTOR || tk == CC_VLA)
             return cc_error(p, b.loc, "_Atomic qualifier shall not modify an array type");
         if(tk == CC_FUNCTION)
             return cc_error(p, b.loc, "_Atomic qualifier shall not modify a function type");
@@ -14821,10 +14827,9 @@ cc_const_object_type(CcParser* p, CcQualType type, CcQualType* out){
     CcQualType element;
     int err = cc_const_object_type(p, old->element, &element);
     if(err) return err;
-    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element, old->length, old->is_static, old->is_incomplete, old->is_vector, old->vector_size);
+    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element, old->length, old->is_static, old->is_incomplete);
     if(!array) return CC_OOM_ERROR;
     *out = (CcQualType){.bits=(uintptr_t)array | type.quals};
-    if(old->is_vector) out->is_const = 1;
     return 0;
 }
 
@@ -14871,6 +14876,12 @@ cc_intern_qualtype(CcParser* p, CcQualType t){
             ptr_type.quals |= quals;
             return ptr_type;
         }
+        case CC_VECTOR: {
+            CcVector* old = ccqt_as_vector(t);
+            CcVector* vector = cc_intern_vector(&p->type_cache, cc_allocator(p), cc_intern_qualtype(p, old->element), old->length, old->vector_size);
+            if(!vector) return t;
+            return (CcQualType){.bits=(uintptr_t)vector | quals};
+        }
         case CC_ARRAY: {
             CcArray* old = ccqt_as_array(t);
             CcQualType elem = cc_intern_qualtype(p, old->element);
@@ -14885,7 +14896,7 @@ cc_intern_qualtype(CcParser* p, CcQualType t){
                 vla->bound = bound;
                 return (CcQualType){.bits=(uintptr_t)vla | quals};
             }
-            CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), elem, old->length, old->is_static, old->is_incomplete, old->is_vector, old->vector_size);
+            CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), elem, old->length, old->is_static, old->is_incomplete);
             if(!arr) return t;
             return (CcQualType){.bits = (uintptr_t)arr | quals};
         }
@@ -15048,7 +15059,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             if(p->attributes.vector_size % elem_size != 0)
                 return cc_error(p, declbase->loc, "vector_size must be a multiple of the element size");
             uint32_t vs = p->attributes.vector_size;
-            CcArray* v = cc_intern_array(&p->type_cache, cc_allocator(p), base, vs / elem_size, 0, 0, 1, vs);
+            CcVector* v = cc_intern_vector(&p->type_cache, cc_allocator(p), base, vs / elem_size, vs);
             if(!v) return CC_OOM_ERROR;
             type = (CcQualType){.bits = (uintptr_t)v | base.quals};
         }
@@ -15355,7 +15366,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 if(target_arr->is_incomplete){
                     // char s[] = "abc" -> size from string literal.
                     // Intern a new complete array with the original element type.
-                    CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), target_arr->element, init_arr->length, target_arr->is_static, 0, 0, 0);
+                    CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), target_arr->element, init_arr->length, target_arr->is_static, 0);
                     if(!arr) return CC_OOM_ERROR;
                     uintptr_t quals = type.quals;
                     CcQualType completed = {.bits=(uintptr_t)arr | quals};
@@ -15796,7 +15807,7 @@ cc_define_builtin_types(CcParser* p){
         if(err) return err;
         err = cc_slice_of(p, const_char, &p->const_char_slice);
         if(err) return err;
-        CcArray* mark_type = cc_intern_array(&p->type_cache, al, ccqt_basic(t->size_type), 2, 0, 0, 0, 0);
+        CcArray* mark_type = cc_intern_array(&p->type_cache, al, ccqt_basic(t->size_type), 2, 0, 0);
         if(!mark_type) return CC_OOM_ERROR;
         p->stack_mark_type = (CcQualType){.bits=(uintptr_t)mark_type};
     }
@@ -15842,7 +15853,7 @@ cc_define_builtin_types(CcParser* p){
 
             // typedef __va_list_tag __builtin_va_list[1];
             CcQualType struct_type = {.bits = (uintptr_t)s};
-            CcArray* arr = cc_intern_array(&p->type_cache, al, struct_type, 1, 0, 0, 0, 0);
+            CcArray* arr = cc_intern_array(&p->type_cache, al, struct_type, 1, 0, 0);
             if(!arr) return CC_OOM_ERROR;
             va_list_type = (CcQualType){.bits = (uintptr_t)arr};
             break;
@@ -17154,7 +17165,7 @@ static
 _Bool
 cc_linktime_const_variable(CcExpr* e){
     CcQualType type = e->type;
-    while(ccqt_kind(type) == CC_ARRAY)
+    while(ccqt_is_fixed_sequence(type))
         type = ccqt_array_element(type);
     return e->var->initializer && (e->var->constexpr_ || type.is_const) && !type.is_volatile && !type.is_atomic;
 }
@@ -17373,18 +17384,18 @@ cc_eval_slice(CcEvalCtx* ctx, CcExpr* e, unsigned depth, uint64_t* count, CcEval
     CcExpr* base = e->lhs;
     CcTypeKind kind = ccqt_kind(base->type);
     uint64_t length = 0;
-    _Bool have_length = kind == CC_ARRAY || kind == CC_SLICE;
+    _Bool have_length = (kind == CC_ARRAY || kind == CC_VECTOR) || kind == CC_SLICE;
     int err;
     if(kind == CC_SLICE){
         err = cc_eval_slice(ctx, base, depth + 1, &length, address);
         if(err) return err;
     }
     else {
-        err = cc_eval_address(ctx, base, kind == CC_ARRAY, depth + 1, address);
+        err = cc_eval_address(ctx, base, (kind == CC_ARRAY || kind == CC_VECTOR), depth + 1, address);
         if(err) return err;
-        if(kind == CC_ARRAY){
-            if(ccqt_as_array(base->type)->is_incomplete) return CC_NOT_CONSTANT_ERROR;
-            length = ccqt_as_array(base->type)->length;
+        if(kind == CC_ARRAY || kind == CC_VECTOR){
+            if(ccqt_array_incomplete(base->type)) return CC_NOT_CONSTANT_ERROR;
+            length = ccqt_sequence_length(base->type);
         }
     }
     if(length > INT64_MAX) return CC_NOT_CONSTANT_ERROR;
@@ -17451,7 +17462,7 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
     int err;
     switch((unsigned)e->kind){
         case CC_EXPR_VARIABLE:
-            if(lvalue || ccqt_kind(e->type) == CC_ARRAY){
+            if(lvalue || ccqt_is_fixed_sequence(e->type)){
                 if(e->var->automatic || e->var->thread_local_) return CC_NOT_CONSTANT_ERROR;
                 *out = (CcEvalAddress){.kind = CC_EVAL_VAR, .symbol = e->var};
                 uint32_t size;
@@ -17470,7 +17481,7 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
             return 0;
         case CC_EXPR_BLOB:
         case CC_EXPR_VALUE:
-            if(ccqt_kind(e->type) == CC_ARRAY && cc_expr_array_data(e)){
+            if(ccqt_is_fixed_sequence(e->type) && cc_expr_array_data(e)){
                 uint32_t size;
                 err = cc_sizeof_as_uint(p, e->type, e->loc, &size);
                 if(err) return err;
@@ -17497,19 +17508,19 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
         case CC_EXPR_DEREF:
             if(!lvalue && cc_eval_address_type(e->type))
                 return cc_eval_address_value(ctx, e, out);
-            return lvalue || ccqt_kind(e->type) == CC_ARRAY
+            return lvalue || ccqt_is_fixed_sequence(e->type)
                 ? cc_eval_address(ctx, e->lhs, 0, depth + 1, out) : CC_NOT_CONSTANT_ERROR;
         case CC_EXPR_DOT: case CC_EXPR_ARROW:
             if(!lvalue && cc_eval_address_type(e->type))
                 return cc_eval_address_value(ctx, e, out);
-            if((!lvalue && ccqt_kind(e->type) != CC_ARRAY) || cc_expr_field_bit_width(e))
+            if((!lvalue && !ccqt_is_fixed_sequence(e->type)) || cc_expr_field_bit_width(e))
                 return CC_NOT_CONSTANT_ERROR;
             err = cc_eval_address(ctx, e->values[0], e->kind == CC_EXPR_DOT, depth + 1, out);
             if(err) return err;
             if(cc_expr_field_offset(cc_target(p), e) > INT64_MAX
                 || add_overflow(out->offset, (int64_t)cc_expr_field_offset(cc_target(p), e), &out->offset))
                 return CC_OVERFLOW_ERROR;
-            if(!(ccqt_kind(e->type) == CC_ARRAY && ccqt_as_array(e->type)->is_incomplete)){
+            if(!(ccqt_is_fixed_sequence(e->type) && ccqt_array_incomplete(e->type))){
                 out->has_range = 1;
                 out->range_start = out->offset;
                 uint32_t size;
@@ -17521,7 +17532,7 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
         case CC_EXPR_SUBSCRIPT:{
             if(!lvalue && (ccqt_kind(e->type) == CC_POINTER || ccqt_bt_eq(e->type, CCBT_nullptr_t)))
                 return cc_eval_address_value(ctx, e, out);
-            if(!lvalue && ccqt_kind(e->type) != CC_ARRAY) return CC_NOT_CONSTANT_ERROR;
+            if(!lvalue && !ccqt_is_fixed_sequence(e->type)) return CC_NOT_CONSTANT_ERROR;
             int64_t index, offset;
             err = cc_eval_integer(ctx, e->values[0], &index);
             if(err) return err;
@@ -17533,9 +17544,10 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
                 err = cc_eval_slice(ctx, e->lhs, depth + 1, &count, out);
                 if(!err && (index < 0 || (uint64_t)index > count)) err = CC_NOT_CONSTANT_ERROR;
             }
-            else err = cc_eval_address(ctx, e->lhs, ccqt_kind(e->lhs->type) == CC_ARRAY, depth + 1, out);
+            else
+                err = cc_eval_address(ctx, e->lhs, ccqt_is_fixed_sequence(e->lhs->type), depth + 1, out);
             if(err) return err;
-            if(ccqt_kind(e->lhs->type) == CC_ARRAY && !ccqt_as_array(e->lhs->type)->is_incomplete){
+            if(ccqt_is_fixed_sequence(e->lhs->type) && !ccqt_array_incomplete(e->lhs->type)){
                 out->has_range = 1;
                 out->range_start = out->offset;
                 uint32_t array_size;
@@ -17549,9 +17561,9 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
         }
         case CC_EXPR_CAST:
             if(!cc_eval_address_type(e->type)) return CC_NOT_CONSTANT_ERROR;
-            if(cc_eval_address_type(e->lhs->type) || ccqt_kind(e->lhs->type) == CC_ARRAY
+            if(cc_eval_address_type(e->lhs->type) || ccqt_is_fixed_sequence(e->lhs->type)
                 || ccqt_kind(e->lhs->type) == CC_FUNCTION)
-                return cc_eval_address(ctx, e->lhs, ccqt_kind(e->lhs->type) == CC_ARRAY, depth + 1, out);
+                return cc_eval_address(ctx, e->lhs, ccqt_is_fixed_sequence(e->lhs->type), depth + 1, out);
             if(ccqt_is_integer(e->lhs->type)){
                 CcExpr* value;
                 err = cc_eval_expr(ctx, e, &value);
@@ -17595,7 +17607,7 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
         }
         case CC_EXPR_COMMA:{
             CcExpr* source;
-            err = cc_eval_comma_source(ctx, e, lvalue || ccqt_kind(e->type) == CC_ARRAY, &source);
+            err = cc_eval_comma_source(ctx, e, lvalue || ccqt_is_fixed_sequence(e->type), &source);
             if(err) return err;
             return cc_eval_address(ctx, source, lvalue, depth + 1, out);
         }
@@ -17701,9 +17713,10 @@ cc_eval_integer_address(CcEvalCtx* ctx, CcExpr* e, unsigned depth, CcEvalAddress
     if(err) return err;
     if(source != e) return cc_eval_integer_address(ctx, source, depth+1, out);
     if(e->kind == CC_EXPR_CAST){
-        if(cc_eval_address_type(e->lhs->type) || ccqt_kind(e->lhs->type) == CC_ARRAY
-            || ccqt_kind(e->lhs->type) == CC_FUNCTION)
-            return cc_eval_address(ctx, e->lhs, ccqt_kind(e->lhs->type) == CC_ARRAY, depth+1, out);
+        if(cc_eval_address_type(e->lhs->type)
+        || ccqt_is_fixed_sequence(e->lhs->type)
+        || ccqt_kind(e->lhs->type) == CC_FUNCTION)
+            return cc_eval_address(ctx, e->lhs, ccqt_is_fixed_sequence(e->lhs->type), depth+1, out);
         return cc_eval_integer_address(ctx, e->lhs, depth+1, out);
     }
     if(e->kind == CC_EXPR_INIT_LIST || e->kind == CC_EXPR_COMPOUND_LITERAL){
@@ -17763,13 +17776,14 @@ cc_eval_opaque_region(CcParser* p, CcQualType type, uint64_t offset, uint32_t si
     if(ccqt_bt_eq(type, CCBT__Any))
         return (metadata && !offset) || offset == offsetof(CiRtAny, payload);
     CcTypeKind kind = ccqt_kind(type);
-    if(kind == CC_ARRAY){
-        CcArray* array = ccqt_as_array(type);
-        if(array->is_incomplete) return 0;
+    if(kind == CC_ARRAY || kind == CC_VECTOR){
+        if(ccqt_array_incomplete(type)) return 0;
         uint32_t stride;
-        if(cc_type_sizeof_complete(cc_target(p), array->element, &stride)) return 0;
-        if(!stride || offset/stride >= array->length) return 0;
-        return cc_eval_opaque_region(p, array->element, offset%stride, size, metadata, depth+1);
+        if(cc_type_sizeof_complete(cc_target(p), ccqt_array_element(type), &stride))
+            return 0;
+        if(!stride || offset/stride >= ccqt_sequence_length(type))
+            return 0;
+        return cc_eval_opaque_region(p, ccqt_array_element(type), offset%stride, size, metadata, depth+1);
     }
     if(kind == CC_STRUCT || kind == CC_UNION){
         CcStruct* aggregate = ccqt_as_struct(type);
@@ -17861,10 +17875,9 @@ cc_check_linktime_default_view(CcEvalCtx* ctx, CcExpr*_Nullable root, CcQualType
         return 0;
     }
     CcTypeKind kind = ccqt_kind(type);
-    if(kind == CC_ARRAY){
-        CcArray* array = ccqt_as_array(type);
+    if(kind == CC_ARRAY || kind == CC_VECTOR){
         uint32_t stride;
-        int err = cc_type_sizeof_complete(cc_target(p), array->element, &stride);
+        int err = cc_type_sizeof_complete(cc_target(p), ccqt_array_element(type), &stride);
         if(err) return err;
         if(!stride) return CC_NOT_CONSTANT_ERROR;
         uint64_t first = offset/stride, last = (offset+size-1)/stride;
@@ -17873,8 +17886,12 @@ cc_check_linktime_default_view(CcEvalCtx* ctx, CcExpr*_Nullable root, CcQualType
             uint64_t lo = offset > start ? offset : start;
             uint64_t hi = offset+size < end ? offset+size : end;
             CcEvalDefaultPath child = {.parent=path, .index=(uint32_t)i, .count=path ? path->count+1 : 1};
-            err = cc_check_linktime_default_view(ctx, root, array->element, lo-start,
-                (uint32_t)(hi-lo), root_offset+(uint32_t)(lo-offset), mask ? mask+lo-offset : NULL, depth+1, list, &child);
+            err = cc_check_linktime_default_view(
+                ctx, root,
+                ccqt_array_element(type), lo-start,
+                (uint32_t)(hi-lo), root_offset+(uint32_t)(lo-offset),
+                mask ? mask+lo-offset : NULL, depth+1, list, &child
+            );
             if(err) return err;
         }
     }
@@ -17889,7 +17906,8 @@ cc_check_linktime_default_view(CcEvalCtx* ctx, CcExpr*_Nullable root, CcQualType
                 continue;
             }
             // Flexible members contribute no storage, including tail padding.
-            if(ccqt_kind(field->type) == CC_ARRAY && ccqt_as_array(field->type)->is_incomplete) continue;
+            if(ccqt_is_fixed_sequence(field->type) && ccqt_array_incomplete(field->type))
+                continue;
             uint64_t start = field->offset;
             uint32_t field_size;
             int err = cc_type_sizeof_complete(cc_target(p), field->type, &field_size);
@@ -18129,14 +18147,21 @@ cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool select
             if(err) return err;
             return cc_check_linktime_expr(p, e->values[0], 0, depth + 1);
         case CC_EXPR_CAST:
-            err = cc_check_linktime_expr_inner(p, e->lhs,
-                (ccqt_kind(e->type) == CC_POINTER || ccqt_kind(e->type) == CC_SLICE)
-                    && ccqt_kind(e->lhs->type) == CC_ARRAY,
-                selected && e->type.unqual == e->lhs->type.unqual, depth + 1);
+            err = cc_check_linktime_expr_inner(
+                p, e->lhs,
+                (ccqt_kind(e->type) == CC_POINTER || ccqt_kind(e->type) == CC_SLICE) && ccqt_is_fixed_sequence(e->lhs->type),
+                selected && e->type.unqual == e->lhs->type.unqual,
+                depth + 1
+            );
             if(err) return err;
-            if(!selected && ccqt_is_integer(e->type) && !ccqt_is_bool(e->type)
-                && (ccqt_is_integer(e->lhs->type) || cc_eval_address_type(e->lhs->type)
-                    || ccqt_kind(e->lhs->type) == CC_ARRAY || ccqt_kind(e->lhs->type) == CC_FUNCTION)){
+            if(!selected
+            && ccqt_is_integer(e->type)
+            && !ccqt_is_bool(e->type)
+            && (ccqt_is_integer(e->lhs->type)
+                || cc_eval_address_type(e->lhs->type)
+                || ccqt_is_fixed_sequence(e->lhs->type)
+                || ccqt_kind(e->lhs->type) == CC_FUNCTION)
+            ){
                 CcExpr* value;
                 err = cc_eval_linktime_scalar(p, e, &value);
                 if(!err) cc_release_expr(p, value);
@@ -18192,7 +18217,7 @@ cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool select
             if(err) return err;
             return cc_check_linktime_expr_inner(p, e->values[0], address, selected, depth + 1);
         case CC_EXPR_SLICE: case CC_EXPR_SLICE_ALL: case CC_EXPR_SLICE_LO: case CC_EXPR_SLICE_HI:
-            err = cc_check_linktime_expr(p, e->lhs, ccqt_kind(e->lhs->type) == CC_ARRAY, depth + 1);
+            err = cc_check_linktime_expr(p, e->lhs, ccqt_is_fixed_sequence(e->lhs->type), depth + 1);
             if(err) return err;
             break;
         case CC_EXPR_LOGAND: case CC_EXPR_LOGOR: case CC_EXPR_TERNARY: {
@@ -18227,8 +18252,11 @@ cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool select
                 if(!err) cc_release_expr(p, value);
                 return err;
             }
-            err = cc_check_linktime_expr_inner(p, e->lhs,
-                ccqt_kind(e->type) == CC_POINTER && ccqt_kind(e->lhs->type) == CC_ARRAY, selected, depth + 1);
+            err = cc_check_linktime_expr_inner(
+                p, e->lhs,
+                ccqt_kind(e->type) == CC_POINTER && ccqt_is_fixed_sequence(e->lhs->type),
+                selected, depth + 1
+            );
             if(err) return err;
             // A selected aggregate may retain earlier writes that are fully
             // overwritten. Its storage reader evaluates only the needed bits.
@@ -18330,7 +18358,7 @@ cc_eval_object_bytes_inner(CcEvalCtx* ctx, CcExpr* e, uint32_t offset, uint32_t 
         cc_field_path_free(cc_allocator(p), view.path);
         return err;
     }
-    if((e->kind == CC_EXPR_VALUE || e->kind == CC_EXPR_BLOB) && ccqt_kind(e->type) == CC_ARRAY && cc_expr_array_data(e) && cc_expr_array_count(e)){
+    if((e->kind == CC_EXPR_VALUE || e->kind == CC_EXPR_BLOB) && ccqt_is_fixed_sequence(e->type) && cc_expr_array_data(e) && cc_expr_array_count(e)){
         uint32_t elem_size;
         int err = cc_sizeof_as_uint(p, ccqt_array_element(e->type), e->loc, &elem_size);
         if(err) return err;
@@ -18678,7 +18706,7 @@ cc_source_location_expr(CcParser* p, CcBuiltinOp op, SrcLoc loc, CcExpr*_Nullabl
     else return CC_UNREACHABLE_ERROR;
     Atom atom = AT_atomize(p->cpp.at, text.text, text.length);
     if(!atom) return CC_OOM_ERROR;
-    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), text.length+1, 0, 0, 0, 0);
+    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), text.length+1, 0, 0);
     if(!array) return CC_OOM_ERROR;
     CcExpr* value = cc_value_expr(p, loc, (CcQualType){.bits=(uintptr_t)array});
     if(!value) return CC_OOM_ERROR;
@@ -18854,7 +18882,11 @@ static
 _Bool
 cc_eval_aggregate_type(CcQualType type){
     CcTypeKind kind = ccqt_kind(type);
-    return kind == CC_STRUCT || kind == CC_UNION || kind == CC_ARRAY || kind == CC_SLICE
+    return kind == CC_STRUCT
+        || kind == CC_UNION
+        || kind == CC_ARRAY
+        || kind == CC_VECTOR
+        || kind == CC_SLICE
         || ccqt_bt_eq(type, CCBT__Any);
 }
 
@@ -18875,7 +18907,8 @@ cc_eval_default_path(CcQualType type, CcFieldPath path){
             }
             type = aggregate->fields[index].type;
         }
-        else if(kind == CC_ARRAY) type = ccqt_array_element(type);
+        else if(kind == CC_ARRAY || kind == CC_VECTOR)
+            type = ccqt_array_element(type);
         else return 1; // Slice and _Any pseudo-members are checked separately.
     }
     return 1;
@@ -18939,7 +18972,7 @@ cc_eval_path_select(CcEvalCtx* ctx, CcExpr* base, CcFieldPath path, CcQualType t
         }
         return 0;
     }
-    if((base->kind == CC_EXPR_VALUE || base->kind == CC_EXPR_BLOB) && ccqt_kind(base->type) == CC_ARRAY && cc_expr_array_data(base) && count == 1){
+    if((base->kind == CC_EXPR_VALUE || base->kind == CC_EXPR_BLOB) && ccqt_is_fixed_sequence(base->type) && cc_expr_array_data(base) && count == 1){
         uint32_t index = cc_field_path_component(path, 0), size;
         int err = cc_sizeof_as_uint(p, type, base->loc, &size);
         if(err) return err;
@@ -19045,27 +19078,31 @@ cc_eval_offset_path(CcParser* p, CcQualType owner, uint64_t offset, CcQualType t
         return 0;
     }
     CcTypeKind kind = ccqt_kind(owner);
-    uint32_t count = kind == CC_ARRAY ? 1
+    // FIXME: this is a mess of an expression
+    uint32_t count = (kind == CC_ARRAY || kind == CC_VECTOR) ? 1
         : kind == CC_STRUCT || kind == CC_UNION ? ccqt_as_struct(owner)->field_count : 0;
     for(uint32_t i = 0; i < count; i++){
         uint32_t index = i;
         uint64_t start = 0;
         CcQualType child;
-        if(kind == CC_ARRAY){
-            CcArray* array = ccqt_as_array(owner);
-            if(array->is_incomplete) return CC_NOT_CONSTANT_ERROR;
-            child = array->element;
+        if(kind == CC_ARRAY || kind == CC_VECTOR){
+            if(ccqt_array_incomplete(owner))
+                return CC_NOT_CONSTANT_ERROR;
+            child = ccqt_array_element(owner);
             uint32_t size;
             int err = cc_sizeof_as_uint(p, child, (SrcLoc){0}, &size);
             if(err) return err;
-            if(!size || offset / size >= array->length || offset / size > UINT32_MAX) return 0;
+            // FIXME: overflow intrins instead?
+            if(!size || offset / size >= ccqt_sequence_length(owner) || offset / size > UINT32_MAX)
+                return 0;
             index = (uint32_t)(offset / size);
             start = (uint64_t)index * size;
         }
         else {
             CcField* field = &ccqt_as_struct(owner)->fields[i];
             if(field->is_bitfield || field->offset > offset) continue;
-            if(ccqt_kind(field->type) == CC_ARRAY && ccqt_as_array(field->type)->is_incomplete) continue;
+            if(ccqt_is_fixed_sequence(field->type) && ccqt_array_incomplete(field->type))
+                continue;
             start = field->offset;
             child = field->type;
         }
@@ -19103,8 +19140,9 @@ cc_eval_object_view_address(CcEvalCtx* ctx, CcEvalObjectView* view, CcEvalAddres
     }
     else if(address.kind == CC_EVAL_LITERAL){
         *view->storage = (CcExpr){.kind=CC_EXPR_VALUE, .type=address.literal_type, .text=(const char*_Nonnull)address.symbol};
-        if(ccqt_as_array(address.literal_type)->length > UINT32_MAX) return CC_NOT_CONSTANT_ERROR;
-        view->storage->str.length = (uint32_t)ccqt_as_array(address.literal_type)->length;
+        if(ccqt_sequence_length(address.literal_type) > UINT32_MAX)
+            return CC_NOT_CONSTANT_ERROR;
+        view->storage->str.length = (uint32_t)ccqt_sequence_length(address.literal_type);
     }
     else return CC_NOT_CONSTANT_ERROR;
     if(view->storage->type.is_volatile || view->storage->type.is_atomic) return CC_NOT_CONSTANT_ERROR;
@@ -19151,7 +19189,7 @@ cc_eval_object_view_open(CcEvalCtx* ctx, CcExpr* e, CcEvalObjectView* view){
         }
         CcFieldPath step = {0};
         uint64_t step_offset = 0;
-        if(base->kind == CC_EXPR_DEREF || (base->kind == CC_EXPR_SUBSCRIPT && ccqt_kind(base->lhs->type) != CC_ARRAY)){
+        if(base->kind == CC_EXPR_DEREF || (base->kind == CC_EXPR_SUBSCRIPT && !ccqt_is_fixed_sequence(base->lhs->type))){
             if(base->kind == CC_EXPR_SUBSCRIPT && ccqt_kind(base->lhs->type) == CC_SLICE){
                 int64_t index;
                 uint64_t count = 0;
@@ -19190,7 +19228,7 @@ cc_eval_object_view_open(CcEvalCtx* ctx, CcExpr* e, CcEvalObjectView* view){
             int64_t index;
             err = cc_eval_integer(ctx, base->values[0], &index);
             if(err) goto cleanup;
-            if(index < 0 || (uint64_t)index >= ccqt_as_array(base->lhs->type)->length || (uint64_t)index > UINT32_MAX){
+            if(index < 0 || (uint64_t)index >= ccqt_sequence_length(base->lhs->type) || (uint64_t)index > UINT32_MAX){
                 err = CC_NOT_CONSTANT_ERROR;
                 goto cleanup;
             }
@@ -20097,7 +20135,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CC_TYPE_IS_STRUCT:     INTRES(ccqt_kind(qt) == CC_STRUCT);
                 case CC_TYPE_IS_UNION:      INTRES(ccqt_kind(qt) == CC_UNION);
                 case CC_TYPE_IS_ARRAY:      INTRES(ccqt_is_array(qt));
-                case CC_TYPE_IS_VECTOR:     INTRES(ccqt_kind(qt) == CC_ARRAY && ccqt_as_array(qt)->is_vector);
+                case CC_TYPE_IS_VECTOR:     INTRES(ccqt_kind(qt) == CC_VECTOR);
                 case CC_TYPE_IS_SLICE:      INTRES(ccqt_kind(qt) == CC_SLICE);
                 case CC_TYPE_IS_FUNCTION:   INTRES(ccqt_kind(qt) == CC_FUNCTION);
                 case CC_TYPE_IS_ENUM:       INTRES(ccqt_kind(qt) == CC_ENUM);
@@ -20110,12 +20148,13 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     CcTypeKind k = ccqt_kind(qt);
                     _Bool is_incomplete;
                     switch(k){
+                        case CC_VECTOR:
                         case CC_VLA: is_incomplete = 0; break;
                         case CC_ALIGNED: cc_unsafe_unreachable();
                         DRP_CASES_EXHAUSTED;
                         case CC_STRUCT:   is_incomplete = ccqt_as_struct(qt)->is_incomplete; break;
                         case CC_UNION:    is_incomplete = ccqt_as_union(qt)->is_incomplete; break;
-                        case CC_ARRAY:    is_incomplete = ccqt_as_array(qt)->is_incomplete; break;
+                        case CC_ARRAY:    is_incomplete = ccqt_array_incomplete(qt); break;
                         case CC_ENUM:     is_incomplete = ccqt_as_enum(qt)->is_incomplete; break;
                         case CC_FUNCTION: case CC_BASIC: case CC_POINTER: case CC_BLOCK_POINTER: case CC_SLICE: is_incomplete = 0; break;
                     }
@@ -20151,8 +20190,11 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     TYPERES(uq);
                 }
                 case CC_TYPE_COUNT:
-                    if(ccqt_kind(qt) != CC_ARRAY) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
-                    UINTRES(ccqt_as_array(qt)->length);
+                    if(!ccqt_is_fixed_sequence(qt)) {
+                        err = CC_NOT_CONSTANT_ERROR;
+                        goto fini_introspection;
+                    }
+                    UINTRES(ccqt_sequence_length(qt));
                 case CC_TYPE_LOC:{
                     switch(ccqt_kind(qt)){
                         case CC_VLA: UINTRES(ccqt_as_vla(qt)->loc.bits);
@@ -20161,6 +20203,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         case CC_ENUM: UINTRES(ccqt_as_enum(qt)->loc.bits);
                         case CC_UNION: UINTRES(ccqt_as_union(qt)->loc.bits);
                         case CC_STRUCT: UINTRES(ccqt_as_struct(qt)->loc.bits);
+                        case CC_VECTOR:
                         case CC_BASIC:
                         case CC_BLOCK_POINTER:
                         case CC_POINTER:
@@ -20243,7 +20286,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CC_TYPE_ELEMENT_TYPE:{
                     CcTypeKind k = ccqt_kind(qt);
                     CcQualType val;
-                    if(k == CC_ARRAY || k == CC_VLA)
+                    if(k == CC_ARRAY || k == CC_VECTOR || k == CC_VLA)
                         val = cc_array_element_type(qt);
                     else if(k == CC_SLICE)
                         val = ccqt_as_slice(qt)->pointee;

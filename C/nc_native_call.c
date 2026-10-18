@@ -97,9 +97,9 @@ nc_abi_type(const CcTargetConfig* tc, CcQualType qt, NcAbiRole role, NcAbiType* 
             alignment = record->alignment;
             aggregate = 1;
             break;
-        case CC_ARRAY: {
-            const CcArray* arr = ccqt_as_array(qt);
-            if(!arr->is_vector) return _cc_unimplemented_error;
+        case CC_ARRAY: return _cc_unimplemented_error;
+        case CC_VECTOR: {
+            const CcVector* arr = ccqt_as_vector(qt);
             t.size = alignment = arr->vector_size;
             if(t.size > 16) return _cc_unimplemented_error;
             if(nc_abi_windows(target)){

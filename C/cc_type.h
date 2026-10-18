@@ -34,6 +34,7 @@ enum CcTypeKind TYPED_ENUM(uint32_t){
     CC_SLICE,
     CC_ALIGNED,
     CC_VLA,
+    CC_VECTOR,
 };
 TYPEDEF_ENUM(CcTypeKind, uint32_t);
 enum CcBasicTypeKind TYPED_ENUM(uintptr_t){
@@ -160,16 +161,23 @@ struct CC_ALIGN(8) CcArray {
             CcTypeKind kind:        4; // CC_ARRAY
             uint32_t is_static:     1;
             uint32_t is_incomplete: 1;
-            uint32_t is_vector:     1;
-            uint32_t _padding:      25;
+            uint32_t _padding:      26;
         };
     };
-    uint32_t vector_size; // in bytes
     CcQualType element;
     size_t length;
     SrcLoc declarator_loc; // parsed arrays only; preserved when an outer layer becomes a VLA
 };
 _Static_assert(_Alignof(CcArray)==8, "");
+
+typedef struct CcVector CcVector;
+struct CC_ALIGN(8) CcVector {
+    CcTypeKind kind;
+    uint32_t vector_size; // in bytes
+    CcQualType element;
+    size_t length;
+};
+_Static_assert(_Alignof(CcVector)==8, "");
 
 typedef struct CcVla CcVla;
 struct CC_ALIGN(8) CcVla {
@@ -707,7 +715,7 @@ static inline
 _Bool
 ccqt_is_pointer_like(CcQualType t){
     CcTypeKind k = ccqt_kind(t);
-    return k == CC_POINTER || (k == CC_BASIC && ccqt_basic_kind(t) == CCBT_nullptr_t) || (k == CC_ARRAY && !((CcArray*)_ccqt_to_type_ptr(t))->is_vector) || k == CC_VLA;
+    return k == CC_POINTER || (k == CC_BASIC && ccqt_basic_kind(t) == CCBT_nullptr_t) || k == CC_ARRAY || k == CC_VLA;
 }
 
 static inline
@@ -738,11 +746,23 @@ static inline CcStruct*   ccqt_as_struct  (CcQualType t){ return _ccqt_to_type_p
 static inline CcUnion*    ccqt_as_union   (CcQualType t){ return _ccqt_to_type_ptr(t); }
 static inline CcFunction* ccqt_as_function(CcQualType t){ return _ccqt_to_type_ptr(t); }
 static inline CcArray*    ccqt_as_array   (CcQualType t){ return _ccqt_to_type_ptr(t); }
+static inline CcVector* ccqt_as_vector(CcQualType t){ return _ccqt_to_type_ptr(t); }
 static inline CcVla*      ccqt_as_vla     (CcQualType t){ return _ccqt_to_type_ptr(t); }
 static inline _Bool ccqt_is_array(CcQualType t){
-    return ccqt_kind(t) == CC_VLA || (ccqt_kind(t) == CC_ARRAY && !ccqt_as_array(t)->is_vector);
+    return ccqt_kind(t) == CC_VLA || ccqt_kind(t) == CC_ARRAY;
+}
+// Fixed homogeneous storage shared by array and vector initializer paths.
+static inline _Bool ccqt_is_fixed_sequence(CcQualType t){
+    return ccqt_kind(t) == CC_ARRAY || ccqt_kind(t) == CC_VECTOR;
+}
+static inline size_t ccqt_sequence_length(CcQualType t){
+    return ccqt_kind(t) == CC_VECTOR ? ccqt_as_vector(t)->length : ccqt_as_array(t)->length;
+}
+static inline _Bool ccqt_array_incomplete(CcQualType t){
+    return ccqt_kind(t) == CC_ARRAY && ccqt_as_array(t)->is_incomplete;
 }
 static inline CcQualType ccqt_array_element(CcQualType t){
+    if(ccqt_kind(t) == CC_VECTOR) return ccqt_as_vector(t)->element;
     return ccqt_kind(t) == CC_VLA ? ccqt_as_vla(t)->element : ccqt_as_array(t)->element;
 }
 static inline _Bool ccqt_is_vm(CcQualType t){

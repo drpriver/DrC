@@ -771,7 +771,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             return 0;
         }
         case CC_TYPE_IS_VECTOR: {
-            *(_Bool*)result = ccqt_kind(qt) == CC_ARRAY && ccqt_as_array(qt)->is_vector;
+            *(_Bool*)result = ccqt_kind(qt) == CC_VECTOR;
             return 0;
         }
         case CC_TYPE_IS_SLICE: {
@@ -840,6 +840,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
         case CC_TYPE_IS_INCOMPLETE: {
             CcTypeKind k = ccqt_kind(qt);
             switch(k){
+                case CC_VECTOR:
                 case CC_VLA: *(_Bool*)result = 0; break;
                 case CC_ALIGNED: ci_unsafe_unreachable();
                 DRP_CASES_EXHAUSTED;
@@ -879,12 +880,12 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
         case CC_TYPE_COUNT: {
             if(ccqt_kind(qt) == CC_VLA)
                 return ci_error(ci, loc, "_Type.count: VLA bounds are unavailable through a runtime _Type value");
-            if(ccqt_kind(qt) != CC_ARRAY){
+            if(!ccqt_is_fixed_sequence(qt)){
                 MStringBuilder* sb = ci_start_error(ci, loc, "_Type.count: not an array type: ");
                 cc_print_type(sb, qt);
                 return ci_finish_error(ci, loc);
             }
-            *(size_t*)result = ccqt_as_array(qt)->length;
+            *(size_t*)result = ccqt_sequence_length(qt);
             return 0;
         }
         case CC_TYPE_LOC:{
@@ -902,6 +903,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
                 case CC_UNION:
                     *out = ccqt_as_union(qt)->loc;
                     break;
+                case CC_VECTOR:
                 case CC_FUNCTION:
                 case CC_BLOCK_POINTER:
                 case CC_SLICE:
@@ -1073,7 +1075,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
         }
         case CC_TYPE_ELEMENT_TYPE: {
             CcTypeKind k = ccqt_kind(qt);
-            if(k == CC_ARRAY || k == CC_VLA){
+            if(k == CC_ARRAY || k == CC_VECTOR || k == CC_VLA){
                 *(uintptr_t*)result = cc_array_element_type(qt).bits;
                 return 0;
             }
@@ -4421,6 +4423,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
         case CC_BLOCK_POINTER:
             err = ci_unimplemented(ci, loc, "Unsupported return type");
             goto cleanup;
+        case CC_VECTOR:
         case CC_ARRAY:
             err = ci_ice(ci,loc, "Somehow returning an %s?", "array");
             goto cleanup;

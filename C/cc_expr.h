@@ -322,7 +322,7 @@ cc_field_paths_overlap(CcQualType type, CcFieldPath a, CcFieldPath b){
         uint32_t ai = cc_field_path_component(a, i), bi = cc_field_path_component(b, i);
         CcTypeKind kind = ccqt_kind(type);
         if(ai != bi) return kind == CC_UNION;
-        if(kind == CC_ARRAY) type = ccqt_as_array(type)->element;
+        if(kind == CC_ARRAY || kind == CC_VECTOR) type = ccqt_array_element(type);
         else if(kind == CC_STRUCT) type = ccqt_as_struct(type)->fields[ai].type;
         else if(kind == CC_UNION) type = ccqt_as_union(type)->fields[ai].type;
         else return 1;
@@ -433,9 +433,10 @@ cc_field_path_field(CcQualType type, CcFieldPath path){
         switch(ccqt_kind(type)){
             case CC_STRUCT: field = &ccqt_as_struct(type)->fields[index]; break;
             case CC_UNION: field = &ccqt_as_union(type)->fields[index]; break;
+            case CC_VECTOR:
             case CC_ARRAY:
                 field = NULL;
-                type = ccqt_as_array(type)->element;
+                type = ccqt_array_element(type);
                 continue;
             default: return NULL; // Slice and _Any pseudo-members aren't bitfields.
         }

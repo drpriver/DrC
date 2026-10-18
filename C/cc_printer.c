@@ -85,7 +85,7 @@ cc_print_type_pre(MStringBuilder* sb, CcQualType t){
     }
     if(ccqt_raw_kind(t) == CC_ALIGNED){
         cc_print_type_pre(sb, ccqt_unaligned(t));
-        if(ccqt_kind(t) != CC_ARRAY)
+        if(!ccqt_is_fixed_sequence(t))
             msb_sprintf(sb, " __attribute__((aligned(%u)))", ccqt_as_aligned(t)->alignment);
         return;
     }
@@ -127,12 +127,12 @@ cc_print_type_pre(MStringBuilder* sb, CcQualType t){
             cc_print_type_pre(sb, s->pointee);
             return;
         }
+        case CC_VECTOR:
         case CC_ARRAY: {
             if(t.is_const) msb_write_literal(sb, "const ");
             if(t.is_volatile) msb_write_literal(sb, "volatile ");
             if(t.is_atomic) msb_write_literal(sb, "_Atomic ");
-            CcArray* a = ccqt_as_array(t);
-            cc_print_type_pre(sb, a->element);
+            cc_print_type_pre(sb, ccqt_array_element(t));
             return;
         }
         case CC_FUNCTION: {
@@ -176,7 +176,7 @@ void
 cc_print_type_post(MStringBuilder* sb, CcQualType t){
     if(ccqt_raw_kind(t) == CC_ALIGNED){
         cc_print_type_post(sb, ccqt_unaligned(t));
-        if(ccqt_kind(t) == CC_ARRAY)
+        if(ccqt_is_fixed_sequence(t))
             msb_sprintf(sb, " __attribute__((aligned(%u)))", ccqt_as_aligned(t)->alignment);
         return;
     }
@@ -200,13 +200,15 @@ cc_print_type_post(MStringBuilder* sb, CcQualType t){
             cc_print_type_post(sb, s->pointee);
             return;
         }
+        case CC_VECTOR: {
+            CcVector* v = ccqt_as_vector(t);
+            msb_sprintf(sb, " __attribute__((vector_size(%u)))", v->vector_size);
+            cc_print_type_post(sb, v->element);
+            return;
+        }
         case CC_ARRAY: {
             CcArray* a = ccqt_as_array(t);
-            if(a->is_vector){
-                msb_sprintf(sb, " __attribute__((vector_size(%u)", a->vector_size);
-                msb_write_literal(sb, "))");
-            }
-            else if(a->is_incomplete)
+            if(a->is_incomplete)
                 msb_write_literal(sb, "[]");
             else
                 msb_sprintf(sb, "[%zu]", a->length);
@@ -396,16 +398,16 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
             return;
         }
         case CC_VLA: msb_write_literal(sb, "[VLA]"); return;
+        case CC_VECTOR:
         case CC_ARRAY: {
-            CcArray* arr = ccqt_as_array(type);
-            if(arr->is_incomplete){ msb_write_literal(sb, "[...]"); return; }
+            if(ccqt_array_incomplete(type)){ msb_write_literal(sb, "[...]"); return; }
             uint32_t elem_sz;
-            if(cc_sizeof_as_uint(p, arr->element, loc, &elem_sz)){ msb_write_literal(sb, "[...]"); return; }
+            if(cc_sizeof_as_uint(p, ccqt_array_element(type), loc, &elem_sz)){ msb_write_literal(sb, "[...]"); return; }
             msb_write_char(sb, '{');
-            for(size_t i = 0; i < arr->length; i++){
+            for(size_t i = 0; i < ccqt_sequence_length(type); i++){
                 if(i) msb_write_literal(sb, ", ");
                 if(i >= 16){ msb_write_literal(sb, "..."); break; }
-                cc_print_runtime_value(p, arr->element, (const char*)data + i * elem_sz, sb, indent);
+                cc_print_runtime_value(p, ccqt_array_element(type), (const char*)data + i * elem_sz, sb, indent);
             }
             msb_write_char(sb, '}');
             return;
@@ -475,14 +477,13 @@ cc_print_initializer_path(MStringBuilder* sb, CcQualType type, CcFieldPath path,
     for(uint32_t i = 0, count = cc_field_path_count(path); i < count; i++){
         uint32_t index = cc_field_path_component(path, i);
         CcTypeKind kind = ccqt_kind(type);
-        if(kind == CC_ARRAY){
-            CcArray* array = ccqt_as_array(type);
+        if(kind == CC_ARRAY || kind == CC_VECTOR){
             // Vector initializers use positional elements, not designators.
-            if(!array->is_vector){
+            if(kind == CC_ARRAY){
                 msb_sprintf(sb, "[%u]", index);
                 printed = 1;
             }
-            type = array->element;
+            type = ccqt_array_element(type);
         }
         else if(kind == CC_STRUCT || kind == CC_UNION){
             CcField* fields = kind == CC_STRUCT ? ccqt_as_struct(type)->fields : ccqt_as_union(type)->fields;

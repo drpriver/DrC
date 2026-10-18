@@ -27,8 +27,8 @@ cctc_hash_pointer(CcQualType pointee, _Bool restrict_, _Bool is_block){
 
 static inline
 uint32_t
-cctc_hash_array(CcQualType element, size_t length, uint32_t flags){ // flags: bit0=is_static, bit1=is_incomplete, bit2=is_vector
-    uint64_t buf[3] = { element.bits, length, flags};
+cctc_hash_sequence(CcQualType element, size_t length, uint32_t extra){
+    uint64_t buf[3] = { element.bits, length, extra};
     return drp_hash(buf, sizeof buf);
 }
 
@@ -252,12 +252,11 @@ cc_intern_slice(CcTypeCache* cache, Allocator al, CcQualType pointee, _Bool rest
 
 static inline
 _Bool
-cctc_array_eq(const CcArray* a, CcQualType element, size_t length, _Bool is_static, _Bool is_incomplete, _Bool is_vector){
+cctc_array_eq(const CcArray* a, CcQualType element, size_t length, _Bool is_static, _Bool is_incomplete){
     return a->element.bits == element.bits
         && a->length == length
         && a->is_static == (uint32_t)is_static
-        && a->is_incomplete == (uint32_t)is_incomplete
-        && a->is_vector == (uint32_t)is_vector;
+        && a->is_incomplete == (uint32_t)is_incomplete;
 }
 
 static inline
@@ -267,8 +266,8 @@ cctc_rebuild_arrays(CcTypeTable* t){
     uint32_t* idxes = cctc_idxes(t);
     for(uint32_t i = 0; i < t->count; i++){
         CcArray* q = items[i];
-        uint32_t f = (uint32_t)q->is_static | ((uint32_t)q->is_incomplete << 1) | ((uint32_t)q->is_vector << 2);
-        uint32_t h = cctc_hash_array(q->element, q->length, f);
+        uint32_t f = (uint32_t)q->is_static | ((uint32_t)q->is_incomplete << 1);
+        uint32_t h = cctc_hash_sequence(q->element, q->length, f);
         uint32_t idx = fast_reduce32(h, 2 * t->cap);
         while(idxes[idx]){
             idx++;
@@ -281,10 +280,10 @@ cctc_rebuild_arrays(CcTypeTable* t){
 warn_unused
 static inline
 CcArray* _Nullable
-cc_intern_array(CcTypeCache* cache, Allocator al, CcQualType element, size_t length, _Bool is_static, _Bool is_incomplete, _Bool is_vector, uint32_t vector_size){
+cc_intern_array(CcTypeCache* cache, Allocator al, CcQualType element, size_t length, _Bool is_static, _Bool is_incomplete){
     CcTypeTable* t = &cache->arrays;
-    uint32_t flags = (uint32_t)is_static | ((uint32_t)is_incomplete << 1) | ((uint32_t)is_vector << 2);
-    uint32_t hash = cctc_hash_array(element, length, flags);
+    uint32_t flags = (uint32_t)is_static | ((uint32_t)is_incomplete << 1);
+    uint32_t hash = cctc_hash_sequence(element, length, flags);
     if(t->count){
         void** items = t->data;
         uint32_t* idxes = cctc_idxes(t);
@@ -294,7 +293,7 @@ cc_intern_array(CcTypeCache* cache, Allocator al, CcQualType element, size_t len
             if(!i) break;
             i--;
             CcArray* a = items[i];
-            if(cctc_array_eq(a, element, length, is_static, is_incomplete, is_vector))
+            if(cctc_array_eq(a, element, length, is_static, is_incomplete))
                 return a;
             idx++;
             if(idx >= 2 * t->cap) idx = 0;
@@ -309,7 +308,69 @@ cc_intern_array(CcTypeCache* cache, Allocator al, CcQualType element, size_t len
     a->kind = CC_ARRAY;
     a->is_static = is_static;
     a->is_incomplete = is_incomplete;
-    a->is_vector = is_vector;
+    a->element = element;
+    a->length = length;
+    void** items = t->data;
+    uint32_t* idxes = cctc_idxes(t);
+    uint32_t slot = t->count++;
+    items[slot] = a;
+    uint32_t idx = fast_reduce32(hash, 2 * t->cap);
+    while(idxes[idx]){
+        idx++;
+        if(idx >= 2 * t->cap) idx = 0;
+    }
+    idxes[idx] = slot + 1;
+    return a;
+}
+
+// Vector interning
+
+static inline
+void
+cctc_rebuild_vectors(CcTypeTable* t){
+    void** items = t->data;
+    uint32_t* idxes = cctc_idxes(t);
+    for(uint32_t i = 0; i < t->count; i++){
+        CcVector* q = items[i];
+        uint32_t f = q->vector_size;
+        uint32_t h = cctc_hash_sequence(q->element, q->length, f);
+        uint32_t idx = fast_reduce32(h, 2 * t->cap);
+        while(idxes[idx]){
+            idx++;
+            if(idx >= 2 * t->cap) idx = 0;
+        }
+        idxes[idx] = i + 1;
+    }
+}
+
+warn_unused
+static inline
+CcVector* _Nullable
+cc_intern_vector(CcTypeCache* cache, Allocator al, CcQualType element, size_t length, uint32_t vector_size){
+    CcTypeTable* t = &cache->vectors;
+    uint32_t hash = cctc_hash_sequence(element, length, vector_size);
+    if(t->count){
+        void** items = t->data;
+        uint32_t* idxes = cctc_idxes(t);
+        uint32_t idx = fast_reduce32(hash, 2 * t->cap);
+        for(;;){
+            uint32_t i = idxes[idx];
+            if(!i) break;
+            i--;
+            CcVector* a = items[i];
+            if(a->element.bits == element.bits && a->length == length && a->vector_size == vector_size)
+                return a;
+            idx++;
+            if(idx >= 2 * t->cap) idx = 0;
+        }
+    }
+    if(t->count >= t->cap){
+        if(cctc_table_grow(t, al) != 0) return NULL;
+        cctc_rebuild_vectors(t);
+    }
+    CcVector* a = Allocator_zalloc(al, sizeof *a);
+    if(!a) return NULL;
+    a->kind = CC_VECTOR;
     a->vector_size = vector_size;
     a->element = element;
     a->length = length;
