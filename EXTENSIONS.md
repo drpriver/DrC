@@ -522,6 +522,18 @@ else {
 }
 ```
 
+
+Like runtime `if`, you can put declarations in the `()`.
+These are available in the body of the if, but do not leak outside of the `if()`.
+
+```C
+constexpr _Type T = typeof(foo);
+static if(_Type_T.is_pointer)
+  static if(_Type P = T.pointee; P.unqual == char){
+    printf("%s\n", foo);
+  }
+```
+
 ### `static goto`
 
 A compile-time unconditional jump. Can only jump forward within source code and cannot
@@ -659,6 +671,9 @@ subsequent labels until `static break;` or the closing brace. Be aware: a
 If no case matches and there is no default, nothing is emitted.
 To make an unmatched condition an error, use
 `static default: static_assert(0, "unsupported type");`.
+
+
+Like runtime `switch()` you can declare variables in the `()` part.
 
 ### Methods
 
@@ -1461,6 +1476,10 @@ An incomplete list:
 * Aggregate types with const members are assignable if the
     whole object is replaced. The const member remains const when
     accessed directly.
+* structs are allowed to have a single FAM as their only field.
+* structs and union tags are in separate names spaces so `struct T` and `union T`
+    can coexist.
+* _Generic allows duplicate cases for easier use with typedefs.
 * FIXME: list all the other random minor extensions.
 
 ## Interpreter-only
