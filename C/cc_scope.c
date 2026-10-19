@@ -8,13 +8,16 @@
 #pragma clang assume_nonnull begin
 #endif
 
-static inline CcScope*
+static inline
+CcScope*
 cc_scope_declarations(CcScope* scope){
-    while(scope->static_for_bindings) scope = scope->parent;
+    while(scope->static_for_bindings)
+        scope = scope->parent;
     return scope;
 }
 
-static inline CcScope*
+static inline
+CcScope*
 cc_scope_retain(CcScope* scope){
     for(CcScope* s = scope; s && !s->retained; s = s->parent)
         s->retained = 1;

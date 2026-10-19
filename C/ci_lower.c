@@ -5608,6 +5608,8 @@ ci_lower_address_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             err = ci_lower_expr_discard(ci, ctx, e->lhs);
             if(err) return err;
             return ci_lower_address_discard(ci, ctx, e->values[0]);
+        case CC_EXPR_STATEMENT_EXPRESSION:
+            return ci_lower_stmt(ci, ctx, e->stmt_body);
         case CC_EXPR_COMPOUND_LITERAL: case CC_EXPR_INIT_LIST:
             for(size_t i = 0; i < e->init_list->count; i++){
                 err = ci_lower_expr_discard(ci, ctx, e->init_list->entries[i].value);

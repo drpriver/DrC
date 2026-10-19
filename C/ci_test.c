@@ -76,6 +76,161 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "N3886 generic VLA associations do not evaluate bounds", __LINE__,
+            SVI("int f(int n,int m){ int effects=0;"
+                "int a=_Generic(int[3][2],int[3][*]:1,int[2][*]:0);"
+                "int b=_Generic(int[n][m],int[*][*]:1,char[*][*]:0);"
+                "int c=_Generic(int(*)[2],int(*)[++effects]:1);"
+                "int d=_Generic(int[++effects],int[*]:1);"
+                "return a+b+c+d+effects*10;} return f(3,2);"),
+            .exit_code = 4,
+        },
+        {
+            "_Generic(statement expressions)", __LINE__,
+            SVI(
+                "int y = 3;\n"
+                "int x = _Generic(({\n"
+                "    y++;\n"
+                "}), int: 2);\n"
+                "return x + y;\n"
+            ),
+            .exit_code = 5,
+        },
+        {
+            "generic discard crosses statement bodies but not selected results", __LINE__,
+            SVI("int effects=0; int n=2;"
+                "int x=_Generic(({"
+                "if(n){int a[++effects];}"
+                "for(int i=0;i<n;i++){int (*p)[++effects];}"
+                "while(n){sizeof(int[++effects]); break;}"
+                "do {sizeof(int[++effects]);} while(0);"
+                "switch(n){case 2: sizeof(int[++effects]); break;}"
+                "static if(1){int (*p)[++effects];}"
+                "_Generic(int[n],int[*]:sizeof(int[++effects]));"
+                "n; }),int:sizeof(int[++effects]));"
+                "return effects*10+x;"),
+            .exit_code = 14,
+        },
+        {
+            "generic discards typeof variably modified operand effects", __LINE__,
+            SVI("int f(int n){int effects=0;"
+                "int x=_Generic(typeof((++effects,(int(*)[n])0)),"
+                "typeof((++effects,(int(*)[n])0)):1);"
+                "return effects*10+x;} return f(2);"),
+            .exit_code = 1,
+        },
+        {
+            "unevaluated alignment and builtin operands discard VLA effects", __LINE__,
+            SVI("int f(int n){int effects=0;"
+                "int a=alignof(int[++effects]);"
+                "int b=alignof(*(int(*)[++effects])0);"
+                "int c=alignof(typeof((++effects,(int(*)[n])0)));"
+                "int d=__builtin_types_compatible_p(int[++effects],int[++effects]);"
+                "int e=__builtin_types_compatible_p("
+                "typeof((++effects,(int(*)[n])0)),int(*)[n]);"
+                "int g=__builtin_constant_p(sizeof(int[++effects]));"
+                "int h=__builtin_constant_p(({int (*p)[++effects]; n;}));"
+                "return effects*100+(a==alignof(int))+(b==alignof(int))"
+                "+(c==alignof(void*))+d+e+(g==0)+(h==0)"
+                "+__builtin_constant_p(2+3);} return f(2);"),
+            .exit_code = 8,
+        },
+        {
+            "compile time operands discard VLA effects without discarding runtime operands", __LINE__,
+            SVI("int n=0; int f(int arg,...){"
+                "alignas(int[++n]) int x=1;"
+                "alignas(sizeof(int(*)[++n])) int y=2;"
+                "int z __attribute__((aligned(sizeof(int(*)[++n]))))=3;"
+                "typedef int V __attribute__((vector_size(2*sizeof(int(*)[++n]))));"
+                "enum E {one=sizeof(int(*)[++n])/sizeof(void*)};"
+                "struct Bits {unsigned :sizeof(int(*)[++n]); unsigned x:sizeof(int(*)[++n]);};"
+                "struct Bits bits={.x=3};"
+                "int a[2]={[sizeof(int(*)[++n])/sizeof(void*)]=7};"
+                "struct S {int a[4];};"
+                "struct S s={.a[sizeof(int(*)[++n])/sizeof(void*)]=9};"
+                "int off=__builtin_offsetof(typeof((*(struct S(*)[++n])0)[0]),"
+                "a[sizeof(int(*)[++n])/sizeof(void*)]);"
+                "static_assert(sizeof(int(*)[++n])==sizeof(void*));"
+                "__builtin_va_list ap; __builtin_va_start(ap,(sizeof(int[++n]),arg));"
+                "int v=__builtin_va_arg(ap,int); __builtin_va_end(ap);"
+                "int chosen=__builtin_choose_expr(sizeof(int(*)[++n]),sizeof(int[++n]),sizeof(int[++n]));"
+                "return n==1 && chosen==sizeof(int) && x+y+z==6 && v==42"
+                "&& one==1 && a[1]==7 && s.a[1]==9 && off==sizeof(int)"
+                "&& bits.x==3 && sizeof(V)==2*sizeof(void*); } return f(0,42);"),
+            .exit_code = 1,
+        },
+        {
+            "countof evaluates VLA operand captures once", __LINE__,
+            SVI("int n=0; int a=_Countof(*(int(*)[++n])0);"
+                "int b=_Countof(int[++n]);"
+                "return n==2 && a==1 && b==2;"),
+            .exit_code = 1,
+        },
+        {
+            "sizeof compound literal postfix preserves VLA operand effects", __LINE__,
+            SVI("int f(int n){int a[2][n]; int (*p)[n]=a; int i=0;"
+                "int x=sizeof(int(*)[n]){p}[i++];"
+                "int y=sizeof((int(*)[n]){p}[i++]);"
+                "return i==2 && x==n*sizeof(int) && x==y;} return f(3);"),
+            .exit_code = 1,
+        },
+        {
+            "countof compound literal postfix preserves slice operand effects", __LINE__,
+            SVI("struct S{int s[:];}; int a[3]; int n=0;"
+                "int x=_Countof(struct S){.s=(++n,a)}.s;"
+                "int y=_Countof((struct S){.s=(++n,a)}.s);"
+                "return n==2 && x==3 && y==3;"),
+            .exit_code = 1,
+        },
+        {
+            "generic selected type retains bounds through typeof", __LINE__,
+            SVI("int f(void){int n=1;"
+                "typeof(_Generic(int,int:(int(*)[++n])0)) p=0;"
+                "int size=sizeof *p; n=7;"
+                "return size==2*sizeof(int) && sizeof *p==size;} return f();"),
+            .exit_code = 1,
+        },
+        {
+            "reflection type-only arguments discard bounds but preserve receiver", __LINE__,
+            SVI("int n=0; int receivers=0;"
+                "int a=(++receivers,int*).is_castable_to(int(*)[++n]);"
+                "int b=(int*).is_castable_to((int(*)[++n])0);"
+                "int c=(int(int(*)[2])).is_callable_with(int(*)[++n]);"
+                "int d=(int(int(*)[2])).is_callable_with((int(*)[++n])0);"
+                "return n==0 && receivers==1 && a && b && c && d;"),
+            .exit_code = 1,
+        },
+        {
+            "VLA type queries retain captured multidimensional bounds", __LINE__,
+            SVI("int f(void){int rows=2,cols=3; typedef int A[rows++][cols++];"
+                "int a[2][3]; A* p=&a;"
+                "int count=_Countof(*p); int size=sizeof *p;"
+                "int reflected=A.sizeof_; int inner=A.element_type.count;"
+                "rows=cols=9; return count==2 && size==6*sizeof(int)"
+                "&& reflected==size && inner==3 && sizeof *p==size;} return f();"),
+            .exit_code = 1,
+        },
+        {
+            "compound literal queries preserve unevaluated contexts", __LINE__,
+            SVI("int f(int n){int a[2][n]; int (*p)[n]=a; int i=0;"
+                "int g=_Generic(sizeof(int(*)[n]){p}[i++],default:1);"
+                "int al=alignof((int(*)[n]){p}[i++]);"
+                "int fixed_size=sizeof(int[4]){i++};"
+                "int fixed_count=_Countof(int[4]){i++};"
+                "int count=_Countof(int(*)[n]){p}[i++];"
+                "return g==1 && al==alignof(int) && i==1 && count==n"
+                "&& fixed_size==4*sizeof(int) && fixed_count==4;} return f(3);"),
+            .exit_code = 1,
+        },
+        {
+            "builtin ignored values still evaluate runtime arguments", __LINE__,
+            SVI("int n=0; int x=__builtin_expect(7,sizeof(int[++n]));"
+                "double d=__builtin_nan((sizeof(int[++n]),\"\"));"
+                "float f=__builtin_nanf((sizeof(int[++n]),\"\"));"
+                "return n==3 && x==7 && d!=d && f!=f;"),
+            .exit_code = 1,
+        },
+        {
             // A typedef-qualified array must decay to a pointer to const elements.
             "generic selection preserves const array elements", __LINE__,
             SVI("typedef int A[2];\n"
@@ -10033,6 +10188,249 @@ TestFunction(test_interpreter){
                 " int b=_Generic(({1;}),int:7,default:({2;}))){return a+b;}\n"
                 "return f();\n"),
             .exit_code = 11,
+        },
+        {
+            "default args: VLA bounds run once at each evaluated call", __LINE__,
+            SVI("int n=0; int f(int x=sizeof(int[++n])){return x;}"
+                "int g(int x=f()){return x;}"
+                "int probe(void){int ignored=_Generic(g(),int:1);"
+                "int explicit=f(17); int a=f(); int b=g(); int c=f();"
+                "if(ignored!=1)return 2; if(explicit!=17)return 3; if(n!=3)return 10+n;"
+                "if(a!=sizeof(int))return 30+a; if(b!=2*sizeof(int))return 60+b;"
+                "if(c!=3*sizeof(int))return 90+c; return 1;}"
+                "return probe();"),
+            .exit_code = 1,
+        },
+        {
+            "default args: VLA pointer strides use caller captures", __LINE__,
+            SVI("int n=1; int a[64];"
+                "int f(int x=(int*)((int(*)[++n])a+1)-a){return x;}"
+                "int probe(void){int guard=91; int x=f(); int y=f();"
+                "return guard==91 && n==3 && x==2 && y==3;} return probe();"),
+            .exit_code = 1,
+        },
+        {
+            "default args: multidimensional bounds and aggregates are independent", __LINE__,
+            SVI("int rows=1, cols=2; struct S{int size;};"
+                "int f(struct S s={sizeof(int[++rows][++cols])}){return s.size;}"
+                "int g(int x=f()){return x;}"
+                "int probe(void){int guard=91; int a=f(); int b=g();"
+                "return guard==91 && rows==3 && cols==4"
+                "&& a==6*sizeof(int) && b==12*sizeof(int);} return probe();"),
+            .exit_code = 1,
+        },
+        {
+            "default args: existing VLA typedef bounds remain shared", __LINE__,
+            SVI("int n=3; typedef int A[n]; int f(int x=sizeof(A)){return x;}"
+                "n=7; return f()==3*sizeof(int) && n==7;"),
+            .exit_code = 1,
+        },
+        {
+            "VLA captures respect short circuiting and loop reevaluation", __LINE__,
+            SVI("int n=0; int skipped=0 && sizeof(int[++n]);"
+                "int yes=1 || _Countof(int[++n]);"
+                "int chosen=0 ? sizeof(int[++n]) : _Countof(int[++n]);"
+                "int sum=0; for(int i=0;i<3;i++){typedef int A[++n];"
+                "sum+=_Countof(A); sum+=sizeof(A)/sizeof(int);}"
+                "return skipped==0 && yes==1 && chosen==1 && n==4 && sum==18;"),
+            .exit_code = 1,
+        },
+        {
+            "nested type queries discard bounds and preserve following runtime queries", __LINE__,
+            SVI("int n=0; int g=_Generic(alignof(typeof((int(*)[++n])0)),default:1);"
+                "int a=alignof(typeof_unqual((int(*)[++n])0));"
+                "int c=__builtin_constant_p(_Countof(int[++n]));"
+                "int chosen=__builtin_choose_expr(1,_Countof(int[++n]),sizeof(int[++n]));"
+                "return g==1 && a==alignof(void*) && c==0 && n==1 && chosen==1;"),
+            .exit_code = 1,
+        },
+        {
+            "default args: countof and reflected VLA bounds use caller storage", __LINE__,
+            SVI("int n=0; int f(int x=_Countof(int[++n])){return x;}"
+                "int g(int x=(int[++n]).sizeof_){return x;}"
+                "int h(int x=(int[++n]).count){return x;}"
+                "int probe(void){int guard=71; int a=f(); int b=g(); int c=h();"
+                "return guard==71 && n==3 && a==1 && b==2*sizeof(int) && c==3;}"
+                "return probe();"),
+            .exit_code = 1,
+        },
+        {
+            "default args: fixed outer VLA dimensions retain inner stride", __LINE__,
+            SVI("int n=1; int a[64];"
+                "int f(int x=(int*)((int(*)[2][++n])a+1)-a){return x;}"
+                "int g(int x=f()){return x;}"
+                "int probe(void){int guard=71; int x=g(); int y=g();"
+                "return guard==71 && n==3 && x==4 && y==6;} return probe();"),
+            .exit_code = 1,
+        },
+        {
+            "default args: recursive calls retain each activation's VLA value", __LINE__,
+            SVI("int n=0; int f(int depth,int size=sizeof(int[++n])){"
+                "if(depth){int nested=f(depth-1); return size+nested;} return size;}"
+                "int probe(void){int guard=71; int result=f(3);"
+                "return guard==71 && n==4 && result==10*sizeof(int);} return probe();"),
+            .exit_code = 1,
+        },
+        {
+            "default args: conditional VLA defaults capture only selected bounds", __LINE__,
+            SVI("int n=0, select=0;"
+                "int f(int x=select ? _Countof(int[++n]) : sizeof(int[++n])){return x;}"
+                "int g(int x=f()){return x;}"
+                "int probe(void){int guard=71; int a=g(); select=1; int b=g();"
+                "int c=_Generic(g(),int:7); return guard==71 && n==2"
+                "&& a==sizeof(int) && b==2 && c==7;} return probe();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: prototypes discard bounds while definitions evaluate them", __LINE__,
+            SVI("int effects=0; int f(int n,int a[++effects][n]);"
+                "typedef int F(int n,int a[++effects][n]);"
+                "int f(int n,int a[++effects][n]){return sizeof(*a)/sizeof(int);}"
+                "int a[2][3]; F* p=f; int before=effects; int result=p(3,a);"
+                "return before==0 && effects==1 && result==3;"),
+            .exit_code = 1,
+        },
+        {
+            "vla: qualified typeof aliases preserve captured bounds", __LINE__,
+            SVI("int f(void){int n=2; typedef int A[++n]; const A a={0};"
+                "typeof(a) b={0}; typeof_unqual(a) c={0}; n=9;"
+                "return sizeof(a)==3*sizeof(int) && sizeof(b)==sizeof(a)"
+                "&& _Countof(c)==3 && _Generic(&b[0],const int*:1,default:0)"
+                "&& _Generic(&c[0],int*:1,default:0);} return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: nested generic statements discard deferred bounds", __LINE__,
+            SVI("int n=0; int f(void){int result=_Generic(({"
+                "_Defer sizeof(int[++n]);"
+                "int x=_Generic(int[++n],int[*]:sizeof(int[++n]));"
+                "typeof((int(*)[++n])0) p=0; x; }),int:7);"
+                "return result==7 && n==0;} return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: aggregate initializer values retain captures", __LINE__,
+            SVI("int n=0; struct S{int a,b;};"
+                "struct S s={.a=sizeof(int[++n]),.b=_Countof(int[++n])};"
+                "int a[2]={sizeof(int[++n]),_Countof(int[++n])};"
+                "return n==4 && s.a/sizeof(int)+s.b==3"
+                "&& a[0]/sizeof(int)+a[1]==7;"),
+            .exit_code = 1,
+        },
+        {
+            "vla: loop condition and deferred bounds run at their use", __LINE__,
+            SVI("int n=0, cleanups=0; int f(void){int visits=0;"
+                "while(_Countof(int[++n])<4){"
+                "_Defer sizeof(int[++cleanups]); visits++; if(visits==2)continue;"
+                "if(visits==3)break;}"
+                "return n==3 && cleanups==3 && visits==3;} return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: default compound literal captures belong to each caller", __LINE__,
+            SVI("int n=0; int* f(int* p=(int[]){sizeof(int[++n])}){return p;}"
+                "int* g(int* p=f()){return p;}"
+                "int probe(void){int guard=71; int* a=g(); int* b=g();"
+                "return guard==71 && n==2 && a!=b && *a==sizeof(int)"
+                "&& *b==2*sizeof(int);} return probe();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: nested callback prototypes do not evaluate bounds", __LINE__,
+            SVI("int n=0; void (*(*p)(int(*)[++n]))(int(*)[++n]);"
+                "int f(int (*cb)(int(*)[++n])){return n;}"
+                "return f(0)==0 && n==0;"),
+            .exit_code = 1,
+        },
+        {
+            "vla: cast and declaration bounds are independently captured", __LINE__,
+            SVI("int f(void){int a[12]; int n=1,m=1;"
+                "int (*p)[++n]=(int(*)[++m])a; n=m=9;"
+                "p++; (*p)[0]=17; return a[2]==17 && sizeof(*p)==2*sizeof(int)"
+                "&& n==9 && m==9;} return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: slices in default arguments retain captured row sizes", __LINE__,
+            SVI("int n=1; int a[64];"
+                "int f(int x=sizeof(((int(*)[++n])a)[0:2][1])){return x;}"
+                "int probe(void){int guard=71; int x=f(); int y=f();"
+                "return guard==71 && n==3 && x==2*sizeof(int)"
+                "&& y==3*sizeof(int);} return probe();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: named arguments bypass only their own default captures", __LINE__,
+            SVI("int n=0,m=0; int f(int a=_Countof(int[++n]),"
+                "int b=_Countof(int[++m])){return a*10+b;}"
+                "int probe(void){int x=f(.a=7); int y=f(.b=8); int z=f();"
+                "return n==2 && m==2 && x==71 && y==18 && z==22;} return probe();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: discarded builtins preserve subsequent runtime captures", __LINE__,
+            SVI("int n=0; int f(void){int a=__builtin_constant_p("
+                "__builtin_expect(sizeof(int[++n]),sizeof(int[++n])));"
+                "int b=_Generic(__builtin_nan((sizeof(int[++n]),\"\")),double:1);"
+                "int c=__builtin_expect(_Countof(int[++n]),0);"
+                "return a==0 && b==1 && c==1 && n==1;} return f();"),
+            .exit_code = 1,
+        },
+        {
+            "statement expression arrays decay before sizeof", __LINE__,
+            SVI("int f(void){int a[12]; int n=1;"
+                "int size=sizeof(({int (*p)[++n]=(void*)a; *p;}));"
+                "int fixed=sizeof(({a;}));"
+                "return n==1 && size==sizeof(int*) && fixed==sizeof(int*);} return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: discarded array statement results execute cleanup", __LINE__,
+            SVI("int f(void){int n=1,cleanups=0;"
+                "int size=sizeof(({int a[++n]; _Defer ++cleanups; a;}));"
+                "({int a[++n]; _Defer ++cleanups; a;});"
+                "return n==2 && cleanups==1 && size==sizeof(int*);}"
+                "return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: statement expression results decay to the original array", __LINE__,
+            SVI("int f(void){int a[3]={1,2,3}; int n=3,cleanups=0;"
+                "int* p=({int (*q)[n]=(void*)a; _Defer ++cleanups; *q;});"
+                "p[1]=7; int x=({int (*q)[n]=(void*)a; _Defer ++cleanups; *q;})[1];"
+                "return p==a && a[1]==7 && x==7 && cleanups==2;} return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: statement expression decay snapshots its pointer before cleanup", __LINE__,
+            SVI("int f(void){int a[3]={1,2,3}; int n=3,cleanups=0;"
+                "auto q=({int (*p)[n]=(void*)a; _Defer {p=0; ++cleanups;} *p;});"
+                "n=9; return q==a && q[2]==3 && cleanups==1;}"
+                "return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: inferred statement expression pointer retains its bound", __LINE__,
+            SVI("int f(void){int a[12];"
+                "auto p=({int n=3; (int(*)[n])a;});"
+                "int x=19,y=23; p++; (*p)[1]=37;"
+                "return sizeof(*p)==3*sizeof(int) && a[4]==37 && x+y==42;} return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: inferred slice retains bounds of its statement expression", __LINE__,
+            SVI("int f(void){int a[2][3]={{1,2,3},{4,5,6}};"
+                "auto s=({int n=3; int (*p)[n]=(void*)a; p[0:2];});"
+                "int x=19,y=23; return s.count==2 && s[1][2]==6"
+                "&& sizeof(s[0])==3*sizeof(int) && x+y==42;} return f();"),
+            .exit_code = 1,
+        },
+        {
+            "vla: typeof typedef retains statement expression bound storage", __LINE__,
+            SVI("int f(void){typedef typeof(({int n=3; (int(*)[n])0;})) P;"
+                "int x=19,y=23; return sizeof(*(P)0)==3*sizeof(int) && x+y==42;}"
+                "return f();"),
+            .exit_code = 1,
         },
         {
             "default args: typed and C varargs", __LINE__,

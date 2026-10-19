@@ -293,6 +293,153 @@ TestFunction(test_parse_decls){
         _Bool skip;
     } testcases[] = {
         {
+            "discard propagates through statement and declaration parsing", __LINE__,
+            SVI("{int n=2; sizeof(int[n]);"
+                "if(n){int (*p)[n];} else sizeof(int[n]);"
+                "for(int i=sizeof(int[n]);i<n;i+=sizeof(int[n])) sizeof(int[n]);"
+                "while(n) {sizeof(int[n]); break;}"
+                "do sizeof(int[n]); while(n);"
+                "switch(n){case 2: sizeof(int[n]); break;}"
+                "_Defer sizeof(int[n]);"
+                "label: sizeof(int[n]);"
+                "static if(1) {sizeof(int[n]);}"
+                "static for(int i=0;i<2;i++) {sizeof(int[n]);}"
+                "static switch(1){static case 1: sizeof(int[n]);}"
+                "}"),
+        },
+        {
+            "generic VLA types do not create bound temporaries", __LINE__,
+            SVI("int n; int x = _Generic(int[n], int[++n]:1);"),
+        },
+        {
+            "alignof does not create bound temporaries", __LINE__,
+            SVI("int n; int x=alignof(int[n]); int y=alignof(*(int(*)[n])0);"),
+        },
+        {
+            "types compatible builtin does not create bound temporaries", __LINE__,
+            SVI("int n; int x=__builtin_types_compatible_p(int[n],int[++n]);"),
+        },
+        {
+            "constant builtin does not create bound temporaries", __LINE__,
+            SVI("int n; int x=__builtin_constant_p(sizeof(int[n]));"),
+        },
+        {
+            "alignas operands discard VLA captures", __LINE__,
+            SVI("int n; alignas(int[++n]) int x;"
+                "alignas(sizeof(int(*)[++n])) int y;"),
+        },
+        {
+            "va_start ignored argument discards VLA captures", __LINE__,
+            SVI("void f(int n,...){__builtin_va_list ap;"
+                "__builtin_va_start(ap,(sizeof(int[++n]),n)); __builtin_va_end(ap);}"),
+        },
+        {
+            "offsetof type and index discard VLA captures", __LINE__,
+            SVI("int n; struct S {int a[4];};"
+                "int x=__builtin_offsetof(typeof((*(struct S(*)[++n])0)[0]),"
+                "a[sizeof(int(*)[++n])/sizeof(void*)]);"),
+        },
+        {
+            "choose expression condition discards VLA captures", __LINE__,
+            SVI("int n; int x=__builtin_choose_expr(sizeof(int(*)[++n]),7,9);"),
+        },
+        {
+            "alignment attribute discards VLA captures", __LINE__,
+            SVI("int n; int x __attribute__((aligned(sizeof(int(*)[++n]))));"),
+        },
+        {
+            "vector size attribute discards VLA captures", __LINE__,
+            SVI("int n; typedef int V __attribute__((vector_size(2*sizeof(int(*)[++n])))); V x;"),
+        },
+        {
+            "enumerator value discards VLA captures", __LINE__,
+            SVI("int n; enum E {X=sizeof(int(*)[++n])};"),
+        },
+        {
+            "bitfield widths discard VLA captures", __LINE__,
+            SVI("int n; struct S {unsigned :sizeof(int(*)[++n]);"
+                "unsigned x:sizeof(int(*)[++n]);};"),
+        },
+        {
+            "initializer designators discard VLA captures", __LINE__,
+            SVI("int n; int a[2]={[sizeof(int(*)[++n])/sizeof(void*)]=7};"
+                "struct S {int a[2];};"
+                "struct S s={.a[sizeof(int(*)[++n])/sizeof(void*)]=9};"),
+        },
+        {
+            "static assertion discards VLA captures", __LINE__,
+            SVI("int n; static_assert(sizeof(int(*)[++n])==sizeof(void*));"),
+        },
+        {
+            "atomic metadata does not capture VLA bounds", __LINE__,
+            SVI("int n; void f(void){int x=0;"
+                "__atomic_load_n(&x,sizeof(int(*)[++n])/sizeof(void*)-1);"
+                "__atomic_thread_fence(sizeof(int(*)[++n])/sizeof(void*)-1);"
+                "__atomic_signal_fence(sizeof(int(*)[++n])/sizeof(void*)-1);}"),
+        },
+        {
+            "static controls do not capture VLA bounds", __LINE__,
+            SVI("int n; void f(void){"
+                "static if(sizeof(int(*)[++n])) {}"
+                "static for(int i=sizeof(int(*)[++n])/sizeof(void*);"
+                "i<2*sizeof(int(*)[++n])/sizeof(void*);"
+                "i+=sizeof(int(*)[++n])/sizeof(void*)) {}"
+                "static switch(sizeof(int(*)[++n])){"
+                "static case sizeof(int(*)[++n]):;} }"),
+        },
+        {
+            "case labels and jump depths do not capture VLA bounds", __LINE__,
+            SVI("int n; void f(int x){switch(x){"
+                "case sizeof(int(*)[++n]) ... 2*sizeof(int(*)[++n]):"
+                "break sizeof(int(*)[++n])/sizeof(void*);}}"),
+        },
+        {
+            "format metadata does not capture VLA bounds", __LINE__,
+            SVI("int n; int f(const char*,...) __attribute__((format(printf,"
+                "sizeof(int(*)[++n])/sizeof(void*),2*sizeof(int(*)[++n])/sizeof(void*))));"),
+        },
+        {
+            "field and call designators do not capture VLA bounds", __LINE__,
+            SVI("int n; int f(int x){return x;} int g(void){struct S{int x;} s={7};"
+                "return s.[sizeof(int(*)[++n])/sizeof(void*)-1]"
+                "+f([sizeof(int(*)[++n])/sizeof(void*)-1]=5);}"),
+        },
+        {
+            "constant initializers do not capture sizeof bounds", __LINE__,
+            SVI("int n; static int x=sizeof(int(*)[++n]);"
+                "constexpr int y=sizeof(int(*)[++n]);"),
+        },
+        {
+            "constant compound initializer handles pointer to VLA", __LINE__,
+            SVI("int n; static int z=(constexpr int){sizeof(int(*)[++n])};"),
+        },
+        {
+            "function pointer prototype does not capture bounds", __LINE__,
+            SVI("int n; void (*p)(int(*)[++n]);"),
+        },
+        {
+            "discarded default arguments do not allocate VLA captures in caller", __LINE__,
+            SVI("int n; int f(int x=sizeof(int[++n]));"
+                "int g(void){return _Generic(f(),int:1)+alignof(f())"
+                "+__builtin_constant_p(f());}"),
+        },
+        {
+            "reflection type-only arguments do not capture VLA bounds", __LINE__,
+            SVI("int n; int a=(int*).is_castable_to(int(*)[++n]);"
+                "int b=(int*).is_castable_to((int(*)[++n])0);"
+                "int c=(int(int(*)[2])).is_callable_with(int(*)[++n]);"
+                "int d=(int(int(*)[2])).is_callable_with((int(*)[++n])0);"),
+        },
+        {
+            "N3886 6.5.2.1 example 3: generic variably modified types", __LINE__,
+            SVI("void foo(int n, int m) {"
+                "_Generic(int[3][2], int[3][*]:1, int[2][*]:0);"
+                "_Generic(int[3][2], int[*][2]:1, int[*][3]:0);"
+                "_Generic(int[3][n], int[3][*]:1, int[2][*]:0);"
+                "_Generic(int[n][m], int[*][*]:1, char[*][*]:0);"
+                "_Generic(int(*)[2], int(*)[*]:1); }"),
+        },
+        {
             "interlocked qualified array decay", __LINE__,
             SVI("void f(void){volatile long long p[1]={0}; _InterlockedExchange64(p,1); _InterlockedIncrement64(p);}"),
         },
@@ -6536,6 +6683,36 @@ TestFunction(test_parse_errors){
         _Bool skip;
         _Bool builtin_headers;
     } cases[] = {
+        {
+            "discarded static assertion still requires a constant value", __LINE__,
+            SVI("int n; static_assert(sizeof(int[n]));"),
+            SVI("(test):1:8: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "discarded enumerator still requires a constant value", __LINE__,
+            SVI("int n; enum E {X=sizeof(int[n])};"),
+            SVI("(test):1:17: error: enumerator value must be a constant integer expression\n"),
+        },
+        {
+            "discarded alignas bound is still type checked", __LINE__,
+            SVI("alignas(int[1.5]) int x;"),
+            SVI("(test):1:12: error: array dimension must have integer type\n"),
+        },
+        {
+            "N3886 6.7.7.3 example 5: star inside an array length", __LINE__,
+            SVI("void f(int (*)[sizeof(int (*)[*])]);"),
+            SVI("(test):1:31: error: [*] requires function prototype scope\n"),
+        },
+        {
+            "N3886 6.7.7.3: generic star permission does not extend into bounds", __LINE__,
+            SVI("void f(void) { _Generic(int*, int[sizeof(int(*)[*])]:1, default:0); }"),
+            SVI("(test):1:49: error: [*] requires function prototype scope\n"),
+        },
+        {
+            "N3886 6.7.7.3: generic star permission does not extend to controlling type", __LINE__,
+            SVI("void f(void) { _Generic(int[*], int*:1, default:0); }"),
+            SVI("(test):1:29: error: [*] requires function prototype scope\n"),
+        },
         {
             "register parameter address", __LINE__,
             SVI("void f(register int x){&x;}"),

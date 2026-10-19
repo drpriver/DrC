@@ -55,7 +55,9 @@ struct CcParseFlags {
             uint32_t parsing_default_arg: 1,
                      static_rebind: 1,
                      parameter_type: 1,
-                     _padding: 27;
+                     generic_association: 1,
+                     unevaluated: 1, // suppress VLA bound captures and typeof operand effects
+                     _padding: 25;
         };
     };
 };
@@ -254,6 +256,7 @@ struct CcParser {
     CcScope* current;
     CcScope* _Nullable file_scope; // active root or compiled-module scope during cc_parse_all
     CcFunc*_Nullable current_func;
+    CcScope* _Nullable function_scope; // active function body or parameter-list scope
     CcQualType current_tag_type;
     FreeList(CcScope) scratch_scopes;
     AtomMap(CcFunc) external_methods;

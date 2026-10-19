@@ -29,7 +29,8 @@ struct CcVariable {
              thread_local_: 1,
              constexpr_storage: 1, // lowering needs the automatic object's storage
              register_: 1,
-             _padding: 6,
+             vla_bound: 1, // hidden storage that must be rebound when cloning defaults
+             _padding: 5,
              alignment: 16; // 0 means default alignment
     size_t tls_slot; // interpreter TLS slot + 1; zero until prepared
     uint32_t tls_size, tls_alignment;
