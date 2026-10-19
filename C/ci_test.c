@@ -13351,6 +13351,64 @@ TestFunction(test_interpreter){
             .exit_code = 4,
         },
         {
+            "static selection headers: implicit constexpr, else scope and repeated names", __LINE__,
+            SVI("int n=0; int x=20;\n"
+                "static if(int x=2; int y=x+3){static_assert(x==2&&y==5); n=x+y;}\n"
+                "static if(int x=0) invalid(); else if(int y=x+4; y==4) n+=y;\n"
+                "static if(int x=3;) n+=x;\n"
+                "return n==14&&x==20;"),
+            .exit_code = 1,
+        },
+        {
+            "static headers inside functions: aggregates, inference and repeated calls", __LINE__,
+            SVI("int f(int n){\n"
+                "static if(struct S{int x;} s={3}; auto x=s.x)n+=x;\n"
+                "static switch(auto x=2){static case 2:n+=x;static break;}\n"
+                "static for(int i=0;int x=i<2?i+1:0;i++)n+=x;return n;}\n"
+                "return f(1)==9&&f(2)==10;"),
+            .exit_code = 1,
+        },
+        {
+            "static selection headers: generated declarations retain header bindings", __LINE__,
+            SVI("static if(int x=3){int first(void){return x;} int n=2;}\n"
+                "static switch(int x=4; int y=x+1){static case 5:\n"
+                "int second(void){return x+y;}static break;static default:invalid();}\n"
+                "static switch(int x=2){static case 2:n+=x;}\n"
+                "return first()+second()+n;"),
+            .exit_code = 16,
+        },
+        {
+            "static selection headers: type expressions, aliases and multiple declarators", __LINE__,
+            SVI("int n=0; static switch(int*){static case int*:n++;static break;}\n"
+                "static if(int==int)n++;\n"
+                "static if(typedef int I; I x=2,y=3; y) n+=x+y;\n"
+                "static switch(_Type T=int; T){static case int:n+=sizeof(T);static break;}\n"
+                "return n==7+sizeof(int);"),
+            .exit_code = 1,
+        },
+        {
+            "static for condition declaration: fresh bindings, continue and update visibility", __LINE__,
+            SVI("int n=0; static for(int i=0; int x=i<4?i+1:0; i+=x){\n"
+                "static_assert(x==i+1); static if(i==1) static continue; n+=x;}\n"
+                "int x=10; return n==5&&x==10;"),
+            .exit_code = 1,
+        },
+        {
+            "static for condition declaration: captured scopes survive sequenced updates", __LINE__,
+            SVI("int n=0; static for(int i=0,j=0; int x=i<2?i+7:0; i++,j=x){\n"
+                "static if(i==0){int first(void){return x+i;}}\n"
+                "else{int second(void){return x+i;}}n+=j;}\n"
+                "return first()==7&&second()==9&&n==7;"),
+            .exit_code = 1,
+        },
+        {
+            "static for condition declaration: pointer, multiple declarators and nested loops", __LINE__,
+            SVI("int n=0; static for(int i=0;const char* p=i<2?\"ab\":nullptr;i++){\n"
+                "static for(int j=0;int x=j+1,keep=j<2;j++){n+=p[i]-96+x;}}\n"
+                "static for(int i=0;int keep=1;i++){n+=keep;static break;}return n;"),
+            .exit_code = 13,
+        },
+        {
             "for declaration condition: initialization repeats and increment sees value", __LINE__,
             SVI("int calls=0;int get(int i){calls++;return i<3?i+1:0;}\n"
                 "int f(void){int sum=0,inc=0;for(int i=0;int x=get(i);++i,inc+=x)sum+=x;\n"

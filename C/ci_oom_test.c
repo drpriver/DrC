@@ -36,6 +36,16 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("int f(int n){static if(struct S{int x;} s={3};auto x=s.x)n+=x;"
+         "static switch(auto x=2){static case 2:n+=x;static break;}"
+         "static for(int i=0;int x=i<2?i+1:0;i++)n+=x;return n;}"
+         "return f(1)==9&&f(2)==10;\n")},
+    {__LINE__, SVI("static if(int x=2;int y=x+1){int first(void){return x+y;}}"
+         "static switch(int x=3){static case 3:int second(void){return x;}static break;}"
+         "return first()+second()==8;\n")},
+    {__LINE__, SVI("int n=0;static for(int i=0,j=0;int x=i<2?i+7:0;i++,j=x){"
+         "static if(i==0){int first(void){return x+i;}}else{int second(void){return x+i;}}n+=j;}"
+         "return first()==7&&second()==9&&n==7;\n")},
     {__LINE__, SVI("static int* p=&(static int){11};"
          "int f(void){static_assert((constexpr int[]){2,5}[1]==5);"
          "return ++(static thread_local int){3};}return *p==11&&f()==4&&f()==5;\n")},

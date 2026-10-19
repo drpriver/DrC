@@ -54,10 +54,11 @@ struct CcParseFlags {
             CcValueClass vc: 2;
             uint32_t parsing_default_arg: 1,
                      static_rebind: 1,
+                     static_header: 1,
                      parameter_type: 1,
                      generic_association: 1,
                      unevaluated: 1, // suppress VLA bound captures and typeof operand effects
-                     _padding: 25;
+                     _padding: 24; // free real estate
         };
     };
 };

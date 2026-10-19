@@ -11221,6 +11221,41 @@ TestFunction(test_parse_errors){
             SVI("(test):1:1: error: Forward label 'missing' not found in static goto scope\n"),
         },
         {
+            "static if header variables do not leak", __LINE__,
+            SVI("static if(int x=1){}\nreturn x;"),
+            SVI("(test):2:8: error: undeclared identifier 'x'\n"),
+        },
+        {
+            "static switch header variables do not leak", __LINE__,
+            SVI("static switch(int x=1){}\nreturn x;"),
+            SVI("(test):2:8: error: undeclared identifier 'x'\n"),
+        },
+        {
+            "static for clause-2 variables do not leak", __LINE__,
+            SVI("static for(int i=0;int x=i<2;i++){}\nreturn x;"),
+            SVI("(test):2:8: error: undeclared identifier 'x'\n"),
+        },
+        {
+            "static for update cannot rebind clause-2 variables", __LINE__,
+            SVI("static for(int i=0;int x=i<2;\nx++){}"),
+            SVI("(test):2:1: error: static for update must rebind a clause-1 variable\n"),
+        },
+        {
+            "static header variables are implicitly const", __LINE__,
+            SVI("static if(int x=1){\nx=2;}"),
+            SVI("(test):2:2: error: cannot assign to variable with const-qualified type\n"),
+        },
+        {
+            "static header tags do not leak", __LINE__,
+            SVI("static if(enum E{A=1} x=A){}\nreturn A;"),
+            SVI("(test):2:8: error: undeclared identifier 'A'\n"),
+        },
+        {
+            "static header initializers must be constant", __LINE__,
+            SVI("int n=1;\nstatic if(int x=n){}"),
+            SVI("(test):2:17: error: expression 'n' is not a constant expression\n"),
+        },
+        {
             "static for clause-1 variables do not leak", __LINE__,
             SVI("static for(int i=0; i<1; i++){}\nreturn i;"),
             SVI("(test):2:8: error: undeclared identifier 'i'\n"),

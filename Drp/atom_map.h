@@ -293,6 +293,42 @@ AM_compact(AtomMap* am){
     am->count = new_count;
 }
 
+// Returns 0 on success. On failure, dst is unchanged.
+warn_unused
+static inline
+int
+AM_clone_into(AtomMap* dst, Allocator al, const AtomMap* src){
+    if(dst == src) return 0;
+    if(dst->cap < src->cap){
+        void* data = Allocator_realloc(al, dst->data, AM_alloc_size(dst->cap), AM_alloc_size(src->cap));
+        if(!data) return 1;
+        dst->data = data;
+        dst->cap = src->cap;
+    }
+    if(src->count)
+        memcpy(dst->data, src->data, src->count*sizeof(AtomMapItem));
+    dst->count = src->count;
+    if(!dst->cap) return 0;
+    uint32_t* indexes = (uint32_t*)((char*)dst->data + dst->cap*sizeof(AtomMapItem));
+    if(dst->cap == src->cap){
+        const uint32_t* source_indexes = (const uint32_t*)((const char*)src->data + src->cap*sizeof(AtomMapItem));
+        memcpy(indexes, source_indexes, 2*dst->cap*sizeof(uint32_t));
+        return 0;
+    }
+    memset(indexes, 0, 2*dst->cap*sizeof(uint32_t));
+    const AtomMapItem* items = dst->data;
+    for(uint32_t i = 0; i < dst->count; i++){
+        Atom key = items[i].atom;
+        uint32_t index = fast_reduce32(key->hash, 2*dst->cap);
+        while(indexes[index]){
+            index++;
+            if(index == 2*dst->cap) index = 0;
+        }
+        indexes[index] = i+1;
+    }
+    return 0;
+}
+
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
