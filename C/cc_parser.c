@@ -1269,6 +1269,20 @@ cc_is_type_start(CcParser* p, CcToken* tok){
 }
 
 static
+_Bool
+cc_type_contains_fam(CcQualType type){
+    if(ccqt_kind(type) == CC_STRUCT)
+        return ccqt_as_struct(type)->has_fam;
+    if(ccqt_kind(type) == CC_UNION){
+        CcUnion* u = ccqt_as_union(type);
+        for(uint32_t i = 0; i < u->field_count; i++)
+            if(cc_type_contains_fam(u->fields[i].type))
+                return 1;
+    }
+    return 0;
+}
+
+static
 int
 cc_check_array_element_alignment(CcParser* p, CcQualType type, SrcLoc loc){
     for(;;){
@@ -1285,6 +1299,8 @@ cc_check_array_element_alignment(CcParser* p, CcQualType type, SrcLoc loc){
                 break;
             case CC_VLA: {
                 CcQualType element = ccqt_as_vla(type)->element;
+                if(cc_type_contains_fam(element))
+                    return cc_error(p, loc, "array element contains a flexible array member");
                 uint32_t size = 0;
                 if(ccqt_bt_eq(element, CCBT_void)
                 || ccqt_kind(element) == CC_FUNCTION
@@ -1303,6 +1319,8 @@ cc_check_array_element_alignment(CcParser* p, CcQualType type, SrcLoc loc){
             case CC_ARRAY: {
                 CcArray* array = ccqt_as_array(type);
                 CcQualType element = array->element;
+                if(cc_type_contains_fam(element))
+                    return cc_error(p, loc, "array element contains a flexible array member");
                 if(ccqt_raw_kind(element) == CC_ALIGNED){
                     uint32_t size;
                     if(!cc_type_sizeof_complete(cc_target(p), element, &size)){
@@ -1323,6 +1341,22 @@ cc_check_array_element_alignment(CcParser* p, CcQualType type, SrcLoc loc){
 }
 
 static int cc_const_object_type(CcParser*, CcQualType, CcQualType*);
+
+static
+_Bool
+cc_constexpr_forbidden_qualifiers(CcQualType type){
+    if(type.is_volatile || type.is_atomic)
+        return 1;
+    if(ccqt_is_array(type))
+        return cc_constexpr_forbidden_qualifiers(ccqt_array_element(type));
+    if(ccqt_kind(type) == CC_STRUCT || ccqt_kind(type) == CC_UNION){
+        CcStruct* record = ccqt_as_struct(type);
+        for(uint32_t i = 0; i < record->field_count; i++)
+            if(cc_constexpr_forbidden_qualifiers(record->fields[i].type))
+                return 1;
+    }
+    return 0;
+}
 
 static
 _Bool
@@ -1369,6 +1403,8 @@ cc_parse_compound_type(CcParser* p, CcParseFlags flags, CcQualType* out, CcParse
     *tail = base.type;
     *out = cc_intern_qualtype(p, head);
     if(storage && storage->sp_constexpr){
+        if(cc_constexpr_forbidden_qualifiers(*out))
+            return cc_error(p, base.loc, "constexpr object cannot have volatile or atomic subobjects");
         err = cc_const_object_type(p, *out, out);
         if(err) return err;
     }
@@ -1443,6 +1479,18 @@ cc_parse_type_string(CcParser* p, CcScope* scope, SrcLoc loc, StringView source,
 
 static
 int
+cc_check_function_definition_type(CcParser* p, CcFunction* type, SrcLoc loc){
+    uint32_t size;
+    if(!ccqt_bt_eq(type->return_type, CCBT_void) && cc_type_sizeof_complete(cc_target(p), type->return_type, &size))
+        return cc_error(p, loc, "function definition requires a complete return type");
+    for(uint32_t i = 0; i < type->param_count; i++)
+        if(cc_type_sizeof_complete(cc_target(p), type->params[i], &size))
+            return cc_error(p, loc, "function definition requires complete parameter types");
+    return 0;
+}
+
+static
+int
 cc_parse_lambda_body(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType type, CcParsedParams* param_names, CcExpr* _Nullable* _Nonnull out){
     if(param_names->unspecified_vla)
         return cc_error(p, loc, "unspecified VLA bound is only allowed in a function prototype");
@@ -1454,6 +1502,8 @@ cc_parse_lambda_body(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType typ
         return err;
     }
     CcFunction* ftype = ccqt_as_function(type);
+    err = cc_check_function_definition_type(p, ftype, loc);
+    if(err) return err;
     CcFunc* func = Allocator_zalloc(cc_allocator(p), sizeof *func);
     if(!func){
         ma_cleanup(CcFuncParam)(&param_names->names, cc_allocator(p));
@@ -4991,6 +5041,8 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                 err = cc_parse_prefix(p, sizeof_flags, &operand);
                 if(err) return err;
                 sizeof_operand:;
+                if(cc_expr_field_bit_width(operand))
+                    return cc_error(p, tok.loc, "sizeof applied to bitfield");
                 if(!operand->type.ptr)
                     return cc_error(p, tok.loc, "cannot take sizeof incomplete type");
                 CcExpr* sz;
@@ -10339,6 +10391,7 @@ cc_lookup_field(CcParser* p, CcField*_Nullable fields, uint32_t count, Atom name
             out_type, out_owner, out_field);
         if(err) return err;
         if(!*out_field) continue;
+        if(!(*out_field)->is_method) out_type->quals |= field->type.quals;
         if(out_path){
             CcFieldPath prefix = {0};
             CcFieldPath path = {0};
@@ -12544,6 +12597,8 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                         spec->sp_int128 = 1;
                         continue;
                     case CC_auto:
+                        if(spec->sp_auto)
+                            return cc_error(p, tok.loc, "duplicate storage class specifier: auto");
                         if(spec->sp_typedef)
                             return cc_error(p, tok.loc, "auto after typedef");
                         spec->sp_auto = 1;
@@ -12643,6 +12698,8 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                         *base_type = ccqt_basic(CCBT_double);
                         continue;
                     case CC_extern:
+                        if(spec->sp_extern)
+                            return cc_error(p, tok.loc, "duplicate storage class specifier: extern");
                         if(spec->sp_static)
                             return cc_error(p, tok.loc, "extern after static");
                         if(spec->sp_typedef)
@@ -12672,6 +12729,8 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                         spec->sp_signed = 1;
                         continue;
                     case CC_static:
+                        if(spec->sp_static)
+                            return cc_error(p, tok.loc, "duplicate storage class specifier: static");
                         if(spec->sp_extern)
                             return cc_error(p, tok.loc, "static after extern");
                         if(spec->sp_typedef)
@@ -12739,6 +12798,8 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                         continue;
                     }
                     case CC_typedef:
+                        if(spec->sp_typedef)
+                            return cc_error(p, tok.loc, "duplicate storage class specifier: typedef");
                         if(spec->sp_storagebits)
                             return cc_error(p, tok.loc, "typedef after storage class");
                         if(spec->sp_funcbits)
@@ -12775,6 +12836,8 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                         spec->sp_complex = 1;
                         continue;
                     case CC_register:
+                        if(spec->sp_register)
+                            return cc_error(p, tok.loc, "duplicate storage class specifier: register");
                         if(spec->sp_typedef)
                             return cc_error(p, tok.loc, "register after typedef");
                         if(spec->sp_static)
@@ -12801,6 +12864,8 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                         spec->sp_volatile = 1;
                         continue;
                     case CC_constexpr:
+                        if(spec->sp_constexpr)
+                            return cc_error(p, tok.loc, "duplicate storage class specifier: constexpr");
                         if(spec->sp_extern)
                             return cc_error(p, tok.loc, "constexpr after extern");
                         if(spec->sp_typedef)
@@ -12866,6 +12931,8 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                     case CC__Decimal128:
                         return cc_unimplemented(p, tok.loc, "_DecimalNN parsing in declaration");
                     case CC_thread_local:
+                        if(spec->sp_thread_local)
+                            return cc_error(p, tok.loc, "duplicate storage class specifier: thread_local");
                         if(spec->sp_typedef)
                             return cc_error(p, tok.loc, "thread_local after typedef");
                         if(spec->sp_register)
@@ -14590,6 +14657,8 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
         }
     }
     else if(tok.type == CC_IDENTIFIER){
+        if(!out_name)
+            return cc_error(p, tok.loc, "identifier is not allowed in a type name");
         if(out_name)
             *out_name = tok.ident.ident;
         if(out_name_loc)
@@ -14640,6 +14709,10 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                 if(err) return err;
                 if(peek.type != CC_KEYWORD) break;
                 if(peek.kw.kw == CC_static){
+                    if(!flags.parameter_type || *out_tail != out_head)
+                        return cc_error(p, peek.loc, "static array bound requires an outermost parameter array");
+                    if(arr->is_static)
+                        return cc_error(p, peek.loc, "duplicate static in array declarator");
                     cc_next_token(p, &peek);
                     arr->is_static = 1;
                 }
@@ -14656,6 +14729,8 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
             if(err) return err;
             if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ']'){
                 // []
+                if(arr->is_static)
+                    return cc_error(p, peek.loc, "static array parameter requires a bound");
                 arr->is_incomplete = 1;
             }
             else if(peek.type == CC_PUNCTUATOR && peek.punct.punct == '*'){
@@ -14669,6 +14744,8 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                     if(err) return err;
                     goto array_dimension;
                 }
+                if(arr->is_static)
+                    return cc_error(p, peek.loc, "static array parameter requires a bound");
                 if(!flags.parameter_type && !flags.generic_association)
                     return cc_error(p, peek.loc, "[*] requires function prototype scope");
                 CcVla* vla = Allocator_zalloc(cc_allocator(p), sizeof *vla);
@@ -15401,6 +15478,13 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 return cc_error(p, tok.loc, "[*] is not allowed in a function definition");
             if(!is_fndef)
                 return cc_error(p, tok.loc, "Expected ',' or ';'");
+            if(declbase->spec.sp_typedef
+            || declbase->spec.sp_auto
+            || declbase->spec.sp_register
+            || declbase->spec.sp_constexpr)
+                return cc_error(p, name_loc, "invalid storage class in function definition");
+            err = cc_check_function_definition_type(p, ccqt_as_function(type), name_loc);
+            if(err) return err;
             if(declbase->spec.sp_thread_local)
                 return cc_error(p, name_loc, "thread_local is only valid on variables");
             _Bool eager = p->eager_parsing || p->current_func;
@@ -15502,6 +15586,11 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
         CcVariable* _Null_unspecified var = NULL;
         _Bool redecl = 0;
         _Bool is_func_decl = is_fndef || (type.ptr && ccqt_kind(type) == CC_FUNCTION);
+        if(is_func_decl
+        && p->current_func
+        && !declbase->spec.sp_typedef
+        && (declbase->spec.sp_register || declbase->spec.sp_auto))
+            return cc_error(p, name_loc, "invalid storage class in block-scope function declaration");
         if(ccqt_is_vm(type)){
             if(declbase->spec.sp_extern)
                 return cc_error(p, name_loc, "variably modified declaration cannot have external linkage");
@@ -15588,6 +15677,10 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             skip_var_alloc:;
         }
         if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '='){
+            if(declbase->spec.sp_typedef)
+                return cc_error(p, tok.loc, "typedef cannot have an initializer");
+            if(declbase->spec.sp_extern && p->current_func)
+                return cc_error(p, tok.loc, "block-scope extern declaration cannot have an initializer");
             CcParseFlags init_flags = flags;
             init_flags.vc = CC_RUNTIME_VALUE;
             if(declbase->spec.sp_constexpr)
@@ -15613,6 +15706,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             else if(declbase->spec.sp_infer_type){
                 // Infer type from initializer
                 type = initializer->type;
+                if(!ccqt_is_array(type)) type.quals = 0;
                 // Decay array to pointer, function to function pointer
                 if(ccqt_is_array(type)){
                     err = cc_pointer_of(p, cc_array_element_type(type), &type);
@@ -15672,6 +15766,12 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
         }
         else if(declbase->spec.sp_infer_type){
             return cc_error(p, tok.loc, "type-inferred declaration requires initializer");
+        }
+        if(declbase->spec.sp_constexpr){
+            if(!initializer)
+                return cc_error(p, name_loc, "constexpr object requires an initializer");
+            if(cc_constexpr_forbidden_qualifiers(type))
+                return cc_error(p, name_loc, "constexpr object cannot have volatile or atomic subobjects");
         }
         err = cc_check_decl_alignment(p, declbase, type);
         if(err) return err;
@@ -16711,7 +16811,8 @@ cc_parse_local_methods(CcParser* p){
 static
 int
 cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
-    int err = 0;
+    int err = cc_check_function_definition_type(p, f->type, f->loc);
+    if(err) return err;
     CcScope* saved_scope = p->current;
     if(f->definition_scope) p->current = (CcScope*)f->definition_scope;
     CcStaticFor* saved_static_for = p->static_for;

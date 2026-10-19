@@ -293,6 +293,99 @@ TestFunction(test_parse_decls){
         _Bool skip;
     } testcases[] = {
         {
+            "auto drops atomic and volatile qualifiers", __LINE__,
+            SVI("void f(void){volatile int v=1; _Atomic int a=2; auto x=v; auto y=a; static_assert(typeof(x)==int); static_assert(typeof(y)==int);}"),
+        },
+        {
+            "auto preserves pointee qualifiers and explicit qualifiers", __LINE__,
+            SVI("void f(void){const int n=1; const int *const p=&n; auto q=p; static_assert(typeof(q)==const int*); const auto x=n; static_assert(typeof(x)==const int);}"),
+        },
+        {
+            "anonymous member volatile qualification", __LINE__,
+            SVI("struct S {volatile struct {struct {int x;};};}; void f(struct S s){static_assert(typeof(s.x)==volatile int);}"),
+        },
+        {
+            "duplicate generic typedefs select first match", __LINE__,
+            SVI("typedef int T; static_assert(_Generic(0,int:1,T:2)==1);"),
+        },
+        {
+            "constexpr permits pointer to volatile object", __LINE__,
+            SVI("volatile int x; constexpr volatile int *p=&x;"),
+        },
+        {
+            "constexpr permits self-referential record pointer", __LINE__,
+            SVI("struct S {struct S *next; int n;}; constexpr struct S s={0,1};"),
+        },
+        {
+            "incomplete function declaration types can complete before definition", __LINE__,
+            SVI("struct S; struct S f(struct S); struct S {int x;}; struct S f(struct S x){return x;}"),
+        },
+        {
+            "pointer to flexible record can be array element", __LINE__,
+            SVI("struct S {int n; int a[];}; struct S *a[2];"),
+        },
+        {
+            "outermost static parameter bound with pointer element", __LINE__,
+            SVI("void f(int *a[static 3]); void g(int a[static 2][3]);"),
+        },
+        {
+            "distinct storage specifier combinations", __LINE__,
+            SVI("static constexpr int n=1; static thread_local int t; static auto x=1; void f(void){register auto y=1;}"),
+        },
+        {
+            "auto inference drops const", __LINE__,
+            SVI("void f(void){const int x=1; auto y=x; y=2;}"),
+        },
+        {
+            "typeof_unqual removes array element const", __LINE__,
+            SVI("typedef const int A[2]; typeof_unqual(A) a={}; void f(void){a[0]=1;}"),
+            .skip = 1, // Deferred
+        },
+        {
+            "extension: duplicate compatible generic associations", __LINE__,
+            SVI("int x = _Generic(0, int: 1, int: 2);"),
+        },
+        {
+            "extension: separate struct and union tag namespaces", __LINE__,
+            SVI("struct T {int a;}; union T {int b;};"),
+        },
+        {
+            "extension: flexible array as sole named member", __LINE__,
+            SVI("struct S {int a[];};"),
+        },
+        {
+            "ordinary auto", __LINE__,
+            SVI("void f(void){int x=1; auto y=x; y=2;}"),
+        },
+        {
+            "nested function uses enclosing type", __LINE__,
+            SVI("int outer(void){typedef int T; int inner(void){T x=3; return x;} return inner();}"),
+        },
+        {
+            "distinct generic associations", __LINE__,
+            SVI("int x=_Generic(0,int:1,float:2);"),
+        },
+        {
+            "valid flexible array", __LINE__,
+            SVI("struct S {int n; int a[];};"),
+        },
+        {
+            "complete function definition types", __LINE__,
+            SVI("struct S {int x;}; struct S f(struct S x){return x;}"),
+        },
+        {
+            "static array parameter with bound", __LINE__,
+            SVI("void f(int p[static 3]);"),
+        },
+        {
+            "whole const-containing aggregate assignment extension", __LINE__,
+            SVI("struct S {const int x;}; void f(void){struct S a={1},b={2}; a=b;}"),
+        },
+        {
+            "void value return intentional extension", __LINE__,
+            SVI("void f(void){return 1;}"),
+        },
+        {
             "discard propagates through statement and declaration parsing", __LINE__,
             SVI("{int n=2; sizeof(int[n]);"
                 "if(n){int (*p)[n];} else sizeof(int[n]);"
@@ -431,7 +524,7 @@ TestFunction(test_parse_decls){
                 "int d=(int(int(*)[2])).is_callable_with((int(*)[++n])0);"),
         },
         {
-            "N3886 6.5.2.1 example 3: generic variably modified types", __LINE__,
+            "C2y generic selection example: generic variably modified types", __LINE__,
             SVI("void foo(int n, int m) {"
                 "_Generic(int[3][2], int[3][*]:1, int[2][*]:0);"
                 "_Generic(int[3][2], int[*][2]:1, int[*][3]:0);"
@@ -2487,7 +2580,7 @@ TestFunction(test_parse_decls){
                 { SVI("f"), SVI("float"), SVI("(float)42") },
             },
         },
-        // --- Implicit conversion tests (C2y 6.5.17.2) ---
+        // --- Implicit conversion tests (C2y compound assignment) ---
         {
             "null pointer constant 0", __LINE__,
             SVI("int *p = 0;\n"),
@@ -3388,7 +3481,7 @@ TestFunction(test_parse_decls){
                 { SVI("s"), SVI("struct S"), SVI("{.n = 42, .name = {[0] = (char)97, [1] = (char)98, [2] = (char)99, [3] = (char)0}}") },
             },
         },
-        // --- C standard examples (6.7.9 / 6.7.10) ---
+        // --- C standard examples (initialization and type inference) ---
         // EXAMPLE 2
         {
             "std ex2: incomplete array", __LINE__,
@@ -6684,6 +6777,251 @@ TestFunction(test_parse_errors){
         _Bool builtin_headers;
     } cases[] = {
         {
+            "method definition requires a complete return type", __LINE__,
+            SVI("void outer(void){struct S {int n; struct Missing f(struct S *s){}};}"),
+            SVI("(test):1:50: error: function definition requires a complete return type\n"),
+        },
+        {
+            "method definition requires complete parameter types", __LINE__,
+            SVI("void outer(void){struct Missing; struct S {int n; void f(struct S *s, struct Missing x){}};}"),
+            SVI("(test):1:56: error: function definition requires complete parameter types\n"),
+        },
+        {
+            "anonymous const union through pointer", __LINE__,
+            SVI("struct S {const union {int x;};}; void f(struct S *s){s->x=1;}"),
+            SVI("(test):1:59: error: cannot assign to variable with const-qualified type\n"),
+        },
+        {
+            "sizeof numbered anonymous bitfield", __LINE__,
+            SVI("struct S {int b:3;}; int f(struct S s){return sizeof s.[0];}"),
+            SVI("(test):1:47: error: sizeof applied to bitfield\n"),
+        },
+        {
+            "duplicate extern", __LINE__,
+            SVI("extern extern int x;"),
+            SVI("(test):1:8: error: duplicate storage class specifier: extern\n"),
+        },
+        {
+            "duplicate auto", __LINE__,
+            SVI("void f(void){auto auto x=1;}"),
+            SVI("(test):1:19: error: duplicate storage class specifier: auto\n"),
+        },
+        {
+            "duplicate register", __LINE__,
+            SVI("void f(void){register register int x;}"),
+            SVI("(test):1:23: error: duplicate storage class specifier: register\n"),
+        },
+        {
+            "duplicate constexpr", __LINE__,
+            SVI("constexpr constexpr int x=1;"),
+            SVI("(test):1:11: error: duplicate storage class specifier: constexpr\n"),
+        },
+        {
+            "duplicate typedef", __LINE__,
+            SVI("typedef typedef int T;"),
+            SVI("(test):1:9: error: duplicate storage class specifier: typedef\n"),
+        },
+        {
+            "duplicate thread local", __LINE__,
+            SVI("thread_local thread_local int x;"),
+            SVI("(test):1:14: error: duplicate storage class specifier: thread_local\n"),
+        },
+        {
+            "block function auto storage", __LINE__,
+            SVI("void f(void){auto int g(void);}"),
+            SVI("(test):1:23: error: invalid storage class in block-scope function declaration\n"),
+        },
+        {
+            "constexpr atomic member", __LINE__,
+            SVI("struct S {_Atomic int n;}; constexpr struct S s={1};"),
+            SVI("(test):1:47: error: constexpr object cannot have volatile or atomic subobjects\n"),
+        },
+        {
+            "constexpr nested volatile array member", __LINE__,
+            SVI("struct S {union {volatile int a[2];} u;}; constexpr struct S s={};"),
+            SVI("(test):1:62: error: constexpr object cannot have volatile or atomic subobjects\n"),
+        },
+        {
+            "constexpr compound literal volatile", __LINE__,
+            SVI("void f(void){(constexpr volatile int){1};}"),
+            SVI("(test):1:15: error: constexpr object cannot have volatile or atomic subobjects\n"),
+        },
+        {
+            "flexible record in union array", __LINE__,
+            SVI("struct S {int n; int a[];}; union U {struct S s; int n;}; union U a[2];"),
+            SVI("(test):1:59: error: array element contains a flexible array member\n"),
+        },
+        {
+            "flexible record in VLA", __LINE__,
+            SVI("struct S {int n; int a[];}; void f(int n){struct S a[n];}"),
+            SVI("(test):1:43: error: array element contains a flexible array member\n"),
+        },
+        {
+            "flexible record array behind pointer", __LINE__,
+            SVI("struct S {int n; int a[];}; struct S (*a)[2];"),
+            SVI("(test):1:29: error: array element contains a flexible array member\n"),
+        },
+        {
+            "incomplete return in lambda", __LINE__,
+            SVI("void f(void){auto p=struct S(void){};}"),
+            SVI("(test):1:21: error: function definition requires a complete return type\n"),
+        },
+        {
+            "typedef function storage reversed", __LINE__,
+            SVI("int typedef f(void){return 1;}"),
+            SVI("(test):1:13: error: invalid storage class in function definition\n"),
+        },
+        {
+            "identifier in cast type name", __LINE__,
+            SVI("void f(void){(int x)1;}"),
+            SVI("(test):1:19: error: identifier is not allowed in a type name\n"),
+        },
+        {
+            "static bound on inner parameter array", __LINE__,
+            SVI("void f(int a[2][static 3]);"),
+            SVI("(test):1:17: error: static array bound requires an outermost parameter array\n"),
+        },
+        {
+            "static bound on pointer target parameter", __LINE__,
+            SVI("void f(int (*a)[static 3]);"),
+            SVI("(test):1:17: error: static array bound requires an outermost parameter array\n"),
+        },
+        {
+            "static parameter bound cannot be star", __LINE__,
+            SVI("void f(int a[static *]);"),
+            SVI("(test):1:21: error: static array parameter requires a bound\n"),
+        },
+        {
+            "static parameter bound cannot repeat static", __LINE__,
+            SVI("void f(int a[static static 3]);"),
+            SVI("(test):1:21: error: duplicate static in array declarator\n"),
+        },
+        {
+            "anonymous member preserves const", __LINE__,
+            SVI("struct S {const struct {int x;};}; void f(struct S s){s.x=1;}"),
+            SVI("(test):1:58: error: cannot assign to variable with const-qualified type\n"),
+        },
+        {
+            "array parameter preserves bracket qualifiers", __LINE__,
+            SVI("void f(int a[const 3]){a=0;}"),
+            SVI(""),
+            .skip = 1, // Deferred
+        },
+        {
+            "nested function rejects enclosing automatic variable [EXTENSIONS.md Nested functions]", __LINE__,
+            SVI("int outer(void){int x=3; int inner(void){return x;} return inner();}"),
+            SVI(""),
+            .skip = 1, // Deferred
+        },
+        {
+            "invalid nested derived type", __LINE__,
+            SVI("void (*p)[3];"),
+            SVI(""),
+            .skip = 1, // Deferred
+        },
+        {
+            "restrict function pointer", __LINE__,
+            SVI("int (*restrict p)(void);"),
+            SVI(""),
+            .skip = 1, // Deferred
+        },
+        {
+            "sizeof bitfield", __LINE__,
+            SVI("struct S {int b:3;}; int f(struct S s){return sizeof s.b;}"),
+            SVI("(test):1:47: error: sizeof applied to bitfield\n"),
+        },
+        {
+            "duplicate storage class", __LINE__,
+            SVI("static static int x;"),
+            SVI("(test):1:8: error: duplicate storage class specifier: static\n"),
+        },
+        {
+            "register on block-scope function", __LINE__,
+            SVI("void f(void){register int g(void);}"),
+            SVI("(test):1:27: error: invalid storage class in block-scope function declaration\n"),
+        },
+        {
+            "typedef initializer", __LINE__,
+            SVI("typedef int T = 3;"),
+            SVI("(test):1:15: error: typedef cannot have an initializer\n"),
+        },
+        {
+            "block-scope extern initializer", __LINE__,
+            SVI("void f(void){extern int x = 3;}"),
+            SVI("(test):1:27: error: block-scope extern declaration cannot have an initializer\n"),
+        },
+        {
+            "constexpr narrowing changes value", __LINE__,
+            SVI("constexpr unsigned char x = 256;"),
+            SVI(""),
+            .skip = 1, // Deferred
+        },
+        {
+            "constexpr volatile object", __LINE__,
+            SVI("constexpr volatile int x = 1;"),
+            SVI("(test):1:24: error: constexpr object cannot have volatile or atomic subobjects\n"),
+        },
+        {
+            "constexpr without initializer", __LINE__,
+            SVI("constexpr int x;"),
+            SVI("(test):1:15: error: constexpr object requires an initializer\n"),
+        },
+        {
+            "flexible-member struct as array element", __LINE__,
+            SVI("struct S {int n; int a[];}; struct S a[2];"),
+            SVI("(test):1:29: error: array element contains a flexible array member\n"),
+        },
+        {
+            "incomplete function return definition", __LINE__,
+            SVI("struct S f(void) {}"),
+            SVI("(test):1:10: error: function definition requires a complete return type\n"),
+        },
+        {
+            "incomplete function parameter definition", __LINE__,
+            SVI("struct S; void f(struct S x){}"),
+            SVI("(test):1:16: error: function definition requires complete parameter types\n"),
+        },
+        {
+            "typedef function definition", __LINE__,
+            SVI("typedef int f(void) {return 1;}"),
+            SVI("(test):1:13: error: invalid storage class in function definition\n"),
+        },
+        {
+            "identifier in abstract type-name", __LINE__,
+            SVI("int x=sizeof(int y);"),
+            SVI("(test):1:18: error: identifier is not allowed in a type name\n"),
+        },
+        {
+            "static array outside parameter", __LINE__,
+            SVI("int a[static 3];"),
+            SVI("(test):1:7: error: static array bound requires an outermost parameter array\n"),
+        },
+        {
+            "static array parameter missing bound", __LINE__,
+            SVI("void f(int p[static]);"),
+            SVI("(test):1:20: error: static array parameter requires a bound\n"),
+        },
+        {
+            "typeof preserves const", __LINE__,
+            SVI("typedef const int A[2]; typeof(A) a={}; void f(void){a[0]=1;}"),
+            SVI("(test):1:58: error: cannot assign to variable with const-qualified type\n"),
+        },
+        {
+            "named const member", __LINE__,
+            SVI("struct S {const struct {int x;} a;}; void f(struct S s){s.a.x=1;}"),
+            SVI("(test):1:62: error: cannot assign to variable with const-qualified type\n"),
+        },
+        {
+            "const pointer parameter", __LINE__,
+            SVI("void f(int *const a){a=0;}"),
+            SVI("(test):1:23: error: cannot assign to variable with const-qualified type\n"),
+        },
+        {
+            "direct array of void", __LINE__,
+            SVI("void p[3];"),
+            SVI("(test):1:1: error: array of void is not allowed\n"),
+        },
+        {
             "discarded static assertion still requires a constant value", __LINE__,
             SVI("int n; static_assert(sizeof(int[n]));"),
             SVI("(test):1:8: error: static_assert expression is not a constant expression\n"),
@@ -6699,17 +7037,17 @@ TestFunction(test_parse_errors){
             SVI("(test):1:12: error: array dimension must have integer type\n"),
         },
         {
-            "N3886 6.7.7.3 example 5: star inside an array length", __LINE__,
+            "C2y array declarator example: star inside an array length", __LINE__,
             SVI("void f(int (*)[sizeof(int (*)[*])]);"),
             SVI("(test):1:31: error: [*] requires function prototype scope\n"),
         },
         {
-            "N3886 6.7.7.3: generic star permission does not extend into bounds", __LINE__,
+            "C2y array declarators: generic star permission does not extend into bounds", __LINE__,
             SVI("void f(void) { _Generic(int*, int[sizeof(int(*)[*])]:1, default:0); }"),
             SVI("(test):1:49: error: [*] requires function prototype scope\n"),
         },
         {
-            "N3886 6.7.7.3: generic star permission does not extend to controlling type", __LINE__,
+            "C2y array declarators: generic star permission does not extend to controlling type", __LINE__,
             SVI("void f(void) { _Generic(int[*], int*:1, default:0); }"),
             SVI("(test):1:29: error: [*] requires function prototype scope\n"),
         },
@@ -7108,7 +7446,7 @@ TestFunction(test_parse_errors){
             SVI("struct S{int x;}; void f(void){\n&(register struct S){1}.x;}"),
             SVI("(test):2:1: error: cannot take address of register compound literal\n"),
         },
-        // C2y named-jump constraints (N3854 6.8.2, 6.8.7.3/4).
+        // C2y named-jump constraints (labels, break and continue statements).
         {
             "c2y named break requires a declared enclosing target", __LINE__,
             SVI("while(1){\nbreak missing;\n}"),
@@ -11268,7 +11606,7 @@ TestFunction(test_parse_errors){
         {
             "static for requires initializer", __LINE__,
             SVI("static for(int i; i<1; i++){}"),
-            SVI("(test):1:16: error: static for variable requires an initializer\n"),
+            SVI("(test):1:16: error: constexpr object requires an initializer\n"),
         },
         {
             "static for requires update", __LINE__,

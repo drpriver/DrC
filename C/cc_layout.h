@@ -24,19 +24,23 @@ static inline
 int
 cc_type_sizeof_complete(const CcTargetConfig* tc, CcQualType type, uint32_t* out){
     switch(ccqt_kind(type)){
-        case CC_VLA: return _cc_not_constant_error;
-        case CC_ALIGNED: return _cc_unreachable_error;
         DRP_CASES_EXHAUSTED;
-        case CC_BASIC:    *out = tc->sizeof_[ccqt_basic_kind(type)]; return 0;
-        case CC_POINTER: case CC_BLOCK_POINTER: case CC_FUNCTION:
-            *out = tc->sizeof_[CCBT_nullptr_t]; return 0;
+        case CC_VLA:     return _cc_not_constant_error;
+        case CC_ALIGNED: return _cc_unreachable_error;
+        case CC_BASIC:   *out = tc->sizeof_[ccqt_basic_kind(type)]; return 0;
+        case CC_POINTER:
+        case CC_BLOCK_POINTER:
+        case CC_FUNCTION:
+            *out = tc->sizeof_[CCBT_nullptr_t];
+            return 0;
         case CC_SLICE:    *out = 2*tc->sizeof_[CCBT_nullptr_t]; return 0;
         case CC_ENUM:
             if(ccqt_as_enum(type)->is_incomplete) return _cc_not_constant_error;
             return cc_type_sizeof_complete(tc, ccqt_as_enum(type)->underlying, out);
         case CC_STRUCT: case CC_UNION:
             if(ccqt_as_struct(type)->is_incomplete) return _cc_not_constant_error;
-            *out = ccqt_as_struct(type)->size; return 0;
+            *out = ccqt_as_struct(type)->size;
+            return 0;
         case CC_VECTOR: *out = ccqt_as_vector(type)->vector_size; return 0;
         case CC_ARRAY:{
             CcArray* a = ccqt_as_array(type);
