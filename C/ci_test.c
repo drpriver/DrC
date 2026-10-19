@@ -177,8 +177,8 @@ TestFunction(test_interpreter){
         {
             "countof compound literal postfix preserves slice operand effects", __LINE__,
             SVI("struct S{int s[:];}; int a[3]; int n=0;"
-                "int x=_Countof(struct S){.s=(++n,a)}.s;"
-                "int y=_Countof((struct S){.s=(++n,a)}.s);"
+                "int x=_Countof(struct S){.s=(++n,a[:])}.s;"
+                "int y=_Countof((struct S){.s=(++n,a[:])}.s);"
                 "return n==2 && x==3 && y==3;"),
             .exit_code = 1,
         },
@@ -4635,7 +4635,7 @@ TestFunction(test_interpreter){
             "reflection: discarded module skips operands", __LINE__,
             SVI("int n = 0;\n"
                 "_Module m = __root_module();\n"
-                "(n++, m).symbol((n++, \"missing\"), int);\n"
+                "(n++, m).symbol((n++, \"missing\"[:]), int);\n"
                 "return n;\n"),
             .exit_code = 0,
         },
@@ -5446,6 +5446,49 @@ TestFunction(test_interpreter){
             SVI("int f(void){return 7;} int i=0; int (*p)(void)=f;\n"
                 "_Bool a=(i++,f); _Bool b=(i++,*p);\n"
                 "_Bool c=({i++; *p;}); return a&&b&&c&&i==3;\n"),
+            .exit_code = 1,
+        },
+        {
+            "comma operands decay before sizeof and typeof", __LINE__,
+            SVI("int f(void){return 7;} int n=5; int a[5]; int v[n]; int effects=0;"
+                "int fixed=sizeof((++effects,a)); int variable=sizeof((++effects,v));"
+                "int function=sizeof((++effects,f));"
+                "typeof((0,a)) p=a; typeof((0,f)) fp=f;"
+                "int* q=(++effects,v); int x=(++effects,f)();"
+                "return fixed==sizeof(int*) && variable==sizeof(int*)"
+                "&& function==sizeof(fp) && p==a && q==v && x==7 && effects==2;"),
+            .exit_code = 1,
+        },
+        {
+            "compile time conditions decay arrays and functions", __LINE__,
+            SVI("int f(void){return 7;} int a[3]; int selected=0;"
+                "static if(f){selected++;} else {return 0;}"
+                "static if(a){selected++;} else {return 0;}"
+                "static_assert(f); static_assert(a);"
+                "int x=__builtin_choose_expr(f,7,0);"
+                "int y=__builtin_choose_expr(a,9,0);"
+                "return selected==2 && x==7 && y==9;"),
+            .exit_code = 1,
+        },
+        {
+            "VLA pointer expressions decline constant folding without diagnostics", __LINE__,
+            SVI("int f(void){int n=3; int a[2][n]; int (*p)[n]=a;"
+                "int x=__builtin_constant_p(p+1==&a[1]);"
+                "int y=__builtin_constant_p(&a[1]==p+1);"
+                "int z=__builtin_constant_p(&a[1]-&a[0]);"
+                "return !x && !y && !z && p+1==&a[1] && &a[1]-p==1;} return f();"),
+            .exit_code = 1,
+        },
+        {
+            "builtin expect operands decay before sizeof and typeof", __LINE__,
+            SVI("int f(void){return 7;} int n=5; int a[n]; int effects=0;"
+                "int size=sizeof(__builtin_expect((++effects,a),0));"
+                "typeof(__builtin_expect(a,0)) p=a;"
+                "typeof(__builtin_expect(f,0)) fp=f;"
+                "int* q=__builtin_expect((++effects,a),0);"
+                "int x=__builtin_expect(f,0)();"
+                "return size==sizeof(int*) && p==a && q==a && fp()==7"
+                "&& x==7 && effects==1;"),
             .exit_code = 1,
         },
         {
@@ -12942,7 +12985,7 @@ TestFunction(test_interpreter){
             "cast: array to slice comma evaluates once", __LINE__,
             SVI("int a[3] = {2,4,6};\n"
                 "int calls = 0;\n"
-                "int s[:] = (int[:])(++calls, (++calls, a));\n"
+                "int s[:] = (int[:])*(++calls, (++calls, &a));\n"
                 "return calls * 100 + s.count * 10 + s[1];\n"),
             .exit_code = 234,
         },
@@ -15253,7 +15296,7 @@ TestFunction(test_interpreter){
             "discarded all slice evaluates base", __LINE__,
             SVI("int i = 0;\n"
                 "int a[4] = {1,2,3,4};\n"
-                "(i++, a)[:];\n"
+                "(i++, a[:])[:];\n"
                 "return i;\n"),
             .exit_code = 1,
         },
@@ -17913,7 +17956,7 @@ TestFunction(test_interpreter_diagnostics){
         {
             "reflection: module validation before name", __LINE__,
             SVI("_Module m = __root_module(); *(unsigned long long*)&m = 1;\n"
-                "return m.symbol((__builtin_trap(), \"x\"), int) != 0;\n"),
+                "return m.symbol((__builtin_trap(), \"x\"[:]), int) != 0;\n"),
             SVI("(test):2:9: error: _Module is not valid\n"),
         },
         {
@@ -18070,7 +18113,7 @@ TestFunction(test_interpreter_diagnostics){
         {
             "reflection: method validation before name", __LINE__,
             SVI("_Type t = int;\n"
-                "t.method((__builtin_trap(), \"get\"));\n"),
+                "t.method((__builtin_trap(), \"get\"[:]));\n"),
             SVI("(test):2:2: error: _Type.method: not a struct or union type: int\n"),
         },
         {

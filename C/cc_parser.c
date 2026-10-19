@@ -2397,6 +2397,10 @@ cc_parse_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out){
             CcExpr* right;
             err = cc_parse_assignment_expr(p, flags, &right, CCQT_NONE);
             if(err) return err;
+            err = cc_decay(p, &left);
+            if(err) return err;
+            err = cc_decay(p, &right);
+            if(err) return err;
             CcExpr* node = cc_make_expr(p, CC_EXPR_COMMA, tok.loc, right->type, 1);
             if(!node) return CC_OOM_ERROR;
             node->is_lvalue = right->is_lvalue;
@@ -3927,6 +3931,8 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     CcExpr* cond;
                     err = cc_parse_assignment_expr(p, condition_flags, &cond, CCQT_NONE);
                     if(err) return err;
+                    err = cc_decay(p, &cond);
+                    if(err) return err;
                     _Bool b;
                     err = cc_eval_truthy(&(CcEvalCtx){p}, cond, &b);
                     if(err) return err;
@@ -4318,10 +4324,14 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     CcExpr* value;
                     err = cc_parse_assignment_expr(p, flags, &value, CCQT_NONE);
                     if(err) return err;
+                    err = cc_decay(p, &value);
+                    if(err) return err;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* unused;
                     err = cc_parse_assignment_expr(p, flags, &unused, CCQT_NONE);
+                    if(err) return err;
+                    err = cc_decay(p, &unused);
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
@@ -6880,6 +6890,8 @@ cc_parse_static_if(CcParser* p, CcParseFlags flags, SrcLoc loc){
         if(err) return err;
         CcExpr* cond;
         err = cc_parse_expr(p, (CcParseFlags){.vc=CC_CONSTEXPR_VALUE, .unevaluated=1}, &cond);
+        if(err) return err;
+        err = cc_decay(p, &cond);
         if(err) return err;
         err = cc_expect_punct(p, ')');
         if(err) return err;
@@ -15674,6 +15686,8 @@ cc_handle_static_assert(CcParser* p, CcParseFlags flags){
     if(err) return err;
     if(!expr)
         return cc_error(p, assert_loc, "expected expression in static_assert");
+    err = cc_decay(p, &expr);
+    if(err) return err;
     _Bool sa_truthy;
     err = cc_eval_truthy(&(CcEvalCtx){p}, expr, &sa_truthy);
     if(err){
@@ -17583,8 +17597,8 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
             err = cc_eval_integer(ctx, e->values[0], &index);
             if(err) return err;
             uint32_t size;
-            err = cc_sizeof_as_uint(p, e->type, e->loc, &size);
-            if(err) return err;
+            if(cc_type_sizeof_complete(cc_target(p), e->type, &size))
+                return CC_NOT_CONSTANT_ERROR;
             if(ccqt_kind(e->lhs->type) == CC_SLICE){
                 uint64_t count;
                 err = cc_eval_slice(ctx, e->lhs, depth + 1, &count, out);
@@ -17635,8 +17649,8 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
             uint32_t size = 1;
             CcQualType pointee = ccqt_as_ptr(base->type)->pointee;
             if(!ccqt_bt_eq(pointee, CCBT_void)){
-                err = cc_sizeof_as_uint(p, pointee, e->loc, &size);
-                if(err) return err;
+                if(cc_type_sizeof_complete(cc_target(p), pointee, &size))
+                    return CC_NOT_CONSTANT_ERROR;
             }
             err = cc_eval_address(ctx, base, 0, depth + 1, out);
             if(err) return err;
@@ -17695,8 +17709,8 @@ cc_eval_pointer_binary(CcEvalCtx* ctx, CcExpr* e, int64_t* result){
             uint32_t size = 1;
             CcQualType pointee = ccqt_as_ptr(e->lhs->type)->pointee;
             if(!ccqt_bt_eq(pointee, CCBT_void)){
-                err = cc_sizeof_as_uint(ctx->parser, pointee, e->loc, &size);
-                if(err) return err;
+                if(cc_type_sizeof_complete(cc_target(ctx->parser), pointee, &size))
+                    return CC_NOT_CONSTANT_ERROR;
             }
             int64_t delta;
             if(sub_overflow(l.offset, r.offset, &delta)) return CC_OVERFLOW_ERROR;
