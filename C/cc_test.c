@@ -337,9 +337,44 @@ TestFunction(test_parse_decls){
             SVI("void f(void){const int x=1; auto y=x; y=2;}"),
         },
         {
+            "typeof_unqual array expression preserves dimensions", __LINE__,
+            SVI("const int original[2][3]={}; typeof_unqual(original) a={}; static_assert(sizeof(a)==sizeof(original)); void f(void){a[0][0]=1;}"),
+        },
+        {
+            "typeof_unqual incomplete array", __LINE__,
+            SVI("typedef const int A[]; typeof_unqual(A) a={1,2}; static_assert(sizeof(a)==2*sizeof(int)); void f(void){a[0]=1;}"),
+        },
+        {
+            "typeof_unqual preserves array alignment", __LINE__,
+            SVI("typedef const int A[4] __attribute__((aligned(32))); typeof_unqual(A) a={}; static_assert(_Alignof(typeof(a))==32); void f(void){a[0]=1;}"),
+        },
+        {
+            "typeof_unqual multidimensional VLA", __LINE__,
+            SVI("void f(int n,int m){typedef const int A[n][m]; typeof_unqual(A) a; a[0][0]=1;}"),
+        },
+        {
+            "valid nested derived types", __LINE__,
+            SVI("struct S; struct S *p; int (*a)[3]; int (*f(void))[3]; struct S (*g)(void); typedef int F(void); F *functions[3];"),
+        },
+        {
             "typeof_unqual removes array element const", __LINE__,
             SVI("typedef const int A[2]; typeof_unqual(A) a={}; void f(void){a[0]=1;}"),
-            .skip = 1, // Deferred
+        },
+        {
+            "typeof_unqual removes nested array qualifiers", __LINE__,
+            SVI("typedef const volatile int A[2][3]; typeof_unqual(A) a={}; void f(void){a[0][0]=1;}"),
+        },
+        {
+            "typeof_unqual removes VLA element qualifiers", __LINE__,
+            SVI("void f(int n){typedef const int A[n]; typeof_unqual(A) a; a[0]=1;}"),
+        },
+        {
+            "typeof_unqual removes array pointer element qualifiers", __LINE__,
+            SVI("typedef const int *const A[2]; typeof_unqual(A) a={}; void f(void){a[0]=0;}"),
+        },
+        {
+            "restrict function pointer accepted", __LINE__,
+            SVI("int (*restrict p)(void);"),
         },
         {
             "extension: duplicate compatible generic associations", __LINE__,
@@ -6914,16 +6949,59 @@ TestFunction(test_parse_errors){
             .skip = 1, // Deferred
         },
         {
-            "invalid nested derived type", __LINE__,
-            SVI("void (*p)[3];"),
-            SVI(""),
-            .skip = 1, // Deferred
+            "nested array of functions", __LINE__,
+            SVI("int (*p)[3](void);"),
+            SVI("(test):1:1: error: array of functions is not allowed\n"),
         },
         {
-            "restrict function pointer", __LINE__,
-            SVI("int (*restrict p)(void);"),
-            SVI(""),
-            .skip = 1, // Deferred
+            "nested function returning array", __LINE__,
+            SVI("int (*p)(void)[3];"),
+            SVI("(test):1:1: error: function cannot return array type\n"),
+        },
+        {
+            "nested function returning function", __LINE__,
+            SVI("int (*p)(void)(void);"),
+            SVI("(test):1:1: error: function cannot return function type\n"),
+        },
+        {
+            "nested invalid member type", __LINE__,
+            SVI("struct S {void (*p)[3];};"),
+            SVI("(test):1:11: error: array of void is not allowed\n"),
+        },
+        {
+            "nested invalid abstract type", __LINE__,
+            SVI("typedef typeof(void (*)[3]) T;"),
+            SVI("(test):1:16: error: array of void is not allowed\n"),
+        },
+        {
+            "nested invalid parameter type", __LINE__,
+            SVI("void f(void (*p)[3]);"),
+            SVI("(test):1:8: error: array of void is not allowed\n"),
+        },
+        {
+            "array parameter of void", __LINE__,
+            SVI("void f(void p[3]);"),
+            SVI("(test):1:8: error: array of void is not allowed\n"),
+        },
+        {
+            "invalid nested derived type", __LINE__,
+            SVI("void (*p)[3];"),
+            SVI("(test):1:1: error: array of void is not allowed\n"),
+        },
+        {
+            "typeof_unqual leaves original array typedef qualified", __LINE__,
+            SVI("typedef const int A[2]; typeof_unqual(A) a={}; A b={}; void f(void){b[0]=1;}"),
+            SVI("(test):1:73: error: cannot assign to variable with const-qualified type\n"),
+        },
+        {
+            "typeof_unqual leaves original VLA typedef qualified", __LINE__,
+            SVI("void f(int n){typedef const int A[n]; typeof_unqual(A) a; A b; b[0]=1;}"),
+            SVI("(test):1:68: error: cannot assign to variable with const-qualified type\n"),
+        },
+        {
+            "typeof_unqual preserves array pointee qualifiers", __LINE__,
+            SVI("typedef const int *const A[2]; typeof_unqual(A) a={}; void f(void){*a[0]=1;}"),
+            SVI("(test):1:73: error: cannot assign to variable with const-qualified type\n"),
         },
         {
             "sizeof bitfield", __LINE__,
@@ -8865,7 +8943,7 @@ TestFunction(test_parse_errors){
             "unnamed typedef method with body", __LINE__,
             SVI("typedef int fn_t(int);\n"
                 "struct S { fn_t () {} };"),
-            SVI("(test):2:17: error: expected method name\n"),
+            SVI("(test):2:12: error: function cannot return function type\n"),
         },
         {
             "typedef method body", __LINE__,

@@ -1181,10 +1181,11 @@ C::md
     - Aggregate types with const members are assignable if the
       whole object is replaced. The const member remains const when
       accessed directly.
-    - structs are allowed to have a single FAM as their only field.
-    - structs and union tags are in separate names spaces so `struct T` and `union T`
+    - `struct`s are allowed to have a single FAM as their only field.
+    - `struct`s and `union` tags are in separate names spaces so `struct T` and `union T`
       can coexist.
-    - _Generic allows duplicate cases for easier use with typedefs.
+    - `_Generic()` allows duplicate cases for easier use with `typedef`s.
+    - `restrict` is allowed on function pointers.
     - FIXME: list all the other random minor extensions.
 
 Interpreter-only::md

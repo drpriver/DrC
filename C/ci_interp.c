@@ -872,8 +872,11 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             return 0;
         }
         case CC_TYPE_UNQUAL: {
-            CcQualType uq = qt;
-            uq.quals = 0;
+            CcQualType uq;
+            ci_lock_resolver(ci);
+            err = cc_unqual_object_type(&ci->parser, qt, &uq);
+            ci_unlock_resolver(ci);
+            if(err) return err;
             *(uintptr_t*)result = uq.bits;
             return 0;
         }

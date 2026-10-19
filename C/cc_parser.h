@@ -307,6 +307,7 @@ static int cc_register_extern_var(CcParser*, StringView name, CcQualType type);
 static int cc_define_builtin_types(CcParser*);
 static int cc_parse_func_body(CcParser*, CcFunc*);
 static int cc_parse_type_string(CcParser*, CcScope*, SrcLoc loc, StringView source, CcQualType*);
+static int cc_unqual_object_type(CcParser*, CcQualType, CcQualType*);
 static _Bool cc_eval_pointer_binary_expr(CcExpr*);
 static int cc_eval_symbolic_binary(CcParser*, CcExpr*, _Bool allow_const, int64_t*);
 static int cc_eval_linktime_scalar(CcParser*, CcExpr*, CcExpr*_Nullable*_Nonnull);

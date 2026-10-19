@@ -1284,7 +1284,7 @@ cc_type_contains_fam(CcQualType type){
 
 static
 int
-cc_check_array_element_alignment(CcParser* p, CcQualType type, SrcLoc loc){
+cc_check_derived_type(CcParser* p, CcQualType type, SrcLoc loc){
     for(;;){
         switch(ccqt_kind(type)){
             case CC_POINTER:
@@ -1293,10 +1293,26 @@ cc_check_array_element_alignment(CcParser* p, CcQualType type, SrcLoc loc){
                 break;
             case CC_SLICE:
                 type = ccqt_as_slice(type)->pointee;
+                if(ccqt_bt_eq(type, CCBT_void))
+                    return cc_error(p, loc, "slice of void is not allowed");
+                if(ccqt_kind(type) == CC_FUNCTION)
+                    return cc_error(p, loc, "slice of functions is not allowed");
                 break;
-            case CC_FUNCTION:
-                type = ccqt_as_function(type)->return_type;
+            case CC_FUNCTION: {
+                CcFunction* function = ccqt_as_function(type);
+                type = function->return_type;
+                if(ccqt_is_vm(type))
+                    return cc_error(p, loc, "function return type cannot be variably modified");
+                if(ccqt_is_array(type))
+                    return cc_error(p, loc, "function cannot return array type");
+                if(ccqt_kind(type) == CC_FUNCTION)
+                    return cc_error(p, loc, "function cannot return function type");
+                for(uint32_t i = 0; i < function->param_count; i++){
+                    int err = cc_check_derived_type(p, function->params[i], loc);
+                    if(err) return err;
+                }
                 break;
+            }
             case CC_VLA: {
                 CcQualType element = ccqt_as_vla(type)->element;
                 if(cc_type_contains_fam(element))
@@ -1319,6 +1335,10 @@ cc_check_array_element_alignment(CcParser* p, CcQualType type, SrcLoc loc){
             case CC_ARRAY: {
                 CcArray* array = ccqt_as_array(type);
                 CcQualType element = array->element;
+                if(ccqt_bt_eq(element, CCBT_void))
+                    return cc_error(p, loc, "array of void is not allowed");
+                if(ccqt_kind(element) == CC_FUNCTION)
+                    return cc_error(p, loc, "array of functions is not allowed");
                 if(cc_type_contains_fam(element))
                     return cc_error(p, loc, "array element contains a flexible array member");
                 if(ccqt_raw_kind(element) == CC_ALIGNED){
@@ -1408,7 +1428,7 @@ cc_parse_compound_type(CcParser* p, CcParseFlags flags, CcQualType* out, CcParse
         err = cc_const_object_type(p, *out, out);
         if(err) return err;
     }
-    return cc_check_array_element_alignment(p, *out, base.loc);
+    return cc_check_derived_type(p, *out, base.loc);
 }
 
 static
@@ -1442,7 +1462,7 @@ cc_parse_abstract_type_name(CcParser* p, CcParseFlags flags, CcQualType* out){
         return cc_error(p, base.loc, "unexpected declarator name '%.*s' in type expression", name->length, name->data);
     *tail = base.type;
     *out = cc_intern_qualtype(p, head);
-    return cc_check_array_element_alignment(p, *out, base.loc);
+    return cc_check_derived_type(p, *out, base.loc);
 }
 
 static
@@ -1557,7 +1577,7 @@ cc_parse_lambda(CcParser* p, CcParseFlags flags, SrcLoc loc, CcExpr* _Nullable* 
     }
     *tail = base.type;
     CcQualType type = cc_intern_qualtype(p, head);
-    err = cc_check_array_element_alignment(p, type, base.loc);
+    err = cc_check_derived_type(p, type, base.loc);
     if(err) goto cleanup_names;
     CcToken peek;
     err = cc_peek(p, &peek);
@@ -11708,7 +11728,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                     }
                     *tail = member_base.type;
                     member_type = cc_intern_qualtype(p, head);
-                    err = cc_check_array_element_alignment(p, member_type, member_base.loc);
+                    err = cc_check_derived_type(p, member_type, member_base.loc);
                     if(err){
                         ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
                         goto struct_err;
@@ -12987,7 +13007,10 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                             }
                             else cc_release_expr(p, expr);
                         }
-                        if(unqual) base_type->quals = 0;
+                        if(unqual){
+                            err = cc_unqual_object_type(p, *base_type, base_type);
+                            if(err) return err;
+                        }
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
                         continue;
@@ -14946,7 +14969,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                     }
                     out_param_names->typed_pack_loc = peek.loc;
                     CcQualType element = cc_intern_qualtype(p, param_head);
-                    err = cc_check_array_element_alignment(p, element, param_loc);
+                    err = cc_check_derived_type(p, element, param_loc);
                     if(err) goto param_err;
                     uint32_t size;
                     if(ccqt_bt_eq(element, CCBT_void) || ccqt_kind(element) == CC_FUNCTION
@@ -14972,7 +14995,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                     }
                 }
                 CcQualType param_type = cc_intern_qualtype(p, param_head);
-                err = cc_check_array_element_alignment(p, param_type, param_loc);
+                err = cc_check_derived_type(p, param_type, param_loc);
                 if(err) goto param_err;
                 if(ccqt_is_array(param_type)){
                     err = cc_pointer_of(p, ccqt_array_element(param_type), &param_type);
@@ -15187,6 +15210,43 @@ cc_const_object_type(CcParser* p, CcQualType type, CcQualType* out){
 }
 
 static
+int
+cc_unqual_object_type(CcParser* p, CcQualType type, CcQualType* out){
+    int err;
+    if(ccqt_raw_kind(type) == CC_ALIGNED){
+        CcQualType underlying;
+        err = cc_unqual_object_type(p, ccqt_unaligned(type), &underlying);
+        if(err) return err;
+        CcAligned* aligned = cc_intern_aligned(&p->type_cache, cc_allocator(p), underlying, ccqt_as_aligned(type)->alignment);
+        if(!aligned) return CC_OOM_ERROR;
+        *out = (CcQualType){.bits=(uintptr_t)aligned};
+        return 0;
+    }
+    if(!ccqt_is_array(type)){
+        type.quals = 0;
+        *out = type;
+        return 0;
+    }
+    CcQualType element;
+    err = cc_unqual_object_type(p, ccqt_array_element(type), &element);
+    if(err) return err;
+    if(ccqt_kind(type) == CC_VLA){
+        CcVla* vla = Allocator_alloc(cc_allocator(p), sizeof *vla);
+        if(!vla) return CC_OOM_ERROR;
+        *vla = *ccqt_as_vla(type);
+        vla->element = element;
+        *out = (CcQualType){.bits=(uintptr_t)vla};
+    }
+    else {
+        CcArray* old = ccqt_as_array(type);
+        CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element, old->length, old->is_static, old->is_incomplete);
+        if(!array) return CC_OOM_ERROR;
+        *out = (CcQualType){.bits=(uintptr_t)array};
+    }
+    return 0;
+}
+
+static
 CcQualType
 cc_intern_qualtype(CcParser* p, CcQualType t){
     uintptr_t quals = t.quals;
@@ -15359,7 +15419,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             is_fndef = name && tail != &head && ccqt_kind(head) == CC_FUNCTION;
             *tail = declbase->type;
             type = cc_intern_qualtype(p, head);
-            err = cc_check_array_element_alignment(p, type, declbase->loc);
+            err = cc_check_derived_type(p, type, declbase->loc);
             if(err){
                 ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
                 return err;
@@ -15367,36 +15427,6 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             if(declbase->spec.sp_constexpr){
                 err = cc_const_object_type(p, type, &type);
                 if(err) return err;
-            }
-            // Validate type: no arrays of void/functions, no functions returning arrays/functions
-            {
-                CcTypeKind tk = ccqt_kind(type);
-                if(tk == CC_ARRAY){
-                    CcQualType elem = ccqt_array_element(type);
-                    if(ccqt_is_basic(elem) && ccqt_basic_kind(elem) == CCBT_void)
-                        return cc_error(p, declbase->loc, "array of void is not allowed");
-                    if(!ccqt_is_basic(elem) && ccqt_kind(elem) == CC_FUNCTION)
-                        return cc_error(p, declbase->loc, "array of functions is not allowed");
-                }
-                else if(tk == CC_SLICE){
-                    CcQualType elem = ccqt_as_slice(type)->pointee;
-                    if(ccqt_is_basic(elem) && ccqt_basic_kind(elem) == CCBT_void)
-                        return cc_error(p, declbase->loc, "slice of void is not allowed"); // maybe we should allow this actually for bounds-checked untyped buffers?
-                    if(!ccqt_is_basic(elem) && ccqt_kind(elem) == CC_FUNCTION)
-                        return cc_error(p, declbase->loc, "slice of functions is not allowed");
-                }
-                else if(tk == CC_FUNCTION){
-                    CcQualType ret = ccqt_as_function(type)->return_type;
-                    if(ccqt_is_vm(ret))
-                        return cc_error(p, declbase->loc, "function return type cannot be variably modified");
-                    if(!ccqt_is_basic(ret)){
-                        CcTypeKind rk = ccqt_kind(ret);
-                        if(ccqt_is_array(ret))
-                            return cc_error(p, declbase->loc, "function cannot return array type");
-                        if(rk == CC_FUNCTION)
-                            return cc_error(p, declbase->loc, "function cannot return function type");
-                    }
-                }
             }
         }
         // trailing __attribute__
@@ -20725,8 +20755,9 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     if(ccqt_kind(qt) != CC_POINTER) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     TYPERES(ccqt_as_ptr(qt)->pointee);
                 case CC_TYPE_UNQUAL: {
-                    CcQualType uq = qt;
-                    uq.quals = 0;
+                    CcQualType uq;
+                    err = cc_unqual_object_type(p, qt, &uq);
+                    if(err) goto fini_introspection;
                     TYPERES(uq);
                 }
                 case CC_TYPE_COUNT:

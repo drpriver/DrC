@@ -12381,6 +12381,36 @@ TestFunction(test_interpreter){
             .exit_code = 0,
         },
         {
+            "type introspection: runtime unqual matches typeof_unqual", __LINE__,
+            SVI("typedef const volatile int A[2][3]; _Type strip(_Type t){return t.unqual;} return strip(A)==typeof_unqual(A) && strip(A).element_type.element_type==int && A.element_type.element_type.is_const;"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: runtime unqual preserves pointee qualifiers", __LINE__,
+            SVI("typedef const int *const A[2]; _Type strip(_Type t){return t.unqual;} _Type t=strip(A); return t==typeof_unqual(A) && !t.element_type.is_const && t.element_type.pointee.is_const;"),
+            .exit_code = 1,
+        },
+        {
+            "type introspection: runtime unqual preserves alignment", __LINE__,
+            SVI("typedef const int A[4] __attribute__((aligned(32))); _Type strip(_Type t){return t.unqual;} _Type t=strip(A); return t==typeof_unqual(A) && t.alignof_==32 && t.count==4;"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: array unqual matches typeof_unqual", __LINE__,
+            SVI("typedef const volatile int A[2][3]; constexpr _Type t=A.unqual; static_assert(t==typeof_unqual(A)); static_assert(t.element_type.element_type==int); static_assert(A.element_type.element_type.is_const); return 1;"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: array unqual preserves pointee qualifiers", __LINE__,
+            SVI("typedef const int *const A[2]; constexpr _Type t=A.unqual; static_assert(t==typeof_unqual(A)); static_assert(!t.element_type.is_const); static_assert(t.element_type.pointee.is_const); return 1;"),
+            .exit_code = 1,
+        },
+        {
+            "static_assert: array unqual preserves alignment", __LINE__,
+            SVI("typedef const int A[4] __attribute__((aligned(32))); constexpr _Type t=A.unqual; static_assert(t==typeof_unqual(A)); static_assert(t.alignof_==32 && t.count==4); return 1;"),
+            .exit_code = 1,
+        },
+        {
             "type introspection: unqual", __LINE__,
             SVI("return (const volatile int).unqual.is_const;\n"),
             .exit_code = 0,

@@ -149,6 +149,21 @@ TestFunction(test_concurrent_callbacks){
         int exit_code;
     } testcases[] = {
         {
+            "concurrent unqual interns array and aligned types", __LINE__,
+            SV("int run_atomic_threads(void(*)(int),int,int,volatile int*,volatile int*);\n"
+               "void report_atomic_thread_iters(int);\n"
+               "_Type types[128]; _Atomic int ready, failures;\n"
+               "static for(int i=0;i<128;i++){{typedef const volatile int A[i+1][3] __attribute__((aligned(32)));types[i]=A;}}\n"
+               "void work(int n){ready++;while(ready<8){}\n"
+               "for(int j=0;j<n;j++)for(int i=0;i<128;i++){_Type t=types[i];_Type u=t.unqual;\n"
+               "if(u.count!=i+1 || u.alignof_!=32 || u.element_type.count!=3\n"
+               "|| u.element_type.element_type!=int || !t.element_type.element_type.is_const\n"
+               "|| u!=t.unqual)failures++;}report_atomic_thread_iters(n);}\n"
+               "volatile int entries=0,exits=0;return run_atomic_threads(work,8,8,&entries,&exits)==64\n"
+               "&&entries==8&&exits==8&&failures==0;\n"),
+            .exit_code = 1,
+        },
+        {
             "frame stack: concurrent callbacks have independent alloca storage", __LINE__,
             SV("int run_atomic_threads(void(*)(int),int,int,volatile int*,volatile int*);\n"
                "void report_atomic_thread_iters(int);\n"
