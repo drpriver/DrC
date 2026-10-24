@@ -136,21 +136,109 @@ ci_op_memory_order(CcMemoryOrder m){
 
 static
 void
+ci_op_print_register(MStringBuilder *out, CiAbiRegister reg){
+    static const char* const names[] = {
+        "gp",
+        "fp",
+        "ret.gp",
+        "ret.fp",
+        "ret.x87",
+        "stack_args",
+        "sret",
+        "vector_count",
+    };
+    msb_sprintf(out, "%s", names[reg.bank]);
+    if(reg.bank <= CI_ABI_RESULT_X87)
+        msb_sprintf(out, "%u", reg.index);
+}
+
+static
+void
+ci_op_print_abi_address(MStringBuilder* out, CiAbiAddress mode, uint32_t pointer, uint32_t offset, uint32_t size){
+    if(mode == CI_ABI_SLOT){
+        ci_op_print_range(out, offset, size);
+        return;
+    }
+    if(mode == CI_ABI_REG || mode == CI_ABI_INCOMING){
+        if(mode == CI_ABI_INCOMING)
+            msb_write_literal(out, "incoming.");
+        ci_op_print_register(out, (CiAbiRegister){.bits=offset});
+        return;
+    }
+    if(mode == CI_ABI_GP_SAVE || mode == CI_ABI_FP_SAVE){
+        msb_sprintf(out, "incoming.%s_save[%u]", mode==CI_ABI_GP_SAVE?"gp":"fp", offset);
+        return;
+    }
+    msb_write_literal(out, "*(");
+    if(mode == CI_ABI_REG_PTR_INDIRECT || mode == CI_ABI_INCOMING_PTR_INDIRECT)
+        msb_write_literal(out,"*(");
+    if(mode == CI_ABI_SLOT_PTR)
+        ci_op_print_range(out, pointer, 8);
+    else {
+        if(mode == CI_ABI_INCOMING_PTR || mode == CI_ABI_INCOMING_PTR_INDIRECT)
+            msb_write_literal(out, "incoming.");
+        ci_op_print_register(out, (CiAbiRegister){.bits=pointer});
+    }
+    if(offset) msb_sprintf(out, " %+d", (int32_t)offset);
+    if(mode == CI_ABI_REG_PTR_INDIRECT || mode == CI_ABI_INCOMING_PTR_INDIRECT)
+        msb_write_char(out, ')');
+    msb_write_char(out, ')');
+}
+
+static
+void
 ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
     switch(op->kind){
-        case CI_OP_ABI_INIT:
-            msb_sprintf(out, "abi.%s%s", "init", op->abi.write ? ".write" : ".read");
-            goto op_abi;
-        case CI_OP_ABI_ARG:
-            msb_sprintf(out, "abi.%s%s", "arg", op->abi.write ? ".write" : ".read");
-            goto op_abi;
+        case CI_OP_ABI_TRANSFER: {
+            static const char* const actions[]={
+                "copy",
+                "address",
+                "zero",
+                "constant",
+                "zero-extend",
+                "sign-extend",
+            };
+            msb_sprintf(out, "abi.%s ", actions[op->abi_transfer.operation]);
+            ci_op_print_abi_address(out, op->abi_transfer.destination, op->abi_transfer.dst_pointer, op->abi_transfer.dst, op->abi_transfer.size);
+            if(op->abi_transfer.operation != CI_ABI_ZERO){
+                msb_write_literal(out, " = ");
+                if(op->abi_transfer.operation == CI_ABI_CONSTANT)
+                    msb_sprintf(out, "%u", op->abi_transfer.immediate);
+                else {
+                    if(op->abi_transfer.operation == CI_ABI_ADDRESS)
+                        msb_write_char(out, '&');
+                    ci_op_print_abi_address(
+                        out,
+                        op->abi_transfer.source, op->abi_transfer.src_pointer,
+                        op->abi_transfer.src,
+                        op->abi_transfer.source_size? op->abi_transfer.source_size : op->abi_transfer.size
+                    );
+                }
+            }
+            msb_sprintf(out, " size=%u", op->abi_transfer.size);
+            if(op->abi_transfer.source_size)
+                msb_sprintf(out, " source_size=%u", op->abi_transfer.source_size);
             break;
-        case CI_OP_ABI_RESULT:
-            msb_sprintf(out, "abi.%s%s", "result", op->abi.write ? ".write" : ".read");
-            op_abi:;
-            if(op->abi.incoming) msb_write_literal(out, " state=incoming");
-            else msb_sprintf(out, " state=%u", op->abi.state);
-            msb_sprintf(out, " slot=%u index=%u", op->abi.slot, op->abi.index);
+        }
+        case CI_OP_ABI_MOVE:
+            msb_write_literal(out, "abi.move ");
+            if(!op->abi_move.write){
+                ci_op_print_range(out, op->abi_move.slot, op->abi_move.size);
+                msb_write_literal(out, " = ");
+            }
+            if(op->abi_move.incoming)
+                msb_write_literal(out, "incoming.");
+            ci_op_print_register(out, op->abi_move.reg);
+            if(op->abi_move.write){
+                msb_write_literal(out," = ");
+                ci_op_print_range(out, op->abi_move.slot, op->abi_move.source_size);
+            }
+            msb_sprintf(
+                out, " size=%u%s",
+                op->abi_move.size,
+                op->abi_move.operation==CI_ABI_SIGN_EXTEND? " sign-extend"
+                    : op->abi_move.operation==CI_ABI_ZERO_EXTEND? " zero-extend" : ""
+            );
             break;
         case CI_OP_RT_CALL:
             if(op->rt_call.slot_size){
@@ -561,24 +649,15 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
         case CI_OP_CALL:{
             CiCallDescriptor* d = op->call.descrip;
             if(op->call.is_indirect){
-                if(op->call.ret_size){
-                    ci_op_print_range(out, op->call.ret_slot, op->call.ret_size);
-                    msb_write_literal(out, " = ");
-                }
                 msb_sprintf(out, "call *[%u](", op->call.args_slot - 8);
-                msb_sprintf(out, "ABI state @%u", op->call.args_slot);
-                msb_write_char(out, ')');
             }else {
                 Atom name = d->func->name;
                 const char *s = name&&name->length?name->data:"<anon>";
-                if(op->call.ret_size){
-                    ci_op_print_range(out, op->call.ret_slot, op->call.ret_size);
-                    msb_write_literal(out, " = ");
-                }
                 msb_sprintf(out, "call %s(", s);
-                msb_sprintf(out, "ABI state @%u", op->call.args_slot);
-                msb_write_char(out, ')');
             }
+            if(nc_stack_storage_size(d->abi)) 
+                msb_sprintf(out, "stack @%u", op->call.args_slot);
+            msb_write_char(out,  ')');
         } break;
         case CI_OP_ISTRUE:
             ci_op_print_range(out, op->istrue.slot, op->istrue.slot_size);
@@ -684,9 +763,6 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                 case CC_BUILTIN_BACKTRACE: msb_write_literal(out, "backtrace()"); break;
                 default: msb_write_literal(out, "?invalid builtinop"); break;
             }
-            break;
-        case CI_OP_VA_START:
-            msb_sprintf(out, "va_start(*[%u])", op->va_start_.slot);
             break;
         case CI_OP_VA_ARG:
             ci_op_print_range(out, op->va_arg_.slot, op->va_arg_.size);

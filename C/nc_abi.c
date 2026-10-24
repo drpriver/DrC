@@ -91,6 +91,8 @@ nc_abi_type(const CcTargetConfig* tc, CcQualType qt, NcAbiRole role, NcAbiType* 
             fp = ccbt_is_float(k);
             t.sign_extend = ccqt_is_integer(qt)
                 && !ccqt_is_unsigned(qt, !tc->char_is_signed);
+            t.zero_extend = t.size < 8 && ccqt_is_integer(qt)
+                && ccqt_is_unsigned(qt, !tc->char_is_signed);
             // The x64 compiler extension passes int128 by reference but
             // returns its complete bit pattern in XMM0.
             if(nc_abi_windows(target) && role == NC_ABI_RETURN

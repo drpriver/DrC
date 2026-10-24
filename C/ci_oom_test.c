@@ -36,6 +36,11 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("__forceinline int odd(int n);"
+         "__forceinline int even(int n){return n?odd(n-1):1;}"
+         "__forceinline int odd(int n){return n?even(n-1):0;}"
+         "int value=7;int leaf(void){return value;}"
+         "int middle(void){return leaf();}return even(4)&&odd(3)&&middle()==7;")},
     {__LINE__, SVI("int f(int n){typedef int A[n];"
          "(void)alignof(int[n+1]);(void)_Generic((int(*)[n+2])0,default:0);"
          "const A*p=0;return sizeof(*p)==n*sizeof(int);}return f(3)&&f(7);")},
@@ -500,6 +505,8 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
     CiInterpreter interp = {
         .poison_frame_slots = 1,
         .procedural_macros = 1,
+        .inline_budget = CI_DEFAULT_INLINE_BUDGET,
+        .inline_hint_budget = CI_DEFAULT_INLINE_HINT_BUDGET,
         .exit_code = -1,
         .parser = {
             .cpp = {

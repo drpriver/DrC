@@ -69,6 +69,7 @@ static void _cc_release_expr(CcParser* p, CcExpr*, size_t nvalues);
 static void cc_release_expr(CcParser* p, CcExpr*);
 static CcExpr*_Nullable _cc_alloc_expr(CcParser* p, size_t nvalues);
 static CcExpr*_Nullable cc_make_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, size_t nvalues);
+static void cc_mark_mutable_storage(CcExpr*);
 warn_unused static int cc_pointer_of(CcParser* p, CcQualType pointee, CcQualType* out);
 warn_unused static int cc_slice_of(CcParser* p, CcQualType pointee, SrcLoc loc, CcQualType* out);
 LOG_PRINTF(3, 4) static int cc_error(CcParser*, SrcLoc, const char*, ...);
@@ -700,6 +701,8 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
         err = cc_desugar_compound_literal(p, e, &e);
         if(err) return err;
     }
+    if(ccqt_is_array(e->type) && (ccqt_kind(target) == CC_POINTER || ccqt_kind(target) == CC_SLICE))
+        cc_mark_mutable_storage(e);
     if(ccqt_bt_eq(target, CCBT__Any) && !ccqt_bt_eq(e->type, CCBT__Any)){
         CcTypeKind k = ccqt_kind(e->type);
         if((ccqt_is_array(e->type)) || k == CC_FUNCTION){
@@ -2232,6 +2235,7 @@ cc_parse_assignment_tail(CcParser* p, CcParseFlags flags, CcExpr* left, CcExpr* 
             CcExpr* node = cc_make_expr(p, kind, tok.loc, (CcQualType){.unqual=left->type.unqual}, 1);
             if(!node) return CC_OOM_ERROR;
             node->lhs = left;
+            cc_mark_mutable_storage(left);
             if(kind != CC_EXPR_ASSIGN) node->compound.type = operation_type;
             node->values[0] = right;
             *out = node;
@@ -3211,6 +3215,8 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
             if(!node) return CC_OOM_ERROR;
             node->is_lvalue = kind == CC_EXPR_DEREF;
             node->lhs = operand;
+            if(kind == CC_EXPR_ADDR || kind == CC_EXPR_PREINC || kind == CC_EXPR_PREDEC)
+                cc_mark_mutable_storage(operand);
             *out = node;
             return 0;
         }
@@ -5425,6 +5431,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                 CcExpr* node = cc_make_expr(p, kind, tok.loc, (CcQualType){.unqual=operand->type.unqual}, 0);
                 if(!node) return CC_OOM_ERROR;
                 node->lhs = operand;
+                cc_mark_mutable_storage(operand);
                 operand = node;
                 continue;
             }
@@ -5476,6 +5483,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                     CcExpr* node = cc_make_expr(p, kind, tok.loc, slice_type, !!index + !!hi);
                     if(!node) return CC_OOM_ERROR;
                     node->lhs = operand;
+                    if(ccqt_is_array(operand->type)) cc_mark_mutable_storage(operand);
                     if(index || hi) node->values[0] = index ? index : hi;
                     if(index && hi) node->values[1] = hi;
                     operand = node;
@@ -8728,6 +8736,8 @@ cc_release_expr(CcParser* p, CcExpr* e){
 static
 CcExpr*_Nullable
 cc_make_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, size_t nvalues){
+    if(p->current_func && (kind == CC_EXPR_ALLOCA || kind == CC_EXPR_VA))
+        p->current_func->inline_blocked = 1;
     CcExpr* node = _cc_alloc_expr(p, nvalues);
     if(node){
         node->kind = kind;
@@ -8814,6 +8824,31 @@ cc_constexpr_string_slice_expr(CcParser* p, SrcLoc loc, Atom name, _Bool include
 }
 
 static
+void
+cc_mark_mutable_storage(CcExpr* e){
+    for(;;){
+        switch((uint32_t)e->kind){
+            case CC_EXPR_VARIABLE:
+                e->var->mutable_storage = 1;
+                return;
+            case CC_EXPR_DOT: case CC_EXPR_COMMA:
+                e = e->values[0];
+                break;
+            case CC_EXPR_CAST:
+                e = e->lhs;
+                break;
+            case CC_EXPR_SUBSCRIPT:
+                if(!ccqt_is_fixed_sequence(e->lhs->type) && ccqt_kind(e->lhs->type) != CC_VLA)
+                    return;
+                e = e->lhs;
+                break;
+            default:
+                return;
+        }
+    }
+}
+
+static
 CcExpr* _Nullable
 cc_unary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr* operand){
     CcExpr* node = _cc_alloc_expr(p, 0);
@@ -8822,6 +8857,13 @@ cc_unary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr*
     node->loc = loc;
     node->type = type;
     node->lhs = operand;
+    if(kind == CC_EXPR_ADDR
+    || kind == CC_EXPR_PREINC
+    || kind == CC_EXPR_PREDEC
+    || kind == CC_EXPR_POSTINC
+    || kind == CC_EXPR_POSTDEC
+    || (kind == CC_EXPR_CAST && ccqt_is_array(operand->type) && (ccqt_kind(type) == CC_POINTER || ccqt_kind(type) == CC_SLICE)))
+        cc_mark_mutable_storage(operand);
     return node;
 }
 
@@ -8885,6 +8927,7 @@ cc_va_list_to_ptr(CcParser* p, SrcLoc loc, CcExpr*_Nonnull*_Nonnull e, _Bool wri
     CcExpr* addr = cc_make_expr(p, CC_EXPR_ADDR, loc, pointer, 0);
     if(!addr) return CC_OOM_ERROR;
     addr->lhs = expr;
+    cc_mark_mutable_storage(expr);
     *e = addr;
     return 0;
 }
@@ -8985,6 +9028,9 @@ cc_match_gnu_attribute(CcParser* p, CcParseFlags flags, SrcLoc loc, StringView a
     }
     else if(sv_equals(attr_name, SV("always_inline"))){
         attrs->always_inline = 1;
+    }
+    else if(sv_equals(attr_name, SV("noinline"))){
+        attrs->noinline = 1;
     }
     else if(sv_equals(attr_name, SV("transparent_union"))){
         attrs->transparent_union = 1;
@@ -9193,7 +9239,8 @@ cc_parse_c23_attributes(CcParser* p, CcParseFlags flags, CcAttributes* attrs){
                 goto c23_skip_args;
             }
             StringView attr_name = {.text = tok.ident.ident->data, .length = tok.ident.ident->length};
-            _Bool is_gnu = 0;
+            _Bool is_gnu = 0,
+                  is_drc = 0;
             err = cc_peek(p, &tok);
             if(err) return err;
             if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_double_colon){
@@ -9205,6 +9252,7 @@ cc_parse_c23_attributes(CcParser* p, CcParseFlags flags, CcAttributes* attrs){
                 if(sv_endswith(prefix, SV("__")))
                     prefix = sv_slice(prefix, 0, prefix.length-2);
                 is_gnu = sv_equals(prefix, SV("gnu"));
+                is_drc = sv_equals(prefix, SV("drc"));
                 err = cc_next_token(p, &tok);
                 if(err) return err;
                 if(tok.type != CC_IDENTIFIER && tok.type != CC_KEYWORD)
@@ -9214,13 +9262,24 @@ cc_parse_c23_attributes(CcParser* p, CcParseFlags flags, CcAttributes* attrs){
                 else {
                     goto c23_skip_args;
                 }
-                if(!is_gnu)
+                if(!is_gnu && !is_drc)
                     goto c23_skip_args;
             }
             if(sv_startswith(attr_name, SV("__")))
                 attr_name = sv_slice(attr_name, 2, attr_name.length);
             if(sv_endswith(attr_name, SV("__")))
                 attr_name = sv_slice(attr_name, 0, attr_name.length-2);
+            if(is_drc){
+                if(sv_equals(attr_name, SV("hotswappable"))){
+                    attrs->hotswappable = 1;
+                    err = cc_peek(p, &tok);
+                    if(err) return err;
+                    if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen)
+                        return cc_error(p, tok.loc, "drc::hotswappable takes no arguments");
+                    goto c23_skip_comma;
+                }
+                goto c23_skip_args;
+            }
             if(sv_equals(attr_name, SV("noreturn")))
                 attrs->is_noreturn = 1;
             else if(is_gnu){
@@ -12828,6 +12887,8 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
 static
 CcStmtNode*_Nullable
 cc_stmt_node(CcParser* p, CcStmtKind k, SrcLoc loc, uint32_t count){
+    if(p->current_func && k == CC_STMT_VLA)
+        p->current_func->inline_blocked = 1;
     CcStmtNode* n = Allocator_zalloc(cc_allocator(p), sizeof(CcStmtNode) + count * sizeof(CcStmtNode*));
     if(!n) return NULL;
     n->kind = k;
@@ -15178,6 +15239,10 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
     CcAttributes decl_attributes = p->attributes;
     _Bool decl_always_inline = p->attributes.always_inline;
     p->attributes.always_inline = 0;
+    _Bool decl_noinline = p->attributes.noinline;
+    p->attributes.noinline = 0;
+    _Bool decl_hotswappable = p->attributes.hotswappable;
+    p->attributes.hotswappable = 0;
     if(p->auto_typedef && !declbase->spec.sp_typedef && !declbase->spec.sp_infer_type){
         Atom tag_name = NULL;
         CcQualType base = declbase->type;
@@ -15293,6 +15358,11 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
         }
         const CcPrintfFormat* printf_formats = p->attributes.printf_formats;
         _Bool is_always_inline = decl_always_inline || p->attributes.always_inline;
+        _Bool is_noinline = decl_noinline || p->attributes.noinline;
+        _Bool is_hotswappable = decl_hotswappable || p->attributes.hotswappable;
+        _Bool is_noreturn = declbase->spec.sp_noreturn || p->attributes.is_noreturn;
+        if(is_hotswappable && (ccqt_kind(type) != CC_FUNCTION || declbase->spec.sp_typedef))
+            return cc_error(p, name_loc, "drc::hotswappable requires a function declaration");
         cc_clear_attributes(&p->attributes);
         if(type.bits){
             err = cc_check_derived_type(p, type, declbase->loc);
@@ -15358,6 +15428,9 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             }
             func->inline_ = func->inline_ || declbase->spec.sp_inline;
             func->always_inline = func->always_inline || is_always_inline;
+            func->noinline = func->noinline || is_noinline;
+            func->noreturn_ = func->noreturn_ || is_noreturn;
+            func->hotswappable = func->hotswappable || is_hotswappable;
             err = cc_apply_printf_formats(p, func, printf_formats);
             if(err) return err;
             err = cc_merge_default_args(p, func, &param_names, 1, name_loc);
@@ -15691,6 +15764,9 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             }
             func->inline_ = func->inline_ || declbase->spec.sp_inline;
             func->always_inline = func->always_inline || is_always_inline;
+            func->noinline = func->noinline || is_noinline;
+            func->noreturn_ = func->noreturn_ || is_noreturn;
+            func->hotswappable = func->hotswappable || is_hotswappable;
             err = cc_apply_printf_formats(p, func, printf_formats);
             if(err) return err;
             err = cc_merge_default_args(p, func, &param_names, !func->defined && !keep_prototype, name_loc);
@@ -16638,6 +16714,42 @@ cc_parse_local_methods(CcParser* p){
 
 static
 int
+cc_append_function_exit(CcParser* p, CcFunc* f, CcStmtSink* sink){
+    CcStmtNode* last = sink->stmts.count ? sink->stmts.data[sink->stmts.count-1] : NULL;
+    if(last && last->kind == CC_STMT_RETURN)
+        return 0;
+    CcQualType ret = f->type->return_type;
+    StringView name = SV("");
+    if(f->name)
+        name = (StringView){f->name->length, f->name->data};
+    _Bool main_zero = !f->enclosing && ccqt_bt_eq(ret, CCBT_int) && sv_equals(name, SV("main"));
+    _Bool returns = !f->noreturn_ && (main_zero || ccqt_bt_eq(ret, CCBT_void));
+    CcStmtNode* node = cc_stmt_node(p, returns ? CC_STMT_RETURN : CC_STMT_EXPR, f->loc, 0);
+    if(!node) return CC_OOM_ERROR;
+    if(returns){
+        node->return_.first = p->defer_context.active;
+        if(main_zero){
+            node->return_.expr = cc_int64_expr(p, f->loc, ret, 0);
+            if(!node->return_.expr){
+                cc_free_stmt_tree(p, node);
+                return CC_OOM_ERROR;
+            }
+        }
+    }
+    else {
+        CcExpr* expr = cc_make_expr(p, CC_EXPR_BUILTIN, f->loc, ccqt_basic(CCBT_void), 0);
+        if(!expr){
+            cc_free_stmt_tree(p, node);
+            return CC_OOM_ERROR;
+        }
+        expr->builtin.op = CC_BUILTIN_TRAP;
+        node->expr = expr;
+    }
+    return cc_sink_push(p, node);
+}
+
+static
+int
 cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
     int err = cc_check_function_definition_type(p, f->type, f->loc);
     if(err) return err;
@@ -16710,6 +16822,8 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
             err = cc_parse_one(p, (CcParseFlags){0});
             if(err) break;
         }
+        if(err) goto end_sink;
+        err = cc_append_function_exit(p, f, sink);
         if(err) goto end_sink;
         err = cc_finalize_stmt_list(p, f->loc, &sink->stmts, 1, &f->body_tree);
         if(err) goto end_sink;
@@ -19134,6 +19248,8 @@ cc_clone_expr_inner(CcParser* p, CcExpr* e, unsigned depth, SrcLoc call_loc, _Bo
     CcExpr* copy = _cc_alloc_expr(p, n);
     if(!copy) return CC_OOM_ERROR;
     memcpy(copy, e, sizeof *copy);
+    if(p->current_func && (e->kind == CC_EXPR_ALLOCA || e->kind == CC_EXPR_VA))
+        p->current_func->inline_blocked = 1;
     _Bool lhs = 0;
     int err = 0;
     switch(e->kind){

@@ -23,6 +23,11 @@
 #pragma clang assume_nonnull begin
 #endif
 
+enum {
+    CI_DEFAULT_INLINE_BUDGET = 12,
+    CI_DEFAULT_INLINE_HINT_BUDGET = 40,
+};
+
 typedef struct CiInterpFrame CiInterpFrame;
 typedef union NcCallState NcCallState;
 struct CiInterpFrame {
@@ -61,9 +66,10 @@ struct CiInterpreter {
     Marray(CiOp) toplevel_ops;
     AtomMap(uintptr_t) toplevel_labels; // label -> toplevel op index + 1
     size_t toplevel_lowered; // count of parser.toplevel_nodes already lowered
-    size_t toplevel_inlined; // prefix already processed by the inliner
     uint32_t toplevel_slot_size; // bytes of slot storage the toplevel ops need
     uint32_t toplevel_slots_cap;
+    uint32_t toplevel_alignment,
+             toplevel_alloc_alignment;
     void*_Null_unspecified toplevel_slots;
     void* _Null_unspecified toplevel_storage;
     union {
@@ -76,6 +82,8 @@ struct CiInterpreter {
                     _padding:            28;
         };
     };
+    uint32_t inline_budget, 
+             inline_hint_budget;
     int exit_code;
     AtomMap(CiVirtualLib*) virtual_libs;
     AtomMap opened_libs;

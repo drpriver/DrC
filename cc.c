@@ -73,6 +73,8 @@ int main(int argc, char** argv, char** envp){
           syntax_only = 0,
           poison_frame_slots = 0,
           opt_noinline = 0;
+    uint32_t inline_budget = 12,
+             inline_hint_budget = 40;
     Logger* logger = std_logger();
     if(!logger) return 1;
     unsigned flags = IS_WINDOWS?FC_IS_WINDOWS:FC_FLAGS_NONE;
@@ -228,6 +230,18 @@ int main(int argc, char** argv, char** envp){
             .dest = ARGDEST(&opt_noinline),
             .help = "Disable inlining",
         },
+        {
+            .name = SV("-finline-budget"),
+            .dest = ARGDEST(&inline_budget),
+            .help = "Maximum bytecode instructions for automatic inlining",
+            .show_default = 1,
+        },
+        {
+            .name = SV("-finline-hint-budget"),
+            .dest = ARGDEST(&inline_hint_budget),
+            .help = "Maximum bytecode instructions for functions declared inline",
+            .show_default = 1,
+        },
     };
     enum {HELP, HIDDEN_HELP, FISH};
     ArgToParse early_args[] = {
@@ -293,6 +307,8 @@ int main(int argc, char** argv, char** envp){
     cc_interp.parser.cpp.target = cc_targets[cc_target_arg];
     cc_interp.parser.eager_parsing = eager;
     cc_interp.opt_noinline = opt_noinline;
+    cc_interp.inline_budget = inline_budget;
+    cc_interp.inline_hint_budget = inline_hint_budget;
     err = cpp_define_builtin_macros(&cc_interp.parser.cpp);
     if(err) goto stringify_error;
     // _Argc, _Argv and args to main

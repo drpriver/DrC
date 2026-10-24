@@ -113,12 +113,17 @@ struct CcFunc {
              static_: 1,
              inline_: 1,
              always_inline: 1,
+             noinline: 1,
+             hotswappable: 1,
              defined: 1,
              parsed:  1, // If 0, then just an array of tokens instead of array of stmts and needs
                          // to be parsed on first use or codegen.
              parse_failed: 1, // Body failed to parse; tokens have been released. Don't retry.
              libc_builtin: 1,
-             _padding: 24; // free real estate
+             inline_blocked: 1,
+             interp_lowering: 1,
+             noreturn_: 1,
+             _padding: 19; // free real estate
     uint32_t frame_size; // size of params + automatic local vars + temporaries;
     Marray(CcToken)*_Nullable tokens; // If set, the unparsed function body.
                                       // Return to the parser's free list when done.

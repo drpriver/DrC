@@ -210,6 +210,7 @@ static inline void print_argparse_fish_completions(ArgParser*);
     apply(ARG_FLAG, _Bool, "flag") \
     apply(ARG_STRING, StringView, "string") \
     apply(ARG_CSTRING, const char*, "string") \
+    apply(ARG_UINTEGER32, uint32_t, "uint32") \
     apply(ARG_UINTEGER64, uint64_t, "uint64") \
     apply(ARG_FLOAT32, float, "float32") \
     apply(ARG_FLOAT64, double, "float64") \
@@ -221,6 +222,7 @@ static inline void print_argparse_fish_completions(ArgParser*);
     apply(ARG_FLAG, _Bool, "flag") \
     apply(ARG_STRING, StringView, "string") \
     apply(ARG_CSTRING, const char*, "string") \
+    apply(ARG_UINTEGER32, uint32_t, "uint32") \
     apply(ARG_UINTEGER64, uint64_t, "uint64") \
 
 #endif
@@ -249,6 +251,7 @@ static const StringView ArgTypeNames[] = {
 // Type Generic macro allows us to turn a type into an enum.
 #if PARSE_NUMBER_PARSE_FLOATS
 #define ARGTYPE(_x) _Generic(_x, \
+        uint32_t*: ARG_UINTEGER32, \
         int64_t*: ARG_INTEGER64, \
         uint64_t*: ARG_UINTEGER64, \
         float*: ARG_FLOAT32, \
@@ -261,6 +264,7 @@ static const StringView ArgTypeNames[] = {
         CStringView*: ARG_STRING)
 #else
 #define ARGTYPE(_x) _Generic(_x, \
+        uint32_t*: ARG_UINTEGER32, \
         int64_t*: ARG_INTEGER64, \
         uint64_t*: ARG_UINTEGER64, \
         int*: ARG_INT, \
@@ -922,6 +926,10 @@ ap_print_arg_help(const ArgParser* p, const ArgToParse* arg, int columns, const 
                 int64_t* data = arg->dest.pointer;
                 p->print(p->hout, " %lld", (long long)*(data+i));
             }break;
+            case ARG_UINTEGER32:{
+                uint32_t* data = arg->dest.pointer;
+                p->print(p->hout, " %u", (unsigned)*(data+i));
+            }break;
             case ARG_UINTEGER64:{
                 uint64_t* data = arg->dest.pointer;
                 p->print(p->hout, " %llu", (unsigned long long)*(data+i));
@@ -1137,6 +1145,12 @@ ap_parse_arg(ArgToParse* arg, StringView s){
 }while(0)
     int err;
     switch(arg->dest.type){
+        case ARG_UINTEGER32:{
+            uint64_t value; err = parse_unsigned_human(s.text, s.length, &value);
+            if(err) return ARGPARSE_CONVERSION_ERROR;
+            if(value > UINT32_MAX) return ARGPARSE_CONVERSION_ERROR;
+            APPEND_ARG(uint32_t, (uint32_t)value);
+        }break;
         case ARG_INTEGER64:{
             int64_t value; err = parse_int64(s.text, s.length, &value);
             if(err) return ARGPARSE_CONVERSION_ERROR;
@@ -1957,6 +1971,9 @@ print_argparse_error(ArgParser* p, enum ArgParseError error){
                         case ARG_CSTRING:
                             p->print(p->herr, "Unable to parse a string from '%s'\n", arg);
                             return;
+                        case ARG_UINTEGER32:
+                            p->print(p->herr, "Unable to parse a uint32 from '%s'\n", arg);
+                            return;
                         case ARG_UINTEGER64:
                             p->print(p->herr, "Unable to parse a uint64 from '%s'\n", arg);
                             return;
@@ -1996,6 +2013,9 @@ print_argparse_error(ArgParser* p, enum ArgParseError error){
                             // fall-through
                         case ARG_CSTRING:
                             p->print(p->herr, "Unable to parse a string from unknown argument.\n");
+                            return;
+                        case ARG_UINTEGER32:
+                            p->print(p->herr, "Unable to parse a uint32 from unknown argument.\n");
                             return;
                         case ARG_UINTEGER64:
                             p->print(p->herr, "Unable to parse a uint64 from unknown argument.\n");
@@ -2174,6 +2194,7 @@ print_argparse_fish_completions(ArgParser* p){
                 #endif
                 case ARG_STRING:
                 case ARG_CSTRING:
+                case ARG_UINTEGER32:
                 case ARG_INTEGER64:
                 case ARG_UINTEGER64:
                 case ARG_USER_DEFINED:

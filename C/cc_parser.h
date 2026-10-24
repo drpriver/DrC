@@ -74,7 +74,9 @@ struct CcAttributes {
                      is_noreturn:       1,
                      is_thread_local:   1,
                      always_inline:     1,
-                     _padding:          10,
+                     noinline:          1,
+                     hotswappable:      1,
+                     _padding:          8, // free real estate
                      vector_size:       16,
                      aligned:           16,
                      _padding2:         16;

@@ -22,6 +22,7 @@ char* readline(const char* prompt){
 }
 void add_history(const char*){}
 #endif
+[[drc::hotswappable]]
 int math(int x, int y){ return 0; }
 int add(int x, int y){return x+y;}
 int sub(int x, int y){return x-y;}

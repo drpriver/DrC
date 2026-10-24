@@ -1347,10 +1347,9 @@ Interpreter-only::md
 
   `__hotswap(original, replacement)`::md
     Replaces the interpreted function reached by `original` with
-    `replacement` at runtime. Both arguments must be function expressions or
-    function pointers with the same exact function pointer type. `inline`,
-    `__forceinline`, `__attribute__((always_inline))` functions cannot be
-    swapped (as they may have been already inlined).
+    `replacement` at runtime. The original function must have been declared with `hotswappable`.
+    Both arguments must be function expressions or
+    function pointers with the same exact function pointer type.
 
     Returns `0` on success and nonzero on failure.
 
@@ -1359,6 +1358,7 @@ Interpreter-only::md
     interpreter-created function pointers. Chained swaps are followed.
 
     ::pre.C
+      [[drc::hotswappable]]
       int f(void){ return 1; }
       int g(void){ return 2; }
 
@@ -1369,6 +1369,7 @@ Interpreter-only::md
     The replacement must have the same type as the original.
 
     ::pre.C
+      [[drc::hotswappable]]
       void old_tick(void){ puts("old"); }
       void new_tick(void){ puts("new"); }
 

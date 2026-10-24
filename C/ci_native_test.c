@@ -41,6 +41,9 @@
 
 
 static CiRtAny test_any_identity(CiRtAny a){ return a; }
+static unsigned abi_unsigned_char(unsigned char x){ return x; }
+static unsigned abi_unsigned_short(unsigned short x){ return x; }
+static unsigned abi_unsigned_callback(unsigned char (*f)(void)){ return f(); }
 static CiRtAny test_any_callback(CiRtAny (*f)(CiRtAny), CiRtAny a){ return f(a); }
 
 #if !(defined __DRC__ && defined __GLIBC__)
@@ -101,6 +104,14 @@ static float test_float_callback(float (*f)(float), float x){ return f(x); }
 static double test_double_identity(double x){ return x; }
 static long double test_long_double_identity(long double x){ return x; }
 static long double test_long_double_callback(long double (*f)(long double), long double x){ return f(x); }
+static int test_seven(void){ return 7; }
+static int test_nested_return_conventions(long double (*wide)(long double), int (*integer)(void), void (*nothing)(void)){
+    for(int i=0;i<32;i++){
+        if(wide(1.25L)!=1.25L || integer()!=7) return 0;
+        nothing();
+    }
+    return 1;
+}
 struct LongDoubleRecord { long double x; };
 static struct LongDoubleRecord test_ld_record(struct LongDoubleRecord x){ x.x += 1.L; return x; }
 static struct LongDoubleRecord test_ld_record_callback(struct LongDoubleRecord (*f)(struct LongDoubleRecord), struct LongDoubleRecord x){ return f(x); }
@@ -156,6 +167,10 @@ struct BigRecord { long long a,b,c; };
 static struct MixRecord test_mix_return(struct MixRecord x){ x.i+=3; x.d+=4.; return x; }
 static struct ReverseMixRecord test_reverse_mix_return(struct ReverseMixRecord x){ x.i+=3; x.d+=4.; return x; }
 static struct MixRecord test_mix_callback(struct MixRecord (*fn)(struct MixRecord), struct MixRecord x){ return fn(x); }
+static long long abi_stack_tail(int a,int b,int c,int d,int e,int f,int g,int h,
+    unsigned char i,unsigned char j,unsigned short k,unsigned l,long long m,unsigned char n){
+    return a+b+c+d+e+f+g+h+i+j+k+l+m+n;
+}
 static struct ReverseMixRecord test_reverse_mix_callback(struct ReverseMixRecord (*fn)(struct ReverseMixRecord), struct ReverseMixRecord x){ return fn(x); }
 static double test_mix_gp_spill(long long a,long long b,long long c,long long d,long long e,long long f,struct MixRecord x,long long tail,double fp){
     return a+b+c+d+e+f+x.i+x.d+tail+fp;
@@ -566,7 +581,42 @@ TestFunction(test_interop){
         int exit_code;
         _Bool skip;
     } testcases[] = {
+    {
+        "ABI: nested native calls do not change callback return conventions", __LINE__,
+        SVI("long double identity(long double);int seven(void);"
+            "int apply(long double(*)(long double),int(*)(void),void(*)(void));"
+            "long double wide(long double x){long double y=identity(x);seven();return y;}"
+            "int integer(void){identity(2.5L);return 7;}"
+            "void nothing(void){identity(3.5L);}"
+            "return apply(wide,integer,nothing);"),
+        {{SV("identity"),(void*)test_long_double_identity},
+         {SV("seven"),(void*)test_seven},
+         {SV("apply"),(void*)test_nested_return_conventions}}, .exit_code=1,
+    },
+    {
+        "ABI: native stack copy includes full chunks and a byte tail", __LINE__,
+        SVI("long long probe(int,int,int,int,int,int,int,int,unsigned char,unsigned char,unsigned short,unsigned,long long,unsigned char);"
+            "return probe(1,2,3,4,5,6,7,8,9,10,513,1000,10000LL,17)==11585;"),
+        {{SV("probe"),(void*)abi_stack_tail}}, .exit_code=1,
+    },
+    {
+        "ABI: native result survives callback with nested native call", __LINE__,
+        SVI("struct S{long long i;double d;};struct S bump(struct S);"
+            "struct S apply(struct S(*)(struct S),struct S);"
+            "struct S f(struct S s){return bump(s);}"
+            "struct S s=apply(f,(struct S){7,2.5});return s.i==10&&s.d==6.5;"),
+        {{SV("bump"),(void*)test_mix_return},{SV("apply"),(void*)test_mix_callback}}, .exit_code=1,
+    },
     #ifndef _MSC_VER
+    {
+        "ABI: aligned outgoing storage in direct and indirect nested calls", __LINE__,
+        SVI("struct __attribute__((aligned(128))) S {long long x;};int probe(int,...);"
+            "int call(int(*p)(int,...)){char pad=1;return pad&&p(0,(struct S){19},23LL);}"
+            "int direct(void){char pad=1;return pad&&probe(0,(struct S){19},23LL);}"
+            "return direct()&&call(probe)&&probe(0,(struct S){19},23LL);"),
+        {{SV("probe"),ABI_VARARG_SYMBOL(abi_wide_aligned)}},
+        .skip=ABI_VARARG_SKIP, .exit_code=1,
+    },
     {
         "ABI: over-aligned variadic stack arguments in both directions", __LINE__,
         SVI("struct __attribute__((aligned(128))) S {long long x;};int probe(int,...);int apply(int(*)(int,...));"
@@ -592,6 +642,17 @@ TestFunction(test_interop){
          {SV("supply_list"),ABI_VARARG_SYMBOL(abi_supply_list)},
          {SV("invoke"),ABI_VARARG_SYMBOL(abi_invoke_variadic)}},
         .exit_code=1,.skip=ABI_VARARG_SKIP,
+    },
+    {
+        "ABI: narrow unsigned values after dirty registers", __LINE__,
+        SVI("unsigned byte(unsigned char); unsigned half(unsigned short);\n"
+            "unsigned callback(unsigned char(*)(void));\n"
+            "unsigned long long dirty(unsigned long long x){return x;}\n"
+            "unsigned char f(void){dirty(~0ull);return 3;}\n"
+            "dirty(~0ull); unsigned a=byte(7);dirty(~0ull);unsigned b=half(513);\n"
+            "return a==7&&b==513&&callback(f)==3;\n"),
+        {{SV("byte"),(void*)abi_unsigned_char},{SV("half"),(void*)abi_unsigned_short},
+            {SV("callback"),(void*)abi_unsigned_callback}}, .exit_code=1,
     },
     {
         "ABI: two GP words with one register remaining", __LINE__,
@@ -1786,6 +1847,8 @@ TestFunction(test_interop){
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .poison_frame_slots = 1,
+            .inline_budget = CI_DEFAULT_INLINE_BUDGET,
+            .inline_hint_budget = CI_DEFAULT_INLINE_HINT_BUDGET,
             .exit_code = -1,
             .parser = {
                 .cpp = {
@@ -2033,6 +2096,8 @@ TestFunction(test_interp){
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .poison_frame_slots = 1,
+            .inline_budget = CI_DEFAULT_INLINE_BUDGET,
+            .inline_hint_budget = CI_DEFAULT_INLINE_HINT_BUDGET,
             .exit_code = -1,
             .procedural_macros = 1,
             .parser = {
@@ -2178,6 +2243,8 @@ TestFunction(test_interp_fail){
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .poison_frame_slots = 1,
+            .inline_budget = CI_DEFAULT_INLINE_BUDGET,
+            .inline_hint_budget = CI_DEFAULT_INLINE_HINT_BUDGET,
             .can_dlopen = 1,
             .exit_code = -1,
             .procedural_macros = 1,

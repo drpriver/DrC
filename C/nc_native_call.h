@@ -52,7 +52,8 @@ struct NcAbiType {
     NcAbiMode mode:        2; // NcAbiMode.
     uint32_t  count:       3, // 0-4 register pieces.
               sign_extend: 1,
-              _padding:    21;
+              zero_extend: 1,
+              _padding:    20;
     NcAbiPiece pieces[4];
 };
 _Static_assert(sizeof(NcAbiType) == 16, "");
@@ -72,7 +73,9 @@ _Static_assert(sizeof(NcAbiArgument) == 28, "");
 typedef struct NcCallPlan NcCallPlan;
 struct NcCallPlan {
     CcTarget target;
-    uint32_t count, fixed_count;
+    uint32_t count,
+             fixed_count: 31,
+             is_variadic: 1;
     NcAbiType result;
     unsigned gp, fp, named_gp, named_fp;
     size_t stack_size, named_stack_size, copy_size;
@@ -266,6 +269,145 @@ nc_state_init(NcCallState *s, const NcCallPlan *p, void *_Nullable result);
 // result:
 //   For an indirect return, this pointer should point to a suitably sized and
 //   aligned buffer. Otherwise it can be NULL.
+//
+
+static
+size_t
+nc_stack_storage_size(const NcCallPlan *p);
+// nc_stack_storage_size()
+// -----------------------
+// Compute the stack storage size when registers are allocated separately.
+//
+// Returns:
+// --------
+//   Bytes required for stack arguments, indirect argument copies, and any
+//   prefix. Allocate this storage with alignment `p->stack_alignment`.
+//
+// Arguments:
+// ----------
+// p:
+//   The call plan to compute the allocation size for.
+//
+
+static
+size_t
+nc_stack_storage_prefix(const NcCallPlan *p);
+// nc_stack_storage_prefix()
+// -------------------------
+// Locate the stack arguments within separately allocated stack storage.
+//
+// Returns:
+// --------
+//   Byte offset from the allocation to the stack arguments.
+//   On Windows this reserves the home area and alignment padding.
+//   Otherwise it is zero.
+//
+// Arguments:
+// ----------
+// p:
+//   The call plan describing the stack layout.
+//
+
+static
+size_t
+nc_capture_size(CcTarget target);
+// nc_capture_size()
+// -----------------
+// Compute the size of the native bridge's register capture for a target.
+//
+// Returns:
+// --------
+//   The capture size in bytes, excluding stack arguments and indirect copies.
+//
+// Arguments:
+// ----------
+// target:
+//   The target whose capture representation is used.
+//
+
+static
+size_t
+nc_capture_result_offset(CcTarget target);
+// nc_capture_result_offset()
+// --------------------------
+// Locate the result register storage within a native bridge capture.
+//
+// Returns:
+// --------
+//   Byte offset of the first GP result register in the capture.
+//
+// Arguments:
+// ----------
+// target:
+//   The target whose capture representation is used.
+//
+
+static
+void
+nc_registers_init(NcCallState *s, const NcCallPlan *p,
+        void *stack_storage, void *_Nullable result);
+// nc_registers_init()
+// -------------------
+// Clear the register buffer and initialize the stack-argument pointer,
+// indirect-return pointer, and target-specific call metadata.
+// Stack-argument storage is supplied separately and is not cleared.
+//
+// Arguments:
+// ----------
+// s:
+//   Register storage to clear and initialize, sized and aligned for
+//   `NcCallState`.
+//
+// p:
+//   The call plan for this state.
+//
+// stack_storage:
+//   Storage of `nc_stack_storage_size(p)` bytes, aligned to
+//   `p->stack_alignment`.
+//   This allocation must remain live while the callee uses its arguments.
+//
+// result:
+//   For an indirect return, a suitably sized and aligned destination buffer.
+//   Otherwise it can be `NULL`.
+//
+
+static
+void *_Nullable
+nc_indirect_result(const NcCallState *s, const NcCallPlan *p);
+// nc_indirect_result()
+// --------------------
+// Read the indirect-result destination from the ABI register storage.
+//
+// Returns:
+// --------
+//   The destination pointer, or `NULL` if the plan returns directly.
+//
+// Arguments:
+// ----------
+// s:
+//   Call state containing the incoming result destination.
+//
+// p:
+//   The call plan describing the result ABI.
+//
+
+static
+void
+nc_set_result_destination(NcCallState *s, const NcCallPlan *p, void *_Nullable result);
+// nc_set_result_destination()
+// ---------------------------
+// Set the indirect-result destination. Does nothing for direct returns.
+//
+// Arguments:
+// ----------
+// s:
+//   Call state to update.
+//
+// p:
+//   The call plan describing the result ABI.
+//
+// result:
+//   The destination pointer to store in the ABI register storage.
 //
 
 static

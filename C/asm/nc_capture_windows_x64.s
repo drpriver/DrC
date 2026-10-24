@@ -30,12 +30,6 @@ nc_capture_entry:
     movdqu %xmm1, 80(%rsp)
     movdqu %xmm2, 96(%rsp)
     movdqu %xmm3, 112(%rsp)
-    // Home GP arguments: a native Win64 va_list can traverse these and
-    // subsequent stack arguments as one contiguous sequence of 8-byte slots.
-    movq %rcx, 176(%rsp)
-    movq %rdx, 184(%rsp)
-    movq %r8, 192(%rsp)
-    movq %r9, 200(%rsp)
     leaq 208(%rsp), %rax
     movq %rax, 128(%rsp)
     movq 8(%r10), %r11

@@ -52,11 +52,374 @@ TestFunction(test_interpreter){
         _Bool skip;
         _Bool procedural_macros;
         _Bool sysv_bitfields; // Requires tight packing across bitfield storage units.
-        _Bool no_toplevel_ops;
         _Bool embed_files;
         _Bool builtin_headers;
+        _Bool call_boundaries; // Exact backtrace frames are under test.
         const CcTargetConfig*_Nullable target;
     } testcases[] = {
+        {
+            "ABI copies odd-sized aggregate argument and result pieces", __LINE__,
+            SVI("struct S3 {unsigned char a[3];};struct S5 {unsigned char a[5];};"
+                "struct S6 {unsigned char a[6];};struct S7 {unsigned char a[7];};"
+                "struct S3 f3(struct S3 s){s.a[0]++;return s;}"
+                "struct S5 f5(struct S5 s){s.a[0]++;return s;}"
+                "struct S6 f6(struct S6 s){s.a[0]++;return s;}"
+                "struct S7 f7(struct S7 s){s.a[0]++;return s;}"
+                "struct S3 a=f3((struct S3){{1,2,253}});"
+                "struct S5 b=f5((struct S5){{3,4,5,6,251}});"
+                "struct S6 c=f6((struct S6){{7,8,9,10,11,249}});"
+                "struct S7 d=f7((struct S7){{12,13,14,15,16,17,247}});"
+                "return a.a[0]==2&&a.a[1]==2&&a.a[2]==253"
+                "&&b.a[0]==4&&b.a[3]==6&&b.a[4]==251"
+                "&&c.a[0]==8&&c.a[4]==11&&c.a[5]==249"
+                "&&d.a[0]==13&&d.a[5]==17&&d.a[6]==247;"),
+            .exit_code=1,
+            .call_boundaries=1,
+        },
+        {
+            "On-demand candidate lowering handles forced mutual recursion", __LINE__,
+            SVI("__forceinline int odd(int n);"
+                "__forceinline int even(int n){return n?odd(n-1):1;}"
+                "__forceinline int odd(int n){return n?even(n-1):0;}"
+                "return even(12)&&odd(11)&&!even(11)&&!odd(12);"),
+            .exit_code=1,
+        },
+        {
+            "On-demand candidate lowering ignores calls in eliminated branches", __LINE__,
+            SVI("int unavailable(void);int dead(void){return unavailable();}"
+                "int leaf(void){if(0)return dead();return 7;}"
+                "int root(void){return leaf();}return root()==7;"),
+            .exit_code=1,
+        },
+        {
+            "On-demand candidate lowering retains transitive data and closure dependencies", __LINE__,
+            SVI("int middle(int);int root(int x){return middle(x)+middle(x+1);}"
+                "int leaf(int x){static int bias=5;return x+bias;}"
+                "int (*pick(void))(int){return leaf;}"
+                "int middle(int x){return pick()(x);}return root(3)==17;"),
+            .exit_code=1,
+        },
+        {
+            "Constexpr array slices retain distinct backing objects", __LINE__,
+            SVI("__forceinline int f(void){constexpr int a[2]={2,3},b[2]={5,7};"
+                "auto x=a[:];auto y=b[:];"
+                "return x.data!=y.data&&x[0]==2&&x[1]==3&&y[0]==5&&y[1]==7;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "Constexpr aggregate copies retain symbolic initializer dependencies", __LINE__,
+            SVI("int global=17;struct S{long long a[3];const int*p;};"
+                "__forceinline struct S make(void){"
+                "constexpr struct S a={{3,5,7},&global};constexpr struct S b=a;return b;}"
+                "struct S s=make();global=19;"
+                "return s.a[0]==3&&s.a[1]==5&&s.a[2]==7&&s.p==&global&&*s.p==19;"),
+            .exit_code=1,
+        },
+        {
+            "Constexpr runtime indexing preserves aligned temporary values", __LINE__,
+            SVI("__forceinline int f(int i){alignas(64) constexpr int a[3]={2,4,6};"
+                "int x=a[i];int y=a[(i+1)%3];return x*10+y;}"
+                "return f(0)==24&&f(1)==46&&f(2)==62;"),
+            .exit_code=1,
+        },
+        {
+            "Constexpr decay and subobject addresses preserve identity across branches", __LINE__,
+            SVI("struct S{int a[2];};__forceinline int f(int choose){"
+                "constexpr struct S s={{3,7}};const int*p;"
+                "if(choose)p=s.a;else p=&s.a[0];"
+                "return p==s.a&&p+1==&s.a[1]&&p[choose]==(choose?7:3);}"
+                "return f(0)&&f(1);"),
+            .exit_code=1,
+        },
+        {
+            "Inline aggregate arguments snapshot storage exposed by array decay", __LINE__,
+            SVI("struct S{int a[1];};"
+                "__forceinline int take(struct S s,int*p){*p=9;return s.a[0];}"
+                "int f(void){struct S s={{3}};return take(s,s.a)==3&&s.a[0]==9;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "Inlining preserves parameters exposed by implicit receiver addresses", __LINE__,
+            SVI("__forceinline int bump(int*p){return ++*p;}"
+                "__forceinline int f(int x){int before=x;int after=x.bump();"
+                "return before*10+after;}return f(3)==34&&f(8)==89;"),
+            .exit_code=1,
+        },
+        {
+            "Inlining preserves writes through member and comma lvalues", __LINE__,
+            SVI("struct S{int x,y;};"
+                "__forceinline int f(int x,struct S s){"
+                "int before=x+s.x;((void)0,x)+=2;++s.x;s.y--;"
+                "return before*100+x*10+s.x+s.y;}"
+                "return f(3,(struct S){4,6})==760;"),
+            .exit_code=1,
+        },
+        {
+            "Repeated inline calls keep argument values and storage separate", __LINE__,
+            SVI("int read(const int*p){return *p;}"
+                "__forceinline int f(int x,int address){constexpr int k=17;"
+                "if(address)return read(&k)+x;return k*x;}"
+                "int g(int x){return f(x,1)+f(2,0)+f(3,0);}"
+                "return g(4)==106&&g(9)==111&&f(5,0)==85;"),
+            .exit_code=1,
+        },
+        {
+            "Default argument alloca retains its caller lifetime beside a VLA", __LINE__,
+            SVI("__forceinline int take(void*p=__builtin_alloca(16)){"
+                "*(int*)p=25;return *(int*)p;}"
+                "__forceinline int g(void){return take();}"
+                "int f(int n){int a[n];a[0]=17;return g()+a[0];}return f(3);"),
+            .exit_code=42,
+        },
+        {
+            "Inline return slot joins returns inside the final expression", __LINE__,
+            SVI("__forceinline int f(int x){return ({if(x)return 7;9;});}"
+                "int g(int x){return f(x);}return g(1)==7&&g(0)==9;"),
+            .exit_code=1,
+        },
+        {
+            "Inline slot reuse preserves snapshots and cleanup results", __LINE__,
+            SVI("__forceinline int pair(int a,int b){return a*10+b;}"
+                "__forceinline int set(int*p){*p=9;return 2;}"
+                "__forceinline int saved(int x,int*p){defer{*p=7;}return x;}"
+                "int f(void){int x=3;int a=pair(x,set(&x));int b=saved(x,&x);"
+                "return a==32&&b==9&&x==7;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "AST inlining: sample policies retain loops, loads and counters", __LINE__,
+            SVI("struct Stats{int processed,clipped;};"
+                "__forceinline int adjust(int v,int gain,int bias,int limit,int clamp,struct Stats*s){"
+                "s->processed++;int r=v*gain+bias;if(clamp){if(r<0){s->clipped++;return 0;}"
+                "if(r>limit){s->clipped++;return limit;}}return r;}"
+                "__forceinline int sum(const int*p,int n,int clamp,struct Stats*s){"
+                "int r=0;for(int i=0;i<n;i++)r+=adjust(p[i],3,5,31,clamp,s);return r;}"
+                "int clamped(const int*p,int n,struct Stats*s){return sum(p,n,1,s);}"
+                "int raw(const int*p,int n,struct Stats*s){return sum(p,n,0,s);}"
+                "int p[]={-4,0,7,20};struct Stats a={0},b={0};"
+                "return clamped(p,4,&a)==62&&raw(p,4,&b)==89"
+                "&&a.processed==4&&a.clipped==2&&b.processed==4&&b.clipped==0;"),
+            .exit_code=1,
+        },
+        {
+            "AST inlining: repeated cleanup bodies reserve fresh local slots", __LINE__,
+            SVI("__forceinline int f(int early,int*p){defer{int a=*p,b=*p+2;*p=(a+1)+(b+1);}"
+                "if(early)return 1;return 2;}int run(int e,int*p){return f(e,p);}"
+                "int x=3,y=3;return run(1,&x)==1&&run(0,&y)==2&&x==10&&y==10;"),
+            .exit_code=1,
+        },
+        {
+            "AST inlining: constexpr locals retain addressable storage", __LINE__,
+            SVI("int read(const int*p){return *p;}"
+                "__forceinline int f(int x){constexpr int k=17;return read(&k)+x;}"
+                "return f(3)==20&&f(9)==26;"),
+            .exit_code=1,
+        },
+        {
+            "Constant propagation preserves builtin argument side effects", __LINE__,
+            SVI("int f(void){char a[2];int n=0;__builtin___clear_cache((n++,a),(n++,a+2));return n;}return f();"),
+            .exit_code=2,
+        },
+        {
+            "AST inlining: constants, fresh bindings, mutation and recursion", __LINE__,
+            SVI("__forceinline int choose(int x){if(x<4)return x*3;return x+7;}"
+                "__forceinline int change(int x){int*p=&x;*p+=5;return x;}"
+                "__forceinline int recurse(int n){if(!n)return 1;return n*recurse(n-1);}"
+                "__forceinline int wrap(int x){return choose(x)+choose(9);}"
+                "return choose(2)==6&&choose(8)==15&&wrap(3)==25&&change(2)==7&&recurse(5)==120;"),
+            .exit_code=1,
+        },
+        {
+            "AST inlining: propagated results retain side effects and local writes", __LINE__,
+            SVI("int calls;__forceinline int one(void){calls++;return 1;}"
+                "__forceinline int two(void){calls++;return 2;}"
+                "int f(void){int x=one(),y=two();int z=4;for(int i=0;i<3;i++)z++;"
+                "return x+y==3&&calls==2&&z==7;}return f();"),
+            .exit_code=1,
+        },
+        {
+            "Inlining: arguments and early returns bypass ABI registers", __LINE__,
+            SVI("__forceinline int pick(int a,int b,int c,int d,int e,int f,int g,int h,int i,int j){"
+                "switch(a){case 1:return b+j;case 2:return c+i;default:return d+e+f+g+h;}}"
+                "__forceinline int wrap(int x){return pick(x,2,3,4,5,6,7,8,9,10);}"
+                "return wrap(1)==12&&wrap(2)==12&&wrap(3)==30;"),
+            .exit_code=1,
+        },
+        {
+            "Inlining: aggregate and FP arguments and results bypass ABI registers", __LINE__,
+            SVI("struct S{long long a,b,c;};struct F{double a,b;};int count;"
+                "struct S bump(struct S s) __attribute__((always_inline)){s.a++;count++;return s;}"
+                "struct F pair(double a,double b) __attribute__((always_inline)){return (struct F){a,b};}"
+                "__forceinline double sum(struct F f){return f.a+f.b;}"
+                "struct S s=bump((struct S){1,2,3});bump(s);"
+                "return s.a==2&&s.b==2&&s.c==3&&count==2&&sum(pair(1.5,2.5))==4;"),
+            .exit_code=1,
+        },
+        {
+            "Inlining: preserve argument evaluation and address-taken parameter copies", __LINE__,
+            SVI("struct S{int x,y;};"
+                "__forceinline int change(int*p){*p=9;return 4;}"
+                "__forceinline int take(int a,int b,int c){int*p=&a;*p+=b;return a+c;}"
+                "__forceinline int probe(void){int x=3;return take(x,change(&x),x)==16&&x==9;}"
+                "return probe();"),
+            .exit_code=1,
+        },
+        {
+            "ABI: Windows homes each register argument once", __LINE__,
+            SVI("struct S{long long a,b,c;};int f(int n,...){"
+                "__builtin_va_list ap;__builtin_va_start(ap,n);"
+                "long long a=__builtin_va_arg(ap,long long);"
+                "double b=__builtin_va_arg(ap,double);"
+                "struct S s=__builtin_va_arg(ap,struct S);"
+                "int tail=__builtin_va_arg(ap,int);__builtin_va_end(ap);"
+                "return n==1&&a==7&&b==2.5&&s.a==3&&s.b==4&&s.c==5&&tail==9;}"
+                "return f(1,7LL,2.5,(struct S){3,4,5},9);"),
+            .exit_code=1, .target=&cc_target_x86_64_windows_msvc,
+        },
+        {
+            "ABI: read-only argument tails need no snapshots", __LINE__,
+            SVI("int sink(int a,int b){return a+b;}"
+                "int forward(int x,int y){return sink(x,y+1);}"
+                "int last(int x){return sink(7,x);}"
+                "return forward(3,4)==8&&last(5)==12;"),
+            .exit_code=1,
+        },
+        {
+            "ABI: later calls preserve borrowed scalar and aggregate arguments", __LINE__,
+            SVI("struct S{int x,y;};"
+                "int change(int*p){*p=9;return 4;}"
+                "int change_s(struct S*p){p->x=9;return 4;}"
+                "int sum(int a,int b,int c){return a+b+c;}"
+                "int take(struct S s,int b){return s.x+s.y+b;}"
+                "int probe(void){int x=3;struct S s={2,5};"
+                "int a=sum(x,change(&x),x);"
+                "int b=take(s,change_s(&s));"
+                "return a==16&&b==11&&x==9&&s.x==9;}return probe();"),
+            .exit_code=1,
+        },
+        {
+            "ABI: minimal register-only call bytecode", __LINE__,
+            SVI("int b(void){return 1;}int c(void){return 2;}"
+                "int a(void){int x=b();int y=c();return x+y;}"
+                "int consume(const char*p,int x){return p[0]=='%'&&x==3;}"
+                "consume(\"%d\",a());return 3;"),
+            .exit_code=3, .target=&cc_target_aarch64_macos,
+        },
+        {
+            "ABI: discarded aggregate return still has a destination", __LINE__,
+            SVI("struct S{long long a,b,c;};int count;"
+                "__forceinline struct S f(void){count++;return (struct S){1,2,3};}"
+                "f();return count;"),
+            .exit_code=1,
+        },
+        {
+            "ABI: empty variadic tail survives a register-only nested call", __LINE__,
+            SVI("int g(void){return 3;}int f(int n,...){g();__builtin_va_list ap;"
+                "__builtin_va_start(ap,n);__builtin_va_end(ap);return n;}return f(7);"),
+            .exit_code=7,
+        },
+        {
+            "ABI: module frames align outgoing variadic storage", __LINE__,
+            SVI("_Module m=__compile(\"struct __attribute__((aligned(128))) S {long long x;};"
+                "int f(int n,...){__builtin_va_list ap;__builtin_va_start(ap,n);"
+                "struct S s=__builtin_va_arg(ap,struct S);long long t=__builtin_va_arg(ap,long long);"
+                "__builtin_va_end(ap);return s.x==19&&t==23;}"
+                "return f(0,(struct S){19},23LL);\",\"\");return m.run();"),
+            .exit_code=1,
+        },
+        {
+            "ABI locations: narrow values preserve adjacent arguments and result fields", __LINE__,
+            SVI("struct R {signed char a; unsigned char b; unsigned short c;};"
+                "struct R f(signed char a,double d,unsigned char b,double e,unsigned short c,"
+                "int x,int y,int z,int w){"
+                "if(d!=1.5||e!=2.5||x!=11||y!=12||z!=13||w!=14)return (struct R){0};"
+                "return (struct R){a,b,c};}"
+                "struct R r=f(-101,1.5,251,2.5,65531,11,12,13,14);"
+                "return r.a==-101&&r.b==251&&r.c==65531;"),
+            .exit_code=1,
+        },
+        {
+            "ABI locations: mixed variadic register saves and stack overflow", __LINE__,
+            SVI("int clobber(int a,double b){return a+(int)b;}"
+                "int check(int n,...){__builtin_va_list ap;__builtin_va_start(ap,n);"
+                "int ok=1;for(int i=0;i<n;i++){clobber(91,92.0);"
+                "int a=__builtin_va_arg(ap,int);double b=__builtin_va_arg(ap,double);"
+                "ok=ok&&a==i+1&&b==i+1.5;}__builtin_va_end(ap);return ok;}"
+                "return check(10,1,1.5,2,2.5,3,3.5,4,4.5,5,5.5,6,6.5,7,7.5,8,8.5,9,9.5,10,10.5);"),
+            .exit_code=1,
+        },
+        {
+            "ABI transfers: spilled indirect arguments and nested aggregate returns", __LINE__,
+            SVI("struct S {long long a,b,c;};\n"
+                "struct S bump(struct S s){s.a++;s.c+=2;return s;}\n"
+                "__forceinline struct S pass(int a,int b,int c,int d,int e,int f,int g,int h,int i,struct S s){\n"
+                "s.b+=a+b+c+d+e+f+g+h+i;return bump(s);}\n"
+                "struct S s=pass(1,2,3,4,5,6,7,8,9,(struct S){10,20,30});\n"
+                "return s.a==11&&s.b==65&&s.c==32;\n"),
+            .exit_code=1,
+        },
+        {
+            "ABI transfers: mixed pieces through inline branches", __LINE__,
+            SVI("struct S {double d;int i;};\n"
+                "__forceinline struct S f(int n,struct S s){switch(n){case 0:s.i+=3;break;case 1:s.d+=2.5;break;default:s.i=9;}return s;}\n"
+                "__forceinline struct S g(struct S s){for(int i=0;i<2;i++)s=f(i,s);return s;}\n"
+                "struct S s=g((struct S){1.25,4});return s.d==3.75&&s.i==7;\n"),
+            .exit_code=1,
+        },
+        {
+            "ABI transfers: FP overflow and narrow signed results", __LINE__,
+            SVI("signed char narrow(int n){return n;}\n"
+                "double f(double a,double b,double c,double d,double e,double f,double g,double h,double i,double j){\n"
+                "return a+b+c+d+e+f+g+h+i+j+narrow(-7);}\n"
+                "return f(1,2,3,4,5,6,7,8,9,10)==48;\n"),
+            .exit_code=1,
+        },
+        {
+            "ABI: register-only calls have small frames", __LINE__,
+            SVI("int b(void){return 1;} int c(void){return 2;}\n"
+                "int a(void){int x=b(); int y=c(); return x+y;}\n"
+                "return a();\n"),
+            .exit_code = 3,
+        },
+        {
+            "ABI: nested argument evaluation preserves earlier values", __LINE__,
+            SVI("int x=3; int change(void){x=9; return 4;}\n"
+                "int sum(int a,int b,int c){return a+b+c;}\n"
+                "return sum(x,change(),sum(1,2,3));\n"),
+            .exit_code = 13,
+        },
+        {
+            "ABI: variadic arguments survive calls before and after va_start", __LINE__,
+            SVI("int clobber(int a,int b){return a+b;}\n"
+                "int sum(int n,...){ clobber(91,92);\n"
+                "__builtin_va_list ap; __builtin_va_start(ap,n); int s=0;\n"
+                "for(int i=0;i<n;i++){clobber(93,94); s+=__builtin_va_arg(ap,int);}\n"
+                "__builtin_va_end(ap); return s;}\n"
+                "return sum(10,1,2,3,4,5,6,7,8,9,10);\n"),
+            .exit_code = 55,
+        },
+        {
+            "ABI: variadic indirect returns preserve their destination across nested calls", __LINE__,
+            SVI("struct S {long long a,b,c;};"
+                "struct S leaf(int x){return (struct S){x,x+1,x+2};}"
+                "struct S sum(int n,...){__builtin_va_list ap;__builtin_va_start(ap,n);"
+                "struct S r={0};for(int i=0;i<n;i++){"
+                "struct S s=leaf(__builtin_va_arg(ap,int));r.a+=s.a;r.b+=s.b;r.c+=s.c;}"
+                "__builtin_va_end(ap);return r;}"
+                "struct S (*p)(int,...)=sum;struct S a=p(10,1,2,3,4,5,6,7,8,9,10);"
+                "struct S b=sum(2,20,30);"
+                "return a.a==55&&a.b==65&&a.c==75&&b.a==50&&b.b==52&&b.c==54;"),
+            .exit_code=1,
+        },
+        {
+            "ABI: indirect results survive recursive and inline calls", __LINE__,
+            SVI("struct S {long long a,b,c,d;};\n"
+                "struct S f(int n){if(!n)return (struct S){1,2,3,4};\n"
+                "struct S s=f(n-1); s.a+=n; return s;}\n"
+                "inline struct S g(int n){return f(n);}\n"
+                "struct S s=g(4); return s.a+s.b+s.c+s.d;\n"),
+            .exit_code = 20,
+        },
         {
             "declaration checks preserve valid qualifiers and alignment", __LINE__,
             SVI("typedef int *P; restrict P p;\n"
@@ -1219,7 +1582,6 @@ TestFunction(test_interpreter){
             SVI("const unsigned char table[4]={1,2,3,4}; int n=6*7;"
                 "int* p=&n; int f(void){return *p+table[2];} int (*fp)(void)=f;"),
             .exit_code=-1,
-            .no_toplevel_ops=1,
         },
         {
             "global static data: initialized before top-level execution", __LINE__,
@@ -4322,7 +4684,7 @@ TestFunction(test_interpreter){
         },
         {
             "call: hotswap preserves unnamed parameter slots", __LINE__,
-            SVI("int f(char, double, int z){return z;}\n"
+            SVI("[[drc::hotswappable]] int f(char, double, int z){return z;}\n"
                 "int g(char c,double d,int z){return c+(int)d+z;}\n"
                 "int (*p)(char,double,int)=f; __hotswap(f,g);\n"
                 "return f(1,2.0,3)+p(4,5.0,6);\n"),
@@ -8559,15 +8921,34 @@ TestFunction(test_interpreter){
             .exit_code = 7,
         },
         {
+            "__hotswap rejects unmarked originals including self swaps", __LINE__,
+            SVI("int f(void){return 1;}int g(void){return 2;}int(*p)(void)=f;"
+                "return __hotswap(f,g)!=0&&__hotswap(p,g)!=0&&__hotswap(f,f)!=0&&f()==1;"),
+            .exit_code = 1,
+        },
+        {
+            "hotswappable persists from prototype and overrides forced inlining", __LINE__,
+            SVI("[[drc::hotswappable]] int f(int);__forceinline int f(int x){return x+1;}"
+                "int g(int x){return x+2;}int(*p)(int)=f;"
+                "if(f(40)!=41||__hotswap(p,g))return 0;return f(40)==42&&p(40)==42;"),
+            .exit_code = 1,
+        },
+        {
+            "hotswappable persists from definition through redeclaration", __LINE__,
+            SVI("[[drc::hotswappable]] int f(void){return 1;}int f(void);"
+                "int g(void){return 2;}return __hotswap(f,g)==0&&f()==2;"),
+            .exit_code = 1,
+        },
+        {
             "__hotswap ignores parameter storage alignment", __LINE__,
             SVI("typedef int A __attribute__((aligned(32)));"
-                "int f(int x){return x+1;}int g(A x){return x+2;}"
+                "[[drc::hotswappable]] int f(int x){return x+1;}int g(A x){return x+2;}"
                 "if(__hotswap(f,g))return 0;return f(40)==42;"),
             .exit_code=1,
         },
         {
             "__hotswap compares function signatures without parameter object qualifiers", __LINE__,
-            SVI("int f(int x) { return x+1; }\n"
+            SVI("[[drc::hotswappable]] int f(int x) { return x+1; }\n"
                 "int g(const int x) { return x+2; }\n"
                 "int (*const p)(int)=f;\n"
                 "if (__hotswap(p,g)) return 0;\n"
@@ -8589,7 +8970,7 @@ TestFunction(test_interpreter){
         },
         {
             "__hotswap direct call", __LINE__,
-            SVI("int f(void){ return 1; }\n"
+            SVI("[[drc::hotswappable]] int f(void){ return 1; }\n"
                "int g(void){ return 2; }\n"
                "int err = __hotswap(f, g);\n"
                "return err ? 99 : f();\n"),
@@ -8639,13 +9020,13 @@ TestFunction(test_interpreter){
         },
         {
             "__hotswap permits inline replacement", __LINE__,
-            SVI("int f(void){return 1;} inline int g(void){return 2;}\n"
+            SVI("[[drc::hotswappable]] int f(void){return 1;} inline int g(void){return 2;}\n"
                 "return __hotswap(f,g)==0&&f()==2&&__hotswap(g,f)!=0&&g()==2;\n"),
             .exit_code = 1,
         },
         {
             "__hotswap indirect call", __LINE__,
-            SVI("int f(void){ return 1; }\n"
+            SVI("[[drc::hotswappable]] int f(void){ return 1; }\n"
                "int g(void){ return 2; }\n"
                "int (*p)(void) = f;\n"
                "int err = __hotswap(f, g);\n"
@@ -8654,8 +9035,8 @@ TestFunction(test_interpreter){
         },
         {
             "__hotswap chain", __LINE__,
-            SVI("int f(void){ return 1; }\n"
-               "int g(void){ return 2; }\n"
+            SVI("[[drc::hotswappable]] int f(void){ return 1; }\n"
+               "[[drc::hotswappable]] int g(void){ return 2; }\n"
                "int h(void){ return 3; }\n"
                "__hotswap(f, g);\n"
                "__hotswap(g, h);\n"
@@ -8664,7 +9045,7 @@ TestFunction(test_interpreter){
         },
         {
             "__hotswap null replacement fails", __LINE__,
-            SVI("int f(void){ return 1; }\n"
+            SVI("[[drc::hotswappable]] int f(void){ return 1; }\n"
                "int (*p)(void) = 0;\n"
                "return __hotswap(f, p) != 0;\n"),
             .exit_code = 1,
@@ -11154,6 +11535,32 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "noinline: prefix and postfix attributes preserve call frames", __LINE__,
+            SVI("void *entries[8];\n"
+                "__attribute__((noinline)) inline int prefix(void){return __builtin_capture_backtrace(entries,8);}\n"
+                "inline int postfix(void) __attribute__((__noinline__)){return __builtin_capture_backtrace(entries,8);}\n"
+                "return prefix()==2 && postfix()==2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "noinline: declarations and redeclarations preserve the attribute", __LINE__,
+            SVI("void *entries[8];\n"
+                "__attribute__((noinline)) inline int first(void), second(void);\n"
+                "int first(void){return __builtin_capture_backtrace(entries,8);}\n"
+                "int second(void){return __builtin_capture_backtrace(entries,8);}\n"
+                "inline int later(void){return __builtin_capture_backtrace(entries,8);}\n"
+                "int later(void) __attribute__((noinline));\n"
+                "return first()==2 && second()==2 && later()==2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "noinline: overrides always_inline", __LINE__,
+            SVI("void *entries[8];\n"
+                "__attribute__((noinline,always_inline)) int probe(void){return __builtin_capture_backtrace(entries,8);}\n"
+                "return probe()==2;\n"),
+            .exit_code = 1,
+        },
+        {
             "backtrace: capture survives return and preserves call sites", __LINE__,
             SVI("#if !__has_builtin(__builtin_capture_backtrace) || !__has_builtin(__builtin_symbolicate)\n#error missing backtrace builtins\n#endif\n"
                 "void *entries[8]; constexpr int base = __LINE__;\n"
@@ -11165,6 +11572,7 @@ TestFunction(test_interpreter){
                 "if(loc.line != base+1+i || !loc.col || !loc.file.count) return 92;}\n"
                 "return 1;\n"),
             .exit_code = 1,
+            .call_boundaries = 1,
         },
         {
             "clear cache: feature detection, void type, and operand side effects", __LINE__,
@@ -11191,7 +11599,6 @@ TestFunction(test_interpreter){
             "clear cache: x86 lowering emits no instructions for pure operands", __LINE__,
             SVI("__builtin___clear_cache(nullptr, nullptr);\n"),
             .exit_code = -1,
-            .no_toplevel_ops = 1,
             .target = &cc_target_x86_64_linux,
         },
         {
@@ -18244,7 +18651,9 @@ TestFunction(test_interpreter){
         CiInterpreter interp = {
             .poison_frame_slots = 1,
             .procedural_macros = tc->procedural_macros,
-            .opt_noinline = o->noinline,
+            .opt_noinline = o->noinline || tc->call_boundaries,
+            .inline_budget = CI_DEFAULT_INLINE_BUDGET,
+            .inline_hint_budget = CI_DEFAULT_INLINE_HINT_BUDGET,
             .exit_code = -1,
             .parser = {
                 .cpp = {
@@ -18305,13 +18714,6 @@ TestFunction(test_interpreter){
         CiInterpFrame* frame = &interp.top_frame;
         err = ci_prepare_toplevel(&interp);
         if(err) goto finally;
-        if(tc->no_toplevel_ops){
-            TEST_stats.executed++;
-            if(interp.toplevel_ops.count){
-                TEST_stats.failures++;
-                TestPrintf("%s:%d: expected no top-level instructions, got %zu\n", __FILE__, tc->line, interp.toplevel_ops.count);
-            }
-        }
         while(frame->pc < frame->op_count){
             err = ci_interp_step(&interp, frame);
             if(err) goto finally;
@@ -18354,9 +18756,26 @@ TestFunction(test_interpreter_diagnostics){
         _Bool skip;
         _Bool procedural_macros;
         _Bool diagnostic_only; // Emit the expected text without trapping.
+        _Bool call_boundaries; // Exact backtrace frames are under test.
         _Bool lowering_error;
         StringView target_expect[CC_TARGET_COUNT]; // Overrides expect when nonempty.
     } testcases[] = {
+        {
+            "non-void fallthrough traps even when its result is discarded", __LINE__,
+            SVI("int f(void){}\nf();return 0;"),
+            SVI("(test):1:5: error: __builtin_trap\n"),
+        },
+        {
+            "partial return traps only on the fallthrough path", __LINE__,
+            SVI("int f(int n){if(n)return 1;}\nf(0);return 0;"),
+            SVI("(test):1:5: error: __builtin_trap\n"),
+            .call_boundaries=1,
+        },
+        {
+            "noreturn void fallthrough traps", __LINE__,
+            SVI("_Noreturn void f(void){}\nf();return 0;"),
+            SVI("(test):1:16: error: __builtin_trap\n"),
+        },
         {
             "VLA array elements must preserve their declared alignment", __LINE__,
             SVI("int n=3;typedef int Row[n] __attribute__((aligned(32)));\nRow rows[2];return 0;"),
@@ -18460,6 +18879,7 @@ TestFunction(test_interpreter_diagnostics){
                 "(test):3:19: error: baz: 2\n"
                 "(test):5:4: error: (top level): 3\n"),
             .diagnostic_only = 1,
+            .call_boundaries = 1,
         },
         {
             "backtrace indirect", __LINE__,
@@ -18567,7 +18987,7 @@ TestFunction(test_interpreter_diagnostics){
             .lowering_error = 1,
         },
         {
-            "call layout rejects native buffer overhead overflow", __LINE__,
+            "call layout rejects combined outgoing and staging storage overflow", __LINE__,
             SVI("struct S {char data[0xfffffff0u];}; void (*f)(struct S)=0;\n"
                 "f(*(struct S*)0);\n"),
             SVI("(test):2:2: error: call argument storage exceeds 32-bit layout limit\n"),
@@ -18965,6 +19385,9 @@ TestFunction(test_interpreter_diagnostics){
         CiInterpreter interp = {
             .poison_frame_slots = 1,
             .procedural_macros = tc->procedural_macros,
+            .opt_noinline = tc->call_boundaries,
+            .inline_budget = CI_DEFAULT_INLINE_BUDGET,
+            .inline_hint_budget = CI_DEFAULT_INLINE_HINT_BUDGET,
             .exit_code = -1,
             .parser = {
                 .cpp = {
@@ -19067,6 +19490,16 @@ TestFunction(test_ci_call_main){
             .expected_ret = 42,
         },
         {
+            "main fallthrough clears a nested call result", __LINE__,
+            SVI("int f(void){return 37;} int main(void){f();}\n"),
+            .expected_ret = 0,
+        },
+        {
+            "main branch to trailing label retains implicit zero return", __LINE__,
+            SVI("int main(void){goto done;return 37;done:;}\n"),
+            .expected_ret=0,
+        },
+        {
             "argc passthrough", __LINE__,
             SVI("int main(int argc, char** argv){ return argc; }\n"),
             .argc = 3,
@@ -19138,6 +19571,8 @@ TestFunction(test_ci_call_main){
         CiInterpreter interp = {
             .poison_frame_slots = 1,
             .opt_noinline = o->noinline,
+            .inline_budget = CI_DEFAULT_INLINE_BUDGET,
+            .inline_hint_budget = CI_DEFAULT_INLINE_HINT_BUDGET,
             .exit_code = -1,
             .parser = {
                 .cpp = {
@@ -19422,6 +19857,8 @@ TestFunction(test_ci_call_by_name){
         CiInterpreter interp = {
             .poison_frame_slots = 1,
             .opt_noinline = o->noinline,
+            .inline_budget = CI_DEFAULT_INLINE_BUDGET,
+            .inline_hint_budget = CI_DEFAULT_INLINE_HINT_BUDGET,
             .exit_code = -1,
             .parser = {
                 .cpp = {

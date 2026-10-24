@@ -75,6 +75,591 @@ static _Bool cc_eval_size_product_valid(CiUint128 length, CiUint128 element_size
 static int cc_sizeof_as_expr(CcParser*, CcQualType, SrcLoc, CcExpr*_Nullable*_Nonnull);
 static int cc_check_linktime_expr(CcParser*, CcExpr*, _Bool, unsigned);
 
+static
+CiAbiRegister
+ci_abi_resolve_register(CcTarget target, CiAbiRegister reg){
+    static const uint16_t offsets[CC_TARGET_COUNT][CI_ABI_VECTOR_COUNT+1] = {
+        [CC_TARGET_X86_64_LINUX] = {
+            [CI_ABI_GP]              = offsetof(NcCaptureSysV64, gp),
+            [CI_ABI_FP]              = offsetof(NcCaptureSysV64, fp),
+            [CI_ABI_RESULT_GP]       = offsetof(NcCaptureSysV64, result_gp),
+            [CI_ABI_RESULT_FP]       = offsetof(NcCaptureSysV64, result_fp),
+            [CI_ABI_RESULT_X87]      = offsetof(NcCaptureSysV64, result_x87),
+            [CI_ABI_STACK_BASE]      = offsetof(NcCaptureSysV64, stack_args),
+            [CI_ABI_INDIRECT_RESULT] = offsetof(NcCaptureSysV64, gp),
+            [CI_ABI_VECTOR_COUNT]    = offsetof(NcCaptureSysV64, incoming_rax),
+        },
+        [CC_TARGET_X86_64_MACOS] = {
+            [CI_ABI_GP]              = offsetof(NcCaptureSysV64, gp),
+            [CI_ABI_FP]              = offsetof(NcCaptureSysV64, fp),
+            [CI_ABI_RESULT_GP]       = offsetof(NcCaptureSysV64, result_gp),
+            [CI_ABI_RESULT_FP]       = offsetof(NcCaptureSysV64, result_fp),
+            [CI_ABI_RESULT_X87]      = offsetof(NcCaptureSysV64, result_x87),
+            [CI_ABI_STACK_BASE]      = offsetof(NcCaptureSysV64, stack_args),
+            [CI_ABI_INDIRECT_RESULT] = offsetof(NcCaptureSysV64, gp),
+            [CI_ABI_VECTOR_COUNT]    = offsetof(NcCaptureSysV64, incoming_rax),
+        },
+        [CC_TARGET_X86_64_WINDOWS_MSVC] = {
+            [CI_ABI_GP]              = offsetof(NcCaptureWin64, gp),
+            [CI_ABI_FP]              = offsetof(NcCaptureWin64, fp),
+            [CI_ABI_RESULT_GP]       = offsetof(NcCaptureWin64, result_gp),
+            [CI_ABI_RESULT_FP]       = offsetof(NcCaptureWin64, result_fp),
+            [CI_ABI_STACK_BASE]      = offsetof(NcCaptureWin64, stack_args),
+            [CI_ABI_INDIRECT_RESULT] = offsetof(NcCaptureWin64, gp),
+        },
+        [CC_TARGET_X86_64_WINDOWS_MINGW] = {
+            [CI_ABI_GP]              = offsetof(NcCaptureWin64, gp),
+            [CI_ABI_FP]              = offsetof(NcCaptureWin64, fp),
+            [CI_ABI_RESULT_GP]       = offsetof(NcCaptureWin64, result_gp),
+            [CI_ABI_RESULT_FP]       = offsetof(NcCaptureWin64, result_fp),
+            [CI_ABI_STACK_BASE]      = offsetof(NcCaptureWin64, stack_args),
+            [CI_ABI_INDIRECT_RESULT] = offsetof(NcCaptureWin64, gp),
+        },
+        [CC_TARGET_AARCH64_LINUX] = {
+            [CI_ABI_GP]              = offsetof(NcCaptureArm64, gp),
+            [CI_ABI_FP]              = offsetof(NcCaptureArm64, fp),
+            [CI_ABI_RESULT_GP]       = offsetof(NcCaptureArm64, result_gp),
+            [CI_ABI_RESULT_FP]       = offsetof(NcCaptureArm64, result_fp),
+            [CI_ABI_STACK_BASE]      = offsetof(NcCaptureArm64, stack_args),
+            [CI_ABI_INDIRECT_RESULT] = offsetof(NcCaptureArm64, indirect_result),
+        },
+        [CC_TARGET_AARCH64_MACOS] = {
+            [CI_ABI_GP]              = offsetof(NcCaptureArm64, gp),
+            [CI_ABI_FP]              = offsetof(NcCaptureArm64, fp),
+            [CI_ABI_RESULT_GP]       = offsetof(NcCaptureArm64, result_gp),
+            [CI_ABI_RESULT_FP]       = offsetof(NcCaptureArm64, result_fp),
+            [CI_ABI_STACK_BASE]      = offsetof(NcCaptureArm64, stack_args),
+            [CI_ABI_INDIRECT_RESULT] = offsetof(NcCaptureArm64, indirect_result),
+        },
+        [CC_TARGET_TEST] = {
+            [CI_ABI_RESULT_GP]       = offsetof(NcCaptureTest, result_gp),
+            [CI_ABI_RESULT_FP]       = offsetof(NcCaptureTest, result_fp),
+            [CI_ABI_STACK_BASE]      = offsetof(NcCaptureTest, stack_args),
+            [CI_ABI_INDIRECT_RESULT] = offsetof(NcCaptureTest, indirect_result),
+        },
+    };
+    uint32_t stride = reg.bank==CI_ABI_GP || reg.bank==CI_ABI_RESULT_GP ? 8 : 16;
+    reg.capture_offset = offsets[target][reg.bank] + reg.index*stride;
+    return reg;
+}
+
+typedef struct CiAbiAddressSpec CiAbiAddressSpec;
+struct CiAbiAddressSpec {
+    CiAbiAddress mode;
+    union { uint32_t offset, immediate; CiAbiRegister reg; };
+    union { uint32_t pointer; CiAbiRegister base; };
+};
+
+static
+_Bool
+ci_abi_has_padding(NcAbiType type){
+    uint32_t end = 0;
+    for(unsigned i = 0; i < type.count; i++){
+        NcAbiPiece piece = type.pieces[i];
+        if(piece.value_offset != end) return 1;
+        end += piece.size;
+    }
+    return end != type.size;
+}
+
+static
+CiAbiAddressSpec
+ci_abi_resolve_address(CcTarget target, CiAbiAddressSpec address){
+    switch(address.mode){
+        case CI_ABI_REG:
+        case CI_ABI_INCOMING:
+            address.reg = ci_abi_resolve_register(target, address.reg);
+            break;
+        case CI_ABI_REG_PTR:
+        case CI_ABI_INCOMING_PTR:
+        case CI_ABI_REG_PTR_INDIRECT:
+        case CI_ABI_INCOMING_PTR_INDIRECT:
+            address.base = ci_abi_resolve_register(target, address.base);
+            break;
+        case CI_ABI_GP_SAVE:
+        case CI_ABI_FP_SAVE:
+            address.base = ci_abi_resolve_register(target, (CiAbiRegister){ .bank = address.mode == CI_ABI_GP_SAVE? CI_ABI_GP : CI_ABI_FP});
+            break;
+        case CI_ABI_SLOT:
+        case CI_ABI_SLOT_PTR:
+            break;
+        DRP_CASES_EXHAUSTED;
+    }
+    return address;
+}
+
+static
+int
+ci_abi_emit(Marray(CiOp)* out, Allocator al, SrcLoc loc, CcTarget target, CiAbiTransfer operation, CiAbiAddressSpec dst, CiAbiAddressSpec src, uint32_t size){
+    dst = ci_abi_resolve_address(target, dst);
+    if(operation != CI_ABI_CONSTANT && operation != CI_ABI_ZERO)
+        src = ci_abi_resolve_address(target, src);
+    CiOp op = {.abi_transfer={
+        .kind=CI_OP_ABI_TRANSFER,
+        .operation=operation,
+        .source=src.mode,
+        .destination=dst.mode,
+        .src=src.offset,
+        .dst=dst.offset,
+        .src_pointer=src.pointer,
+        .dst_pointer=dst.pointer,
+        .size=size,
+        .loc=loc
+    }};
+    if(operation == CI_ABI_SIGN_EXTEND || operation == CI_ABI_ZERO_EXTEND){
+        op.abi_transfer.source_size = size;
+        op.abi_transfer.size = 8;
+    }
+    return ma_push(CiOp)(out, al, op);
+}
+
+static
+int
+ci_lower_abi_argument(Marray(CiOp)* out, Allocator al, const NcCallPlan* p, uint32_t index, uint32_t slot, _Bool incoming, SrcLoc loc){
+    NcAbiArgument a = p->args[index];
+    NcAbiType t = a.type;
+    if(t.mode == NC_ABI_IGNORED) return 0;
+    int err;
+    _Bool write = !incoming;
+    CiAbiAddress regs = incoming ? CI_ABI_INCOMING : CI_ABI_REG;
+    CiAbiAddress ptr = incoming ? CI_ABI_INCOMING_PTR : CI_ABI_REG_PTR;
+    CiAbiAddressSpec value = {.mode = CI_ABI_SLOT, .offset = slot};
+    switch(p->target){
+        case CC_TARGET_X86_64_LINUX:
+        case CC_TARGET_X86_64_MACOS: {
+            if(!a.on_stack && t.mode != NC_ABI_INDIRECT && t.count == 1 && t.size && t.size <= 16){
+                NcAbiPiece piece = t.pieces[0];
+                _Bool fp = piece.bank == NC_ABI_FP;
+                if(!piece.value_offset && piece.size == t.size && (fp || piece.bank == NC_ABI_GP)){
+                    CiAbiRegister reg;
+                    if(fp)
+                        reg = (CiAbiRegister){.bank = CI_ABI_FP, .index = a.fp};
+                    else
+                        reg = (CiAbiRegister){.bank = CI_ABI_GP, .index = a.gp};
+                    reg = ci_abi_resolve_register(p->target, reg);
+                    _Bool extend = write && !fp && t.size < 8 && (t.sign_extend || t.zero_extend);
+                    CiAbiTransfer operation = CI_ABI_COPY;
+                    if(extend && t.sign_extend)
+                        operation = CI_ABI_SIGN_EXTEND;
+                    else if(extend)
+                        operation = CI_ABI_ZERO_EXTEND;
+                    return ma_push(CiOp)(out, al, (CiOp){.abi_move = {
+                        .kind = CI_OP_ABI_MOVE,
+                        .write = write,
+                        .incoming = incoming,
+                        .operation = operation,
+                        .source_size = t.size,
+                        .size = extend? 8 : t.size,
+                        .slot = slot,
+                        .reg = reg,
+                        .loc = loc,
+                    }});
+                }
+            }
+            if(a.on_stack){
+                CiAbiAddressSpec memory = {
+                    .mode = ptr,
+                    .base = {.bank = CI_ABI_STACK_BASE},
+                    .offset = a.stack_offset,
+                };
+                CiAbiAddressSpec destination, source;
+                if(write){
+                    destination = memory;
+                    source = value;
+                }
+                else {
+                    destination = value;
+                    source = memory;
+                }
+                return ci_abi_emit(out, al, loc, p->target, CI_ABI_COPY, destination, source, t.size);
+            }
+            if(!write && ci_abi_has_padding(t)){
+                err = ci_abi_emit(out, al, loc, p->target, CI_ABI_ZERO, value, (CiAbiAddressSpec){.immediate = 0}, t.size);
+                if(err) return err;
+            }
+            unsigned gp = a.gp, fp = a.fp;
+            for(unsigned i = 0; i < t.count; i++){
+                NcAbiPiece piece = t.pieces[i];
+                CiAbiAddressSpec reg = {.mode = regs};
+                if(piece.bank == NC_ABI_FP){
+                    reg.reg.bank = CI_ABI_FP;
+                    reg.reg.index = fp++;
+                }
+                else {
+                    reg.reg.bank = CI_ABI_GP;
+                    reg.reg.index = gp++;
+                }
+                CiAbiAddressSpec part = (CiAbiAddressSpec){.mode = CI_ABI_SLOT, .offset = slot + piece.value_offset};
+                CiAbiTransfer action = CI_ABI_COPY;
+                if(write && (t.sign_extend || t.zero_extend) && piece.bank == NC_ABI_GP && piece.size < 8)
+                    action = t.sign_extend? CI_ABI_SIGN_EXTEND : CI_ABI_ZERO_EXTEND;
+                CiAbiAddressSpec destination, source;
+                if(write){
+                    destination = reg;
+                    source = part;
+                }
+                else {
+                    destination = part;
+                    source = reg;
+                }
+                err = ci_abi_emit(out, al, loc, p->target, action, destination, source, piece.size);
+                if(err) return err;
+            }
+            return 0;
+        }
+        case CC_TARGET_AARCH64_LINUX: {
+            if(!a.on_stack && t.mode != NC_ABI_INDIRECT && t.count == 1 && t.size && t.size <= 16){
+                NcAbiPiece piece = t.pieces[0];
+                _Bool fp = piece.bank == NC_ABI_FP;
+                if(!piece.value_offset && piece.size == t.size && (fp || piece.bank == NC_ABI_GP)){
+                    CiAbiRegister reg;
+                    if(fp)
+                        reg = (CiAbiRegister){.bank = CI_ABI_FP, .index = a.fp};
+                    else
+                        reg = (CiAbiRegister){.bank = CI_ABI_GP, .index = a.gp};
+                    reg = ci_abi_resolve_register(p->target, reg);
+                    _Bool extend = write && !fp && t.size < 8 && (t.sign_extend || t.zero_extend);
+                    CiAbiTransfer operation = CI_ABI_COPY;
+                    if(extend && t.sign_extend)
+                        operation = CI_ABI_SIGN_EXTEND;
+                    else if(extend)
+                        operation = CI_ABI_ZERO_EXTEND;
+                    return ma_push(CiOp)(out, al, (CiOp){.abi_move = {
+                        .kind = CI_OP_ABI_MOVE,
+                        .write = write,
+                        .incoming = incoming,
+                        .operation = operation,
+                        .source_size = t.size, .size = extend? 8 : t.size,
+                        .slot = slot,
+                        .reg = reg,
+                        .loc = loc,
+                    }});
+                }
+            }
+            if(t.mode == NC_ABI_INDIRECT){
+                if(write){
+                    uint32_t alignment = p->stack_alignment > 16 ? (uint32_t)p->stack_alignment : 16;
+                    uint32_t offset = (uint32_t)(((p->stack_size + alignment - 1) & ~(size_t)(alignment - 1)) + a.copy_offset);
+                    CiAbiAddressSpec copy = {
+                        .mode = CI_ABI_REG_PTR,
+                        .base = {.bank = CI_ABI_STACK_BASE},
+                        .offset = offset,
+                    };
+                    err = ci_abi_emit(out, al, loc, p->target, CI_ABI_COPY, copy, value, t.size);
+                    if(err) return err;
+                    CiAbiAddressSpec destination;
+                    if(a.on_stack)
+                        destination = (CiAbiAddressSpec){.mode = CI_ABI_REG_PTR, .base = {.bank = CI_ABI_STACK_BASE, .index = 0}, .offset = a.stack_offset};
+                    else
+                        destination = (CiAbiAddressSpec){.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_GP, .index = a.gp}};
+                    return ci_abi_emit(out, al, loc, p->target, CI_ABI_ADDRESS, destination, copy, 8);
+                }
+                CiAbiAddressSpec source;
+                if(a.on_stack)
+                    source = (CiAbiAddressSpec){
+                        .mode = incoming? CI_ABI_INCOMING_PTR_INDIRECT : CI_ABI_REG_PTR_INDIRECT,
+                        .base = {.bank = CI_ABI_STACK_BASE},
+                        .offset = a.stack_offset,
+                    };
+                else
+                    source = (CiAbiAddressSpec){
+                        .mode = ptr,
+                        .base = {.bank = CI_ABI_GP, .index = a.gp},
+                        .offset = 0
+                    };
+                return ci_abi_emit(out, al, loc, p->target, CI_ABI_COPY, value, source, t.size);
+            }
+            if(a.on_stack){
+                CiAbiAddressSpec memory = {
+                    .mode = ptr,
+                    .base = {.bank = CI_ABI_STACK_BASE},
+                    .offset = a.stack_offset,
+                };
+                CiAbiAddressSpec destination, source;
+                if(write){
+                    destination = memory;
+                    source = value;
+                }
+                else {
+                    destination = value;
+                    source = memory;
+                }
+                return ci_abi_emit(out, al, loc, p->target, CI_ABI_COPY, destination, source, t.size);
+            }
+            if(!write && ci_abi_has_padding(t)){
+                err = ci_abi_emit(out, al, loc, p->target, CI_ABI_ZERO, value, (CiAbiAddressSpec){.immediate = 0}, t.size);
+                if(err) return err;
+            }
+            unsigned gp = a.gp, fp = a.fp;
+            for(unsigned i = 0; i < t.count; i++){
+                NcAbiPiece piece = t.pieces[i];
+                CiAbiAddressSpec reg;
+                if(piece.bank == NC_ABI_FP)
+                    reg = (CiAbiAddressSpec){.mode = regs, .reg = {.bank = CI_ABI_FP, .index = fp++}};
+                else
+                    reg = (CiAbiAddressSpec){.mode = regs, .reg = {.bank = CI_ABI_GP, .index = gp++}};
+                CiAbiAddressSpec part = (CiAbiAddressSpec){.mode = CI_ABI_SLOT, .offset = slot + piece.value_offset};
+                CiAbiTransfer action = CI_ABI_COPY;
+                if(write && (t.sign_extend || t.zero_extend) && piece.bank == NC_ABI_GP && piece.size < 8)
+                    action = t.sign_extend ? CI_ABI_SIGN_EXTEND : CI_ABI_ZERO_EXTEND;
+                CiAbiAddressSpec destination, source;
+                if(write){
+                    destination = reg;
+                    source = part;
+                }
+                else {
+                    destination = part;
+                    source = reg;
+                }
+                err = ci_abi_emit(out, al, loc, p->target, action, destination, source, piece.size);
+                if(err) return err;
+            }
+            return 0;
+        }
+        case CC_TARGET_AARCH64_MACOS: {
+            if(!a.on_stack && t.mode != NC_ABI_INDIRECT && t.count == 1 && t.size && t.size <= 16){
+                NcAbiPiece piece = t.pieces[0];
+                _Bool fp = piece.bank == NC_ABI_FP;
+                if(!piece.value_offset && piece.size == t.size && (fp || piece.bank == NC_ABI_GP)){
+                    CiAbiRegister reg;
+                    if(fp)
+                        reg = (CiAbiRegister){.bank = CI_ABI_FP, .index = a.fp};
+                    else
+                        reg = (CiAbiRegister){.bank = CI_ABI_GP, .index = a.gp};
+                    reg = ci_abi_resolve_register(p->target, reg);
+                    _Bool extend = write && !fp && t.size < 8 && (t.sign_extend || t.zero_extend);
+                    CiAbiTransfer operation = CI_ABI_COPY;
+                    if(extend && t.sign_extend)
+                        operation = CI_ABI_SIGN_EXTEND;
+                    else if(extend)
+                        operation = CI_ABI_ZERO_EXTEND;
+                    return ma_push(CiOp)(out, al, (CiOp){.abi_move = {
+                        .kind = CI_OP_ABI_MOVE, .write = write, .incoming = incoming,
+                        .operation = operation,
+                        .source_size = t.size, .size = extend ? 8 : t.size, .slot = slot, .reg = reg, .loc = loc,
+                    }});
+                }
+            }
+            if(t.mode == NC_ABI_INDIRECT){
+                if(write){
+                    uint32_t alignment = p->stack_alignment > 16 ? (uint32_t)p->stack_alignment : 16;
+                    uint32_t offset = (uint32_t)(((p->stack_size + alignment - 1) & ~(size_t)(alignment - 1)) + a.copy_offset);
+                    CiAbiAddressSpec copy = {
+                        .mode = CI_ABI_REG_PTR, .base = {.bank = CI_ABI_STACK_BASE}, .offset = offset,
+                    };
+                    err = ci_abi_emit(out, al, loc, p->target, CI_ABI_COPY, copy, value, t.size);
+                    if(err) return err;
+                    CiAbiAddressSpec destination;
+                    if(a.on_stack)
+                        destination = (CiAbiAddressSpec){.mode = CI_ABI_REG_PTR, .base = {.bank = CI_ABI_STACK_BASE, .index = 0}, .offset = a.stack_offset};
+                    else
+                        destination = (CiAbiAddressSpec){.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_GP, .index = a.gp}};
+                    return ci_abi_emit(out, al, loc, p->target, CI_ABI_ADDRESS, destination, copy, 8);
+                }
+                CiAbiAddressSpec source;
+                if(a.on_stack)
+                    source = (CiAbiAddressSpec){
+                        .mode = incoming ? CI_ABI_INCOMING_PTR_INDIRECT : CI_ABI_REG_PTR_INDIRECT,
+                        .base = {.bank = CI_ABI_STACK_BASE}, .offset = a.stack_offset,
+                    };
+                else
+                    source = (CiAbiAddressSpec){.mode = ptr, .base = {.bank = CI_ABI_GP, .index = a.gp}, .offset = 0};
+                return ci_abi_emit(out, al, loc, p->target, CI_ABI_COPY, value, source, t.size);
+            }
+            if(a.on_stack){
+                CiAbiAddressSpec memory = {
+                    .mode = ptr, .base = {.bank = CI_ABI_STACK_BASE}, .offset = a.stack_offset,
+                };
+                CiAbiAddressSpec destination, source;
+                if(write){
+                    destination = memory;
+                    source = value;
+                }
+                else {
+                    destination = value;
+                    source = memory;
+                }
+                return ci_abi_emit(out, al, loc, p->target, CI_ABI_COPY, destination, source, t.size);
+            }
+            if(!write && ci_abi_has_padding(t)){
+                err = ci_abi_emit(out, al, loc, p->target, CI_ABI_ZERO, value, (CiAbiAddressSpec){.immediate = 0}, t.size);
+                if(err) return err;
+            }
+            unsigned gp = a.gp, fp = a.fp;
+            for(unsigned i = 0; i < t.count; i++){
+                NcAbiPiece piece = t.pieces[i];
+                CiAbiAddressSpec reg;
+                if(piece.bank == NC_ABI_FP)
+                    reg = (CiAbiAddressSpec){.mode = regs, .reg = {.bank = CI_ABI_FP, .index = fp++}};
+                else
+                    reg = (CiAbiAddressSpec){.mode = regs, .reg = {.bank = CI_ABI_GP, .index = gp++}};
+                CiAbiAddressSpec part = (CiAbiAddressSpec){.mode = CI_ABI_SLOT, .offset = slot + piece.value_offset};
+                CiAbiTransfer action = CI_ABI_COPY;
+                if(write && (t.sign_extend || t.zero_extend) && piece.bank == NC_ABI_GP && piece.size < 8)
+                    action = t.sign_extend ? CI_ABI_SIGN_EXTEND : CI_ABI_ZERO_EXTEND;
+                CiAbiAddressSpec destination, source;
+                if(write){
+                    destination = reg;
+                    source = part;
+                }
+                else {
+                    destination = part;
+                    source = reg;
+                }
+                err = ci_abi_emit(out, al, loc, p->target, action, destination, source, piece.size);
+                if(err) return err;
+            }
+            return 0;
+        }
+        case CC_TARGET_X86_64_WINDOWS_MSVC:
+        case CC_TARGET_X86_64_WINDOWS_MINGW: {
+            if(!a.on_stack && t.mode != NC_ABI_INDIRECT && t.count == 1 && t.size && t.size <= 16){
+                NcAbiPiece piece = t.pieces[0];
+                _Bool fp = piece.bank == NC_ABI_FP;
+                if(!piece.value_offset && piece.size == t.size && (fp || piece.bank == NC_ABI_GP) && !(write && fp && p->is_variadic)){
+                    CiAbiRegister reg = {.bank = fp ? CI_ABI_FP : CI_ABI_GP, .index = a.gp};
+                    reg = ci_abi_resolve_register(p->target, reg);
+                    return ma_push(CiOp)(out, al, (CiOp){.abi_move = {
+                        .kind = CI_OP_ABI_MOVE,
+                        .write = write,
+                        .incoming = incoming,
+                        .operation = CI_ABI_COPY,
+                        .source_size = t.size,
+                        .size = t.size,
+                        .slot = slot,
+                        .reg = reg,
+                        .loc = loc,
+                    }});
+                }
+            }
+            if(t.mode == NC_ABI_INDIRECT){
+                if(write){
+                    uint32_t alignment = p->stack_alignment > 16 ? (uint32_t)p->stack_alignment : 16;
+                    uint32_t offset = (uint32_t)(((p->stack_size + alignment - 1) & ~(size_t)(alignment - 1)) + a.copy_offset);
+                    CiAbiAddressSpec copy = {
+                        .mode = CI_ABI_REG_PTR,
+                        .base = {.bank = CI_ABI_STACK_BASE},
+                        .offset = offset,
+                    };
+                    err = ci_abi_emit(out, al, loc, p->target, CI_ABI_COPY, copy, value, t.size);
+                    if(err) return err;
+                    CiAbiAddressSpec destination;
+                    if(a.on_stack)
+                        destination = (CiAbiAddressSpec){.mode = CI_ABI_REG_PTR, .base = {.bank = CI_ABI_STACK_BASE, .index = 0}, .offset = a.stack_offset};
+                    else
+                        destination = (CiAbiAddressSpec){.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_GP, .index = a.gp}};
+                    return ci_abi_emit(out, al, loc, p->target, CI_ABI_ADDRESS, destination, copy, 8);
+                }
+                CiAbiAddressSpec source;
+                if(a.on_stack)
+                    source = (CiAbiAddressSpec){
+                        .mode = incoming ? CI_ABI_INCOMING_PTR_INDIRECT : CI_ABI_REG_PTR_INDIRECT,
+                        .base = {.bank = CI_ABI_STACK_BASE}, .offset = a.stack_offset,
+                    };
+                else
+                    source = (CiAbiAddressSpec){.mode = ptr, .base = {.bank = CI_ABI_GP, .index = a.gp}, .offset = 0};
+                return ci_abi_emit(out, al, loc, p->target, CI_ABI_COPY, value, source, t.size);
+            }
+            if(a.on_stack){
+                CiAbiAddressSpec memory = {
+                    .mode = ptr, .base = {.bank = CI_ABI_STACK_BASE}, .offset = a.stack_offset,
+                };
+                CiAbiAddressSpec destination, source;
+                if(write){
+                    destination = memory;
+                    source = value;
+                }
+                else {
+                    destination = value;
+                    source = memory;
+                }
+                return ci_abi_emit(out, al, loc, p->target, CI_ABI_COPY, destination, source, t.size);
+            }
+
+            CiAbiAddressSpec gp = (CiAbiAddressSpec){.mode = regs, .reg = {.bank = CI_ABI_GP, .index = a.gp}};
+            CiAbiAddressSpec fp = (CiAbiAddressSpec){.mode = regs, .reg = {.bank = CI_ABI_FP, .index = a.gp}};
+            _Bool floating = t.count && t.pieces[0].bank == NC_ABI_FP;
+            if(!write)
+                return ci_abi_emit(out, al, loc, p->target, CI_ABI_COPY, value, floating ? fp : gp, t.size);
+            if(floating){
+                err = ci_abi_emit(out, al, loc, p->target, CI_ABI_COPY, fp, value, t.size);
+                if(err) return err;
+            }
+            if(!floating || p->is_variadic)
+                return ci_abi_emit(out, al, loc, p->target, CI_ABI_COPY, gp, value, t.size);
+            return 0;
+        }
+        case CC_TARGET_TEST: {
+            CiAbiAddressSpec memory = {
+                .mode = ptr,
+                .base = {.bank = CI_ABI_STACK_BASE},
+                .offset = a.stack_offset,
+            };
+            CiAbiAddressSpec destination, source;
+            if(write){
+                destination = memory;
+                source = value;
+            }
+            else {
+                destination = value;
+                source = memory;
+            }
+            return ci_abi_emit(out, al, loc, p->target, CI_ABI_COPY, destination, source, t.size);
+        }
+        case CC_TARGET_COUNT:
+            return CI_UNREACHABLE_ERROR;
+        DRP_CASES_EXHAUSTED;
+    }
+}
+
+static
+int
+ci_lower_abi_result(Marray(CiOp)* out, Allocator al, const NcCallPlan* p, uint32_t slot, _Bool write, SrcLoc loc){
+    NcAbiType t = p->result;
+    if(t.mode == NC_ABI_IGNORED || t.mode == NC_ABI_INDIRECT)
+        return 0;
+    int err;
+    if(!write && ci_abi_has_padding(t)){
+        CiAbiAddressSpec dst = {.mode = CI_ABI_SLOT, .offset = slot},
+                         src = {.immediate = 0};
+        err = ci_abi_emit(out, al, loc, p->target, CI_ABI_ZERO, dst, src, t.size);
+        if(err) return err;
+    }
+    unsigned gp = 0, fp = 0, x87 = 0;
+    for(unsigned i = 0; i < t.count; i++){
+        NcAbiPiece piece = t.pieces[i];
+        CiAbiAddressSpec reg;
+        switch(piece.bank){
+            case NC_ABI_FP:
+                reg = (CiAbiAddressSpec){.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_RESULT_FP, .index = fp++}};
+                break;
+            case NC_ABI_X87:
+                reg = (CiAbiAddressSpec){.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_RESULT_X87, .index = x87++}};
+                break;
+            case NC_ABI_GP:
+                reg = (CiAbiAddressSpec){.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_RESULT_GP, .index = gp++}};
+                break;
+            DRP_CASES_EXHAUSTED;
+        }
+        CiAbiAddressSpec value = {.mode = CI_ABI_SLOT, .offset = slot + piece.value_offset};
+        CiAbiTransfer action = CI_ABI_COPY;
+        if(write && (t.sign_extend || t.zero_extend) && piece.bank == NC_ABI_GP && piece.size < 8)
+            action = t.sign_extend ? CI_ABI_SIGN_EXTEND : CI_ABI_ZERO_EXTEND;
+        CiAbiAddressSpec destination, source;
+        if(write){
+            destination = reg;
+            source = value;
+        }
+        else {
+            destination = value;
+            source = reg;
+        }
+        err = ci_abi_emit(out, al, loc, p->target, action, destination, source, piece.size);
+        if(err) return err;
+    }
+    return 0;
+}
+
 typedef struct CiLowerSwitch CiLowerSwitch;
 struct CiLowerSwitch {
     Marray(CcSwitchEntry) entries;
@@ -84,6 +669,27 @@ struct CiLowerSwitch {
 
 typedef struct CiLowerCtx CiLowerCtx;
 typedef struct CiFoldCache CiFoldCache;
+typedef struct CiInlineState CiInlineState;
+typedef struct CiInlineBinding CiInlineBinding;
+struct CiInlineBinding {
+    CcVariable* var;
+    uint32_t slot;
+    _Bool constant;
+    _Bool parameter;
+    CiFoldValue value;
+};
+
+struct CiInlineState {
+    const CiLowerCtx *parent;
+    uint32_t result,
+             returns;
+    CcStmtNode *_Nullable tail_return;
+    _Bool borrow_result;
+    uint32_t value_slot;
+    _Bool result_seen,
+          result_constant;
+    CiFoldValue result_value;
+};
 struct CiLowerCtx {
     Allocator a;
     Marray(CiOp)* out;
@@ -104,14 +710,79 @@ struct CiLowerCtx {
     CcLongDoubleFormat ldbl_fmt;
     CiLowerDeps deps;
     CiFoldCache* _Nullable fold_cache;
+    const NcCallPlan *_Nullable function_abi;
+    uint32_t result_pointer_slot; // incoming indirect-result pointer, live for the function
+    CcFunc *_Nullable function;
+    CiInlineState *_Nullable inline_state;
+    PointerMap(CcVariable, CiInlineBinding) bindings;
+    _Bool statement_fallthrough;
 };
+
+static
+CiInlineBinding* _Nullable
+ci_inline_binding(CiLowerCtx* ctx, CcVariable* var){
+    return PM_get(&ctx->bindings, var);
+}
+
+static
+void
+ci_bindings_cleanup(CiLowerCtx* ctx){
+    PointerMapItems items = PM_items(&ctx->bindings);
+    for(size_t i = 0; i < items.count; i++)
+        Allocator_free(ctx->a, items.data[i].value, sizeof(CiInlineBinding));
+    if(ctx->bindings.data)
+        Allocator_free(ctx->a, ctx->bindings.data, PM_alloc_size(ctx->bindings.cap));
+    ctx->bindings = (PointerMap){0};
+}
+
+static
+uint32_t
+ci_variable_slot(CiLowerCtx* ctx, CcVariable* var){
+    if(!ctx->inline_state) return (uint32_t)var->frame_offset;
+    CiInlineBinding* b=ci_inline_binding(ctx,var);
+    return b?b->slot:(uint32_t)var->frame_offset;
+}
+
+static
+int
+ci_bind_slot(CiLowerCtx* ctx, CcVariable* var, uint32_t slot){
+    if(!ctx->inline_state) var->frame_offset=slot;
+    if(!ctx->function) return 0;
+    CiInlineBinding* b=ci_inline_binding(ctx,var);
+    if(!b){
+        b=Allocator_zalloc(ctx->a,sizeof *b);
+        if(!b) return CI_OOM_ERROR;
+        b->var = var;
+        if(PM_put(&ctx->bindings, ctx->a, var, b)){
+            Allocator_free(ctx->a, b, sizeof *b);
+            return CI_OOM_ERROR;
+        }
+    }
+    b->slot=slot;
+    return 0;
+}
 
 static inline
 _Bool
 ci_arg_is_ignored(CcTarget target, CcQualType type){
-    if(target != CC_TARGET_AARCH64_MACOS) return 0;
-    CcTypeKind kind = ccqt_kind(type);
-    return (kind == CC_STRUCT || kind == CC_UNION) && ccqt_as_struct(type)->arm64.is_empty;
+    switch(target){
+        case CC_TARGET_AARCH64_MACOS: {
+            CcTypeKind kind = ccqt_kind(type);
+            return (kind == CC_STRUCT || kind == CC_UNION) && ccqt_as_struct(type)->arm64.is_empty;
+        }
+        case CC_TARGET_X86_64_LINUX:
+        case CC_TARGET_X86_64_MACOS:
+            return 0;
+        case CC_TARGET_X86_64_WINDOWS_MSVC:
+        case CC_TARGET_X86_64_WINDOWS_MINGW:
+            return 0;
+        case CC_TARGET_AARCH64_LINUX:
+            return 0;
+        case CC_TARGET_TEST:
+        case CC_TARGET_COUNT:
+            return 0;
+        DRP_CASES_EXHAUSTED;
+    }
 }
 
 static
@@ -163,6 +834,8 @@ struct CiLowerVal {
     uint32_t size;
     _Bool canonical; // already 0 or 1
     _Bool borrowed; // storage predates this expression; preserve before later side effects
+    _Bool constant;
+    CiFoldValue value;
 };
 #define CI_NO_SLOT UINT32_MAX
 
@@ -170,9 +843,37 @@ static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n);
 static int ci_try_preinit_global(CiInterpreter*, CiLowerCtx*, CcExpr*, _Bool*);
 static int ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n);
+static
+int
+ci_lower_inline_return(CiLowerCtx* ctx, SrcLoc loc){
+    int err = ma_push(CiOp)(
+        ctx->out,
+        ctx->a,
+        (CiOp){.jump={
+            .kind=CI_OP_JUMP,
+            .jump=ctx->inline_state->returns,
+            .loc=loc,
+        }}
+    );
+    if(err) return err;
+    ctx->inline_state->returns = (uint32_t)ctx->out->count;
+    return 0;
+}
+
+static
+_Bool
+ci_stable_variable(CiLowerCtx* ctx, CcExpr* e){
+    return ctx->function
+        && e->kind == CC_EXPR_VARIABLE
+        && e->var->automatic
+        && !e->type.is_volatile
+        && !e->type.is_atomic
+        && !e->var->mutable_storage;
+}
 static int ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
 static int ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
 static int ci_preserve_value(CiInterpreter*, CiLowerCtx*, CcExpr*, CiLowerVal*);
+static int ci_expr_discardable(CiLowerCtx*, CcExpr*, _Bool*);
 static int ci_lower_cast_operand(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
 static int ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e);
 static int ci_lower_cond(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, CiLowerVal* out);
@@ -192,7 +893,7 @@ static uint32_t cc_offset_alignment(uint32_t align_log2, uint64_t offset);
 static uint32_t ci_frame_alignment(const CiLowerCtx*, uint32_t);
 static int ci_lvalue_alignment(CiInterpreter*, CiLowerCtx*, const CcExpr*, uint32_t*);
 static int ci_pointer_alignment(CiInterpreter*, CiLowerCtx*, const CcExpr*, uint32_t*);
-static _Bool ci_frame_lvalue(CiInterpreter* ci, const CcExpr* lv, uint32_t* offset);
+static _Bool ci_frame_lvalue(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* lv, uint32_t* offset);
 static int ci_lower_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_past_ok, CiLowerAddr* out);
 static int ci_lower_addr_inner(CiInterpreter*, CiLowerCtx*, CcExpr*, _Bool, CiLowerAddr*);
 static int ci_lower_pointer_addr(CiInterpreter*, CiLowerCtx*, CcExpr*, uint32_t, _Bool, CiLowerAddr*);
@@ -203,8 +904,9 @@ static int ci_lower_bitfield_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv
 static int ci_emit_load_bitfield(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_t dest, uint32_t size);
 static int ci_emit_store_bitfield(CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_t src, uint32_t size);
 static int ci_lower_whole_byte_bitfield(CiLowerCtx*, CiOp*);
-// Width identifies the floating format, not its padded storage size.
-static uint32_t ci_float_width(CcQualType t, CcLongDoubleFormat fmt){
+static
+uint32_t
+ci_float_width(CcQualType t, CcLongDoubleFormat fmt){
     if(!ccqt_is_basic(t)) return 0;
     switch(ccqt_basic_kind(t)){
         case CCBT_float16: return 16;
@@ -215,7 +917,9 @@ static uint32_t ci_float_width(CcQualType t, CcLongDoubleFormat fmt){
         default: return 0;
     }
 }
-static CiOpKind ci_falu_kind(CcQualType t, CcLongDoubleFormat fmt){
+static
+CiOpKind
+ci_falu_kind(CcQualType t, CcLongDoubleFormat fmt){
     switch(ci_float_width(t, fmt)){
         case 32: return CI_OP_FALU32;
         case 64: return CI_OP_FALU64;
@@ -292,107 +996,21 @@ static int ci_compare_type_limit(CiInterpreter*, CiLowerCtx*, CcExpr*, CcExpr*_N
 enum {CI_ASSUMED_VARARG_ALIGN=8};
 static size_t cc_expr_nvalues(CcExpr*);
 
-static int ci_constexpr_uses_stmt(CiInterpreter*, CiLowerCtx*, CcStmtNode*_Nullable, Parray(CcVariable)*);
-
-static
-int
-ci_constexpr_uses_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool address, Parray(CcVariable)* storage){
-    if(e->kind == CC_EXPR_ASSIGN && e->lhs->kind == CC_EXPR_VARIABLE
-       && e->lhs->var->constexpr_ && e->values[0] == e->lhs->var->initializer)
-        return 0; // Analyze this initializer only if the object is materialized.
-    if(!address){
-        CiFoldValue value;
-        int err = ci_fold_expr(ci, ctx, e, &value);
-        if(!err) return 0;
-        if(err == CI_OOM_ERROR) return err;
-    }
-    if(e->kind == CC_EXPR_VARIABLE){
-        CcVariable* var = e->var;
-        if(!var->automatic || !var->constexpr_) return 0;
-        var->constexpr_storage = 1;
-        for(size_t i = 0; i < storage->count; i++)
-            if(storage->data[i] == var) return 0;
-        return pa_push(storage, ctx->a, var) ? CI_OOM_ERROR : 0;
-    }
-    size_t count = cc_expr_nvalues(e);
-    for(size_t i = 0; i < count; i++){
-        int err = ci_constexpr_uses_expr(ci, ctx, e->values[i], address, storage);
-        if(err) return err;
-    }
-    switch((uint32_t)e->kind){
-        case CC_EXPR_BLOB:
-        case CC_EXPR_VALUE:
-        case CC_EXPR_FUNCTION:
-        case CC_EXPR_BUILTIN:
-        case CC_EXPR_DOT:
-        case CC_EXPR_ARROW:
-            return 0;
-        case CC_EXPR_INIT_LIST: case CC_EXPR_COMPOUND_LITERAL:
-            for(size_t i = 0; i < e->init_list->count; i++){
-                CcExpr* value = e->init_list->entries[i].value;
-                if(!value) continue;
-                int err = ci_constexpr_uses_expr(ci, ctx, value, 0, storage);
-                if(err) return err;
-            }
-            return 0;
-        case CC_EXPR_STATEMENT_EXPRESSION:
-            return ci_constexpr_uses_stmt(ci, ctx, e->stmt_body, storage);
-        default:
-            if(e->lhs) return ci_constexpr_uses_expr(ci, ctx, e->lhs,
-                address || e->kind == CC_EXPR_ADDR, storage);
-            return 0;
-    }
-}
-
-static
-int
-ci_constexpr_uses_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n, Parray(CcVariable)* storage){
-    if(!n) return 0;
-    unsigned expressions = 0;
-    switch((uint32_t)n->kind){
-        case CC_STMT_EXPR: case CC_STMT_IF: case CC_STMT_WHILE:
-        case CC_STMT_DOWHILE: case CC_STMT_SWITCH: case CC_STMT_RETURN:
-            expressions = 1;
-            break;
-        case CC_STMT_FOR: expressions = 2; break;
-        default: break;
-    }
-    for(unsigned i = 0; i < expressions; i++){
-        if(!n->exprs[i]) continue;
-        int err = ci_constexpr_uses_expr(ci, ctx, n->exprs[i], 0, storage);
-        if(err) return err;
-    }
-    for(size_t i = 0; i < n->count; i++){
-        int err = ci_constexpr_uses_stmt(ci, ctx, n->stmts[i], storage);
-        if(err) return err;
-    }
-    return 0;
-}
-
-static
-int
-ci_constexpr_dependencies(CiInterpreter* ci, CiLowerCtx* ctx, Parray(CcVariable)* storage){
-    for(size_t i = 0; i < storage->count; i++){
-        CcVariable* var = storage->data[i];
-        CcExpr* initializer = var->initializer;
-        if(!initializer) continue;
-        int err = ci_constexpr_uses_expr(ci, ctx, initializer, 0, storage);
-        if(err) return err;
-    }
-    return 0;
-}
 
 static
 int
 ci_layout_decls(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
     for(uint32_t i = 0; i < n->decls.count; i++){
         CcVariable* var = n->decls.data[i];
-        if(var->constexpr_ && !var->constexpr_storage) continue;
+        CiInlineBinding* binding=ci_inline_binding(ctx,var);
+        if(binding && binding->parameter) continue;
+        if(var->constexpr_ && !var->mutable_storage) continue;
         uint32_t size, align, slot;
         if(ccqt_kind(var->type) == CC_VLA){
             int err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &slot);
             if(err) return err;
-            var->frame_offset = slot;
+            err = ci_bind_slot(ctx,var,slot);
+            if(err) return err;
             continue;
         }
         int err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &size);
@@ -402,7 +1020,8 @@ ci_layout_decls(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
         if(var->alignment > align) align = var->alignment;
         err = ci_alloc_slot(ctx, size, align, &slot);
         if(err) return err;
-        var->frame_offset = slot;
+        err = ci_bind_slot(ctx,var,slot);
+        if(err) return err;
     }
     return 0;
 }
@@ -430,7 +1049,7 @@ ci_lower_cleanups(CiInterpreter* ci, CiLowerCtx* ctx, CcCleanupRange range){
         if(d->vm_scope){
             if(d->stack_mark){
                 uint32_t temp = ctx->temp;
-                uint32_t mark = (uint32_t)d->stack_mark->frame_offset;
+                uint32_t mark = ci_variable_slot(ctx,(CcVariable*_Nonnull)d->stack_mark);
                 int err;
                 if(!d->stack_mark->automatic){
                     uint32_t addr;
@@ -481,7 +1100,10 @@ ci_lower_cleanups(CiInterpreter* ci, CiLowerCtx* ctx, CcCleanupRange range){
 static
 int
 ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n){
-    if(!n) return 0;
+    if(!n){
+        ctx->statement_fallthrough = 1;
+        return 0;
+    }
     uint32_t temp = ctx->temp;
     uint32_t materialized_end = ctx->materialized_end;
     int err = ci_layout_decls(ci, ctx, (CcStmtNode*_Nonnull)n);
@@ -492,6 +1114,18 @@ ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n){
         err = ci_lower_cleanups(ci, ctx, n->cleanup);
 
     cleanup:
+    if(n->kind != CC_STMT_COMPOUND){
+        _Bool folded_branch = 0;
+        if(n->kind == CC_STMT_IF){
+            _Bool truth;
+            if(!ci_fold_condition(ci, ctx, n->exprs[0], &truth)){
+                CcStmtNode* dead = n->stmts[truth];
+                folded_branch = !dead || !dead->has_jump_target;
+            }
+        }
+        if(!folded_branch)
+            ctx->statement_fallthrough = !n->no_fallthrough;
+    }
     ctx->temp = temp;
     ctx->materialized_end = materialized_end;
     return err;
@@ -517,8 +1151,8 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             if(err) return err;
             if(n->vla.object->alignment > alignment)
                 alignment = n->vla.object->alignment;
-            uint32_t slot = (uint32_t)n->vla.object->frame_offset;
-            uint32_t mark = (uint32_t)n->vla.mark->frame_offset,
+            uint32_t slot = ci_variable_slot(ctx, n->vla.object);
+            uint32_t mark = ci_variable_slot(ctx, n->vla.mark),
                      addr = 0,
                      mark_addr = 0;
             if(!n->vla.object->automatic){
@@ -577,8 +1211,11 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             }
             if(n->exprs[0]->kind == CC_EXPR_ASSIGN && n->exprs[0]->lhs->kind == CC_EXPR_VARIABLE){
                 CcVariable* var = n->exprs[0]->lhs->var;
-                if(var->automatic && var->constexpr_ && !var->constexpr_storage
-                   && n->exprs[0]->values[0] == var->initializer) return 0;
+                if(var->automatic
+                && var->constexpr_
+                && !var->mutable_storage
+                && n->exprs[0]->values[0] == var->initializer)
+                    return 0;
             }
             return ci_lower_expr_discard(ci, ctx, n->exprs[0]);
         case CC_STMT_COMPOUND:{
@@ -587,8 +1224,9 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                 if(!reachable && !n->stmts[i]->has_jump_target) continue;
                 err = ci_lower_stmt(ci, ctx, n->stmts[i]);
                 if(err) return err;
-                reachable = !n->stmts[i]->no_fallthrough;
+                reachable = ctx->statement_fallthrough;
             }
+            ctx->statement_fallthrough = reachable;
             return 0;
         }
         case CC_STMT_IF:{
@@ -814,15 +1452,21 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
         }
         case CC_STMT_RETURN:{
             CcExpr* e = n->exprs[0];
+            CiInlineState* inline_state = ctx->inline_state;
             CcCleanupRange cleanup = {n->return_.first, NULL};
-            CiOp* op;
             if(e && ccqt_bt_eq(e->type, CCBT_void)){
                 err = ci_lower_expr_discard(ci, ctx, e);
                 if(err) return err;
             }
             else if(e){
                 CiLowerVal v;
-                err = ci_lower_expr(ci, ctx, e, CI_NO_SLOT, &v);
+                _Bool borrow = inline_state
+                    && inline_state->borrow_result
+                    && n == inline_state->tail_return
+                    && !inline_state->returns
+                    && !cleanup.first;
+                uint32_t result = inline_state && !cleanup.first && !borrow? inline_state->result : CI_NO_SLOT;
+                err = ci_lower_expr(ci, ctx, e, result, &v);
                 if(err) return err;
                 if(cleanup.first){
                     uint32_t saved;
@@ -834,29 +1478,81 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                     if(err) return err;
                     v.slot = saved;
                 }
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-                if(err) return err;
-                *op = (CiOp){
-                    .return_slot = {
+                if(inline_state){
+                    borrow = borrow && !inline_state->returns;
+                    if(!inline_state->result_seen){
+                        inline_state->result_value = v.value;
+                        inline_state->result_constant = v.constant;
+                    }
+                    else if(!v.constant
+                    || v.value.sz != inline_state->result_value.sz
+                    || memcmp(v.value.bits, inline_state->result_value.bits, v.value.sz))
+                        inline_state->result_constant = 0;
+                    inline_state->result_seen = 1;
+                    if(borrow) inline_state->value_slot = v.slot;
+                    else if(inline_state->result != CI_NO_SLOT){
+                        err = ci_emit_copy(ctx, inline_state->result, v.slot, v.size, n->loc);
+                        if(err) return err;
+                    }
+                    return n == inline_state->tail_return? 0 : ci_lower_inline_return(ctx, n->loc);
+                }
+                if(!ctx->function_abi){
+                    return ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.return_slot = {
                         .kind = CI_OP_RETURN_SLOT,
                         .src = v.slot,
                         .src_size = v.size,
                         .loc = n->loc,
+                    }});
+                }
+                const NcCallPlan* p = ctx->function_abi;
+                if(p->result.mode == NC_ABI_INDIRECT){
+                    CiAbiAddressSpec destination = (CiAbiAddressSpec){
+                        .mode = CI_ABI_SLOT_PTR,
+                        .pointer = ctx->result_pointer_slot,
+                        .offset = 0
+                    };
+                    CiAbiAddressSpec src = {.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_INDIRECT_RESULT, .index = 0}};
+                    err = ci_abi_emit(ctx->out, ctx->a, n->loc, p->target, CI_ABI_ADDRESS, src, destination, 8);
+                    if(err) return err;
+                    src = (CiAbiAddressSpec){.mode = CI_ABI_SLOT, .offset = v.slot};
+                    err = ci_abi_emit(ctx->out, ctx->a, n->loc, p->target, CI_ABI_COPY, destination, src, p->result.size);
+                    if(err) return err;
+                    switch(p->target){
+                        case CC_TARGET_X86_64_LINUX:
+                        case CC_TARGET_X86_64_MACOS: {
+                            src = (CiAbiAddressSpec){.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_RESULT_GP, .index = 0}};
+                            err = ci_abi_emit(ctx->out, ctx->a, n->loc, p->target, CI_ABI_ADDRESS, src, destination, 8);
+                            if(err) return err;
+                            break;
+                        }
+                        case CC_TARGET_X86_64_WINDOWS_MSVC:
+                        case CC_TARGET_X86_64_WINDOWS_MINGW: {
+                            src = (CiAbiAddressSpec){.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_RESULT_GP, .index = 0}};
+                            err = ci_abi_emit(ctx->out, ctx->a, n->loc, p->target, CI_ABI_ADDRESS, src, destination, 8);
+                            if(err) return err;
+                            break;
+                        }
+                        case CC_TARGET_AARCH64_LINUX:
+                            break;
+                        case CC_TARGET_AARCH64_MACOS:
+                            break;
+                        case CC_TARGET_TEST:
+                            break;
+                        case CC_TARGET_COUNT:
+                            return ci_error(ci, n->loc, "return: unsupported target");
+                        DRP_CASES_EXHAUSTED;
                     }
-                };
-                return 0;
+                }
+                else {
+                    err = ci_lower_abi_result(ctx->out, ctx->a, p, v.slot, 1, n->loc);
+                    if(err) return err;
+                }
+                return ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.kind = CI_OP_RETURN, .loc = n->loc});
             }
             err = ci_lower_cleanups(ci, ctx, cleanup);
             if(err) return err;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-            if(err) return err;
-            *op = (CiOp){
-                .return_ = {
-                    .kind = CI_OP_RETURN,
-                    .loc = n->loc,
-                }
-            };
-            return 0;
+            if(inline_state) return n == inline_state->tail_return? 0 : ci_lower_inline_return(ctx, n->loc);
+            return ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.kind = CI_OP_RETURN, .loc = n->loc});
         }
         case CC_STMT_BREAK:
         case CC_STMT_CONTINUE:{
@@ -865,12 +1561,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
-            *op = (CiOp){
-                .jump = {
-                    .kind = CI_OP_JUMP,
-                    .loc = n->loc,
-                }
-            };
+            *op = (CiOp){.jump = {.kind = CI_OP_JUMP, .loc = n->loc}};
             CiBackpatchTarget t = {
                 .kind = n->kind == CC_STMT_BREAK? CI_BP_BREAK : CI_BP_CONTINUE,
                 .levels = n->jump_levels,
@@ -1342,7 +2033,7 @@ ci_lower_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, 
     _Bool is_mem;
     uint32_t vslot;
     CiOp* op;
-    if(ci_frame_lvalue(ci, lhs, &vslot)){
+    if(ci_frame_lvalue(ci, ctx, lhs, &vslot)){
         is_mem = 0;
         cur = vslot;
     }
@@ -1491,6 +2182,8 @@ ci_lower_constant(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, const CiFoldVal
     *out = (CiLowerVal){
         .slot=dest,
         .size=value->sz,
+        .constant=1,
+        .value=*value,
         .canonical=ccqt_is_integer(value->type) && !value->bits[1] && value->bits[0] <= 1
     };
     CiOp* op;
@@ -1610,13 +2303,31 @@ ci_lower_assign_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
         return 0;
     }
     uint32_t vslot;
-    if(ci_frame_lvalue(ci, lhs, &vslot)){
+    if(ci_frame_lvalue(ci, ctx, lhs, &vslot)){
         CiLowerVal v;
         err = ci_lower_expr(ci, ctx, rhs, vslot, &v);
         if(err) return err;
+        if(lhs->kind==CC_EXPR_VARIABLE
+        && lhs->var->initializer==rhs
+        && !lhs->type.is_volatile
+        && !lhs->type.is_atomic
+        && !lhs->var->mutable_storage){
+            CiInlineBinding* b = ci_inline_binding(ctx, lhs->var);
+            if(b){
+                _Bool changed= b->constant != v.constant || (v.constant && (b->value.sz != v.value.sz || b->value.type.bits !=v.value.type.bits || memcmp(b->value.bits, v.value.bits, v.value.sz)));
+                b->constant = v.constant;
+                b->value = v.value;
+                if(changed && ctx->fold_cache){
+                    PM_clear(&ctx->fold_cache->expressions);
+                    ctx->fold_cache->values.count = 0;
+                }
+            }
+        }
         if(!out) return 0;
+        out->constant  = v.constant;
+        out->value     = v.value;
         out->canonical = v.canonical;
-        out->slot = dest;
+        out->slot      = dest;
         err = ci_emit_copy(ctx, dest, vslot, size, e->loc);
         if(err) return err;
         return 0;
@@ -1688,15 +2399,19 @@ static
 int
 ci_lower_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out){
     uint32_t temp = ctx->temp;
+    *out=(CiLowerVal){0};
     int err = ci_lower_expr_inner(ci, ctx, e, dest, out);
-    if(!err) out->borrowed = out->slot < temp;
-    return err;
+    if(err) return err;
+    out->borrowed = out->slot < temp;
+    if(out->constant) out->value.type = e->type;
+    return 0;
 }
 
 static
 int
 ci_preserve_value(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerVal* value){
     if(!value->borrowed) return 0;
+    if(ci_stable_variable(ctx, e)) return 0;
     uint32_t dest = CI_NO_SLOT;
     int err = ci_lower_expr_dest(ci, ctx, e, &dest, value->size);
     if(err) return err;
@@ -1883,6 +2598,17 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
         }
         case CC_EXPR_VARIABLE:{
             CcVariable* var = e->var;
+            if(var->automatic && var->constexpr_ && !var->mutable_storage){
+                if(dest == CI_NO_SLOT){
+                    uint32_t align;
+                    err = cc_alignof_as_uint(p, var->type, e->loc, &align);
+                    if(err) return err;
+                    if(var->alignment > align) align = var->alignment;
+                    err = ci_alloc_slot(ctx, size, align, &dest);
+                    if(err) return err;
+                }
+                return ci_lower_expr(ci, ctx, var->initializer, dest, out);
+            }
             if(e->type.is_atomic){
                 return ci_lower_atomic_load_lv(ci, ctx, e, dest, out, size);
             }
@@ -1933,11 +2659,11 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             }
             if(dest == CI_NO_SLOT){
                 // the variable's storage is already a slot; refer to it directly
-                out->slot = (uint32_t)var->frame_offset;
+                out->slot = ci_variable_slot(ctx,var);
                 return 0;
             }
             out->slot = dest;
-            err = ci_emit_copy_access(ctx, dest, (uint32_t)var->frame_offset, size, e->loc, e->type.is_volatile);
+            err = ci_emit_copy_access(ctx, dest, ci_variable_slot(ctx,var), size, e->loc, e->type.is_volatile);
             if(err) return err;
             return 0;
         }
@@ -1964,7 +2690,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 return 0;
             }
             uint32_t off;
-            if(ci_frame_lvalue(ci, e, &off)){
+            if(ci_frame_lvalue(ci, ctx, e, &off)){
                 // a member of a local is already a slot
                 if(dest == CI_NO_SLOT){
                     out->slot = off;
@@ -2012,7 +2738,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             CcExpr* lv = e->lhs;
             uint32_t off;
             CiOp* op;
-            if(ci_frame_lvalue(ci, lv, &off)){
+            if(ci_frame_lvalue(ci, ctx, lv, &off)){
                 err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
                 if(err) return err;
                 out->slot = dest;
@@ -3061,6 +3787,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 .builtin = {
                     .kind = CI_OP_BUILTIN,
                     .op = e->builtin.op,
+                    .loc = e->loc,
                 },
             };
             return 0;
@@ -3380,7 +4107,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     }
     CiOp* op;
     uint32_t vslot;
-    if(ci_frame_lvalue(ci, lhs, &vslot)){
+    if(ci_frame_lvalue(ci, ctx, lhs, &vslot)){
         if(out && !is_pre){
             err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
             if(err) return err;
@@ -3671,7 +4398,9 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     uint32_t newv;
     err = ci_alloc_slot(ctx, size, size, &newv);
     if(err) return err;
-    uint32_t sslot;
+    _Bool immediate=!is_pointer && !is_float && (size==4 || size==8);
+    uint32_t sslot = 0;
+    if(!immediate){
     err = ci_alloc_slot(ctx, step_immsize, step_immsize, &sslot);
     if(err) return err;
     if(is_pointer){
@@ -3695,9 +4424,21 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         }
     };
     }
+    }
     err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
     if(err) return err;
-    if(is_float){
+    if(immediate){
+        *op=(CiOp){.alu_imm={
+            .kind = size == 4 ?CI_OP_ALU_IMM32 : CI_OP_ALU_IMM64,
+            .slot = newv,
+            .src = old,
+            .op = is_inc? CI_ALU_ADD : CI_ALU_SUB,
+            .is_unsigned = 1,
+            .immediate = step,
+            .loc = e->loc
+        }};
+    }
+    else if(is_float){
         *op = (CiOp){
             .falu32 = {
                 .kind = alukind,
@@ -4000,14 +4741,14 @@ ci_lower_bit_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t des
 
 static
 _Bool
-ci_memcpy_frame_addr(CiInterpreter* ci, CcExpr* e, uint32_t* slot){
+ci_memcpy_frame_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t* slot){
     // Pointer casts and array decay preserve the address of local storage.
     while(e->kind == CC_EXPR_CAST && ccqt_kind(e->type) == CC_POINTER && (ccqt_kind(e->lhs->type) == CC_POINTER || (ccqt_is_fixed_sequence(e->lhs->type) || ccqt_kind(e->lhs->type) == CC_VLA)))
         e = e->lhs;
     if(e->kind == CC_EXPR_ADDR)
-        return ci_frame_lvalue(ci, e->lhs, slot);
+        return ci_frame_lvalue(ci, ctx, e->lhs, slot);
     if((ccqt_is_fixed_sequence(e->type) || ccqt_kind(e->type) == CC_VLA))
-        return ci_frame_lvalue(ci, e, slot);
+        return ci_frame_lvalue(ci, ctx, e, slot);
     return 0;
 }
 
@@ -4022,8 +4763,8 @@ ci_lower_memcpy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     }
     uint32_t temp = ctx->temp;
     uint32_t dst, src;
-    _Bool dst_frame = ci_memcpy_frame_addr(ci, e->values[0], &dst);
-    _Bool src_frame = ci_memcpy_frame_addr(ci, e->values[1], &src);
+    _Bool dst_frame = ci_memcpy_frame_addr(ci, ctx, e->values[0], &dst);
+    _Bool src_frame = ci_memcpy_frame_addr(ci, ctx, e->values[1], &src);
     uint32_t dst_alignment, src_alignment;
     err = ci_pointer_alignment(ci, ctx, e->values[0], &dst_alignment);
     if(err) return err;
@@ -4113,6 +4854,212 @@ ci_lower_native_signature(CiInterpreter* ci, Allocator al, CcFunction* type, CcF
 
 static
 int
+ci_lower_call_arguments(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiCallDescriptor* d, uint32_t* storage_slot, uint32_t result, _Bool variadic, _Bool direct){
+    NcCallPlan* plan = d->abi;
+    uint32_t storage = *storage_slot;
+    uint32_t* slots = Allocator_alloc(ctx->a, (plan->count ? plan->count : 1) * sizeof *slots);
+    if(!slots) return CI_OOM_ERROR;
+    int err = 0;
+    uint32_t last_effect = 0;
+    for(uint32_t i = plan->count; i > 1;){
+        _Bool safe;
+        err = ci_expr_discardable(ctx, e->values[--i], &safe);
+        if(err) goto cleanup;
+        if(!safe){
+            last_effect = i;
+            break;
+        }
+    }
+    for(uint32_t i = 0; i < plan->count; i++){
+        CiLowerVal v;
+        err = ci_lower_expr(ci, ctx, e->values[i], CI_NO_SLOT, &v);
+        if(err) goto cleanup;
+        if(i < last_effect){
+            err = ci_preserve_value(ci, ctx, e->values[i], &v);
+            if(err) goto cleanup;
+        }
+        slots[i] = v.slot;
+    }
+    if(direct){
+        size_t size = nc_stack_storage_size(plan);
+        err = ci_alloc_slot(ctx, (uint32_t)size, size? (uint32_t)plan->stack_alignment : 1, &storage);
+        if(err) goto cleanup;
+        *storage_slot = storage;
+    }
+    if(nc_stack_storage_size(plan) || variadic){
+        uint32_t stack = storage + (uint32_t)nc_stack_storage_prefix(plan);
+        CiAbiAddressSpec dst = {.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_STACK_BASE, .index = 0}},
+                         src = {.mode = CI_ABI_SLOT, .offset = stack};
+        err = ci_abi_emit(ctx->out, ctx->a, e->loc, plan->target, CI_ABI_ADDRESS, dst, src, 8);
+        if(err) goto cleanup;
+    }
+    switch(plan->target){
+        case CC_TARGET_X86_64_LINUX:
+        case CC_TARGET_X86_64_MACOS:
+            if(variadic || d->call_type->no_prototype){
+                CiAbiAddressSpec dst = {.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_VECTOR_COUNT, .index = 0}},
+                                 src = {.immediate = plan->fp};
+                err = ci_abi_emit(ctx->out, ctx->a, e->loc, plan->target, CI_ABI_CONSTANT, dst, src, 1);
+                if(err) goto cleanup;
+            }
+            break;
+        case CC_TARGET_X86_64_WINDOWS_MSVC:
+        case CC_TARGET_X86_64_WINDOWS_MINGW:
+            break;
+        case CC_TARGET_AARCH64_LINUX:
+            break;
+        case CC_TARGET_AARCH64_MACOS:
+            break;
+        case CC_TARGET_TEST:
+            break;
+        case CC_TARGET_COUNT:
+            err = ci_error(ci, e->loc, "call: unsupported target");
+            goto cleanup;
+        DRP_CASES_EXHAUSTED;
+    }
+    if(plan->result.mode == NC_ABI_INDIRECT){
+        CiAbiAddressSpec dst = {.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_INDIRECT_RESULT, .index = 0}},
+                         src = {.mode = CI_ABI_SLOT, .offset = result};
+        err = ci_abi_emit(ctx->out, ctx->a, e->loc, plan->target, CI_ABI_ADDRESS, dst, src, 8);
+        if(err) goto cleanup;
+    }
+    for(uint32_t i = 0; i < plan->count; i++){
+        err = ci_lower_abi_argument(ctx->out, ctx->a, plan, i, slots[i], 0, e->loc);
+        if(err) goto cleanup;
+    }
+    cleanup:
+    Allocator_free(ctx->a, slots, (plan->count ? plan->count : 1) * sizeof *slots);
+    return err;
+}
+
+static
+int
+ci_lower_inline_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CcFunc* f, uint32_t dest, CiLowerVal*_Nullable out, _Bool borrow_result, _Bool* handled){
+    *handled = 0;
+    if(ci->opt_noinline
+    || f->noinline
+    || !f->defined
+    || f->hotswappable
+    || f->interp_lowering
+    || f->type->is_variadic
+    || f->type->no_prototype
+    || e->call.nargs != f->params.count)
+        return 0;
+    unsigned depth = 0;
+    for(const CiLowerCtx* p = ctx; p; p = p->inline_state ? p->inline_state->parent : NULL){
+        if(p->function == f || ++depth > 32)
+            return 0;
+    }
+    int err;
+    if(!f->parsed){
+        err = cc_parse_func_body(&ci->parser, f);
+        if(err) return err;
+    }
+    if(f->inline_blocked) return 0;
+    err = ci_lower_func(ci, f, &ci->deps);
+    if(err) return err;
+    size_t budget = f->inline_ ? ci->inline_hint_budget : ci->inline_budget;
+    if(!f->always_inline && f->interp_ops->code.count > budget) return 0;
+    AtomMap(uintptr_t) labels = {0};
+    CiFoldCache cache = {0};
+    CiInlineState inline_state = {
+        .parent = ctx,
+        .result = dest,
+        .borrow_result = borrow_result,
+        .value_slot = dest,
+    };
+    CiLowerCtx body = {
+        .a = ctx->a,
+        .out = ctx->out,
+        .labels = &labels,
+        .materialized_addresses = ctx->materialized_addresses,
+        .frame_alignment = ctx->frame_alignment,
+        .frame_size = ctx->frame_size,
+        .size_size = ctx->size_size,
+        .ptr_size = ctx->ptr_size,
+        .char_is_unsigned = ctx->char_is_unsigned,
+        .static_initializer = ctx->static_initializer,
+        .has_alloca = ctx->has_alloca,
+        .has_vla = ctx->has_vla,
+        .ldbl_fmt = ctx->ldbl_fmt,
+        .fold_cache = &cache,
+        .function = f,
+        .inline_state = &inline_state,
+    };
+    CcStmtNode* tail = f->body_tree;
+    while(tail && tail->kind == CC_STMT_COMPOUND && tail->count)
+        tail = tail->stmts[tail->count - 1];
+    inline_state.tail_return = tail && tail->kind == CC_STMT_RETURN ? tail : NULL;
+    *handled = 1;
+    for(size_t i = 0; i < f->params.count; i++){
+        CcVariable* var = f->params.data[i].decl;
+        uint32_t size, align, slot;
+        err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &size);
+        if(err) goto cleanup;
+        err = cc_alignof_as_uint(&ci->parser, var->type, var->loc, &align);
+        if(err) goto cleanup;
+        if(var->alignment > align) align = var->alignment;
+        _Bool stable = !var->mutable_storage && !var->type.is_volatile && !var->type.is_atomic;
+        CiLowerVal v = {0};
+        int folded = FOLD_FAIL;
+        if(stable)
+            folded = ci_fold_expr(ci, ctx, e->values[i], &v.value);
+        if(folded > 0){
+            err = folded;
+            goto cleanup;
+        }
+        if(!folded){
+            slot = CI_NO_SLOT;
+            v.constant = 1;
+        }
+        else if(stable && ci_stable_variable(ctx, e->values[i])){
+            err = ci_lower_expr(ci, ctx, e->values[i], CI_NO_SLOT, &v);
+            if(err) goto cleanup;
+            slot = v.slot;
+        }
+        else {
+            err = ci_alloc_slot(ctx, size, align, &slot);
+            if(err) goto cleanup;
+            err = ci_lower_expr(ci, ctx, e->values[i], slot, &v);
+            if(err) goto cleanup;
+        }
+        err = ci_bind_slot(&body, var, slot);
+        if(err) goto cleanup;
+        CiInlineBinding* b = ci_inline_binding(&body, var);
+        b->parameter = 1;
+        if(stable){
+            b->value = v.value;
+            b->constant = v.constant;
+        }
+    }
+    body.temp = ctx->temp;
+    body.materialized_end = ctx->materialized_end;
+    err = ci_lower_stmt(ci, &body, f->body_tree);
+    if(err) goto cleanup;
+    err = ci_lower_resolve_gotos(ci, &body);
+    if(err) goto cleanup;
+    ci_patch_branches(&body, inline_state.returns, (uint32_t)body.out->count);
+    err = ci_lower_deps_merge(&ctx->deps, &body.deps, ctx->a);
+    if(err) goto cleanup;
+    if(out && inline_state.result_seen && !body.statement_fallthrough){
+        out->constant = inline_state.result_constant;
+        out->value = inline_state.result_value;
+        out->slot = inline_state.value_slot;
+    }
+    cleanup:
+    if(body.frame_alignment > ctx->frame_alignment)
+        ctx->frame_alignment = body.frame_alignment;
+    ci_bindings_cleanup(&body);
+    if(labels.data)
+        Allocator_free(ctx->a, labels.data, AM_alloc_size(labels.cap));
+    ma_cleanup(CiBackpatchTarget)(&body.backpatches, ctx->a);
+    ci_fold_cache_cleanup(&cache, ctx->a);
+    ci_lower_deps_cleanup(&body.deps, ctx->a);
+    return err;
+}
+
+static
+int
 ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
     int err;
     CcParser* p = &ci->parser;
@@ -4155,6 +5102,7 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         if(err) return err;
     }
     uint32_t ret_size = 0;
+    _Bool borrow_result = dest == CI_NO_SLOT;
     if(out){
         err = ci_lower_expr_dest(ci, ctx, e, &dest, out->size);
         if(err) return err;
@@ -4162,13 +5110,16 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         ret_size = out->size;
     }
     uint32_t temp = ctx->temp;
-    if(!out && !ccqt_bt_eq(e->type, CCBT_void)){
-        // A discarded result still needs storage for native calls and return
-        // instructions.
-        err = cc_sizeof_as_uint(p, e->type, e->loc, &ret_size);
-        if(err) return err;
-        err = ci_lower_expr_dest(ci, ctx, e, &dest, ret_size);
-        if(err) return err;
+    if(func){
+        _Bool handled;
+        err = ci_lower_inline_call(ci, ctx, e, func, out? dest : CI_NO_SLOT, out, borrow_result, &handled);
+        if(err || handled){
+            ctx->temp = temp;
+            if(err) return err;
+            if(out && out->slot+out->size>ctx->temp)
+                ctx->temp = out->slot+out->size;
+            return err;
+        }
     }
     CiCallDescriptor* d = Allocator_zalloc(ctx->a, sizeof *d);
     if(!d) return CI_OOM_ERROR;
@@ -4198,44 +5149,33 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         return _cc_unimplemented_error;
     }
     if(err) return err;
-    size_t state_size = nc_state_size(d->abi);
-    if(state_size > UINT32_MAX - 64)
+    size_t state_size = nc_stack_storage_size(d->abi);
+    if(!out && d->abi->result.mode == NC_ABI_INDIRECT){
+        ret_size = d->abi->result.size;
+        err = ci_lower_expr_dest(ci, ctx, e, &dest, ret_size);
+        if(err) return err;
+    }
+    if(state_size > UINT32_MAX)
         return ci_error(ci, e->loc, "call argument storage exceeds 32-bit layout limit");
-    uint32_t args_slot;
-    err = ci_alloc_slot(ctx, (uint32_t)state_size + 64, 64, &args_slot);
-    if(err) return err;
-    args_slot += 64; // room before the state for an indirect function pointer
+    uint32_t args_slot=0;
     if(!func){
+        err = ci_alloc_slot(ctx, 8, 8, &args_slot);
+        if(err) return err;
+        err = ci_alloc_slot(ctx, (uint32_t)state_size, state_size ? (uint32_t)d->abi->stack_alignment : 1, &args_slot);
+        if(err == _cc_overflow_error)
+            return ci_error(ci, e->loc, "call argument storage exceeds 32-bit layout limit");
+        if(err) return err;
         CiLowerVal v;
         err = ci_lower_expr(ci, ctx, callee, args_slot - 8, &v);
+        if(err == _cc_overflow_error)
+            return ci_error(ci, e->loc, "call argument storage exceeds 32-bit layout limit");
         if(err) return err;
     }
-    CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_lower_call_arguments(ci, ctx, e, d, &args_slot, ret_size ? dest : CI_NO_SLOT, d->call_type->is_variadic, func!=NULL);
+    if(err == _cc_overflow_error)
+        return ci_error(ci, e->loc, "call argument storage exceeds 32-bit layout limit");
     if(err) return err;
-    *op = (CiOp){.abi = {
-        .kind = CI_OP_ABI_INIT,
-        .state = args_slot,
-        .slot = ret_size ? dest : CI_NO_SLOT,
-        .plan = d->abi,
-        .loc = e->loc,
-    }};
-    for(uint32_t i = 0; i < nargs; i++){
-        CiLowerVal v;
-        err = ci_lower_expr(ci, ctx, e->values[i], CI_NO_SLOT, &v);
-        if(err) return err;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-        if(err) return err;
-        *op = (CiOp){.abi = {
-            .kind = CI_OP_ABI_ARG,
-            .write = 1,
-            .state = args_slot,
-            .slot = v.slot,
-            .index = i,
-            .plan = d->abi,
-            .loc = e->loc,
-        }};
-    }
+    CiOp* op;
     err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
@@ -4249,16 +5189,9 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             .loc = e->loc,
         }
     };
-    if(ret_size){
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    if(out && ret_size){
+        err = ci_lower_abi_result(ctx->out, ctx->a, d->abi, dest, 0, e->loc);
         if(err) return err;
-        *op = (CiOp){.abi={
-            .kind = CI_OP_ABI_RESULT,
-            .state = args_slot,
-            .slot = dest,
-            .plan = d->abi,
-            .loc = e->loc,
-        }};
     }
     ctx->temp = temp;
     return 0;
@@ -4278,7 +5211,7 @@ ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* han
     if((ccqt_is_integer(rhs->type) || ci_falu_type(rhs->type)
             || ccqt_kind(rhs->type) == CC_POINTER || ccqt_bt_eq(rhs->type, CCBT_nullptr_t))
         && !cc_expr_field_bit_width(lhs)
-        && !ci_frame_lvalue(ci, lhs, &frame_slot)){
+        && !ci_frame_lvalue(ci, ctx, lhs, &frame_slot)){
         uint32_t size, rhs_size;
         err = cc_sizeof_as_uint(p, lhs->type, lhs->loc, &size);
         if(err) return err;
@@ -4313,7 +5246,7 @@ ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* han
     }
     if(rhs->kind == CC_EXPR_INIT_LIST || rhs->kind == CC_EXPR_COMPOUND_LITERAL){
         uint32_t frame_off;
-        if(ci_frame_lvalue(ci, lhs, &frame_off))
+        if(ci_frame_lvalue(ci, ctx, lhs, &frame_off))
             return 0;
         uint32_t temp = ctx->temp;
         CiLowerAddr a;
@@ -4336,7 +5269,7 @@ ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* han
             return 0; // scalars stage through a slot cheaply
     }
     uint32_t off;
-    if(ci_frame_lvalue(ci, lhs, &off))
+    if(ci_frame_lvalue(ci, ctx, lhs, &off))
         return 0; // the rhs loads directly into the slot
     switch((uint32_t)rhs->kind){
         case CC_EXPR_BLOB:
@@ -4353,7 +5286,7 @@ ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* han
         default:
             return 0; // not an lvalue; it must be materialized anyway
     }
-    if(ci_frame_lvalue(ci, rhs, &off))
+    if(ci_frame_lvalue(ci, ctx, rhs, &off))
         return 0; // the store reads directly from the slot
     uint32_t size, rsz;
     err = cc_sizeof_as_uint(p, lhs->type, lhs->loc, &size);
@@ -5504,23 +6437,90 @@ ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowe
     int err;
     switch(e->va.op){
     case CC_VA_START:{
+        if(!ctx->function_abi)
+            return ci_ice(ci, e->loc, "va_start requires a function ABI%s", "");
         uint32_t temp = ctx->temp;
         CiLowerVal ap;
         err = ci_lower_expr(ci, ctx, e->lhs, CI_NO_SLOT, &ap);
         if(err) return err;
-        CiOp* op;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-        if(err) return err;
-        *op = (CiOp){
-            .va_start_ = {
-                .kind = CI_OP_VA_START,
-                .slot = ap.slot,
-                .loc = e->loc,
-                .target = ci_target(ci)->target,
-            },
-        };
         ctx->temp = temp;
-        return 0;
+        const NcCallPlan* p = ctx->function_abi;
+        uint32_t slot = ap.slot;
+        CiAbiAddressSpec overflow = {
+            .mode = CI_ABI_INCOMING_PTR,
+            .base = {.bank = CI_ABI_STACK_BASE},
+            .offset = (uint32_t)p->named_stack_size,
+        };
+        switch(p->target){
+            case CC_TARGET_X86_64_LINUX:
+            case CC_TARGET_X86_64_MACOS: {
+                CiAbiAddressSpec dst, src;
+                dst = (CiAbiAddressSpec){.mode = CI_ABI_SLOT_PTR, .pointer = slot, .offset = offsetof(NcSysvVaListTag, gp_offset)};
+                src = (CiAbiAddressSpec){.immediate = p->named_gp * 8};
+                err = ci_abi_emit(ctx->out, ctx->a, e->loc, p->target, CI_ABI_CONSTANT, dst, src, 4);
+                if(err) return err;
+                dst = (CiAbiAddressSpec){.mode = CI_ABI_SLOT_PTR, .pointer = slot, .offset = offsetof(NcSysvVaListTag, fp_offset)};
+                src = (CiAbiAddressSpec){.immediate = 48 + p->named_fp * 16};
+                err = ci_abi_emit(ctx->out, ctx->a, e->loc, p->target, CI_ABI_CONSTANT, dst, src, 4);
+                if(err) return err;
+                dst = (CiAbiAddressSpec){.mode = CI_ABI_SLOT_PTR, .pointer = slot, .offset = offsetof(NcSysvVaListTag, overflow_arg_area)};
+                err = ci_abi_emit(ctx->out, ctx->a, e->loc, p->target, CI_ABI_ADDRESS, dst, overflow, 8);
+                if(err) return err;
+                dst = (CiAbiAddressSpec){.mode = CI_ABI_SLOT_PTR, .pointer = slot, .offset = offsetof(NcSysvVaListTag, reg_save_area)};
+                src = (CiAbiAddressSpec){.mode = CI_ABI_GP_SAVE};
+                return ci_abi_emit(ctx->out, ctx->a, e->loc, p->target, CI_ABI_ADDRESS, dst, src, 8);
+            }
+            case CC_TARGET_AARCH64_LINUX: {
+                CiAbiAddressSpec dst, src;
+                dst = (CiAbiAddressSpec){.mode = CI_ABI_SLOT_PTR, .pointer = slot, .offset = offsetof(NcAapcs64VaList, __stack)};
+                err = ci_abi_emit(ctx->out, ctx->a, e->loc, p->target, CI_ABI_ADDRESS, dst, overflow, 8);
+                if(err) return err;
+                dst = (CiAbiAddressSpec){.mode = CI_ABI_SLOT_PTR, .pointer = slot, .offset = offsetof(NcAapcs64VaList, __gr_top)};
+                src = (CiAbiAddressSpec){.mode = CI_ABI_GP_SAVE, .offset = 64};
+                err = ci_abi_emit(ctx->out, ctx->a, e->loc, p->target, CI_ABI_ADDRESS, dst, src, 8);
+                if(err) return err;
+                dst = (CiAbiAddressSpec){.mode = CI_ABI_SLOT_PTR, .pointer = slot, .offset = offsetof(NcAapcs64VaList, __vr_top)};
+                src = (CiAbiAddressSpec){.mode = CI_ABI_FP_SAVE, .offset = 128};
+                err = ci_abi_emit(ctx->out, ctx->a, e->loc, p->target, CI_ABI_ADDRESS, dst, src, 8);
+                if(err) return err;
+                dst = (CiAbiAddressSpec){.mode = CI_ABI_SLOT_PTR, .pointer = slot, .offset = offsetof(NcAapcs64VaList, __gr_offs)};
+                src = (CiAbiAddressSpec){.immediate = (uint32_t)(((int)p->named_gp - 8) * 8)};
+                err = ci_abi_emit(ctx->out, ctx->a, e->loc, p->target, CI_ABI_CONSTANT, dst, src, 4);
+                if(err) return err;
+                dst = (CiAbiAddressSpec){.mode = CI_ABI_SLOT_PTR, .pointer = slot, .offset = offsetof(NcAapcs64VaList, __vr_offs)};
+                src = (CiAbiAddressSpec){.immediate = (uint32_t)(((int)p->named_fp - 8) * 16)};
+                return ci_abi_emit(ctx->out, ctx->a, e->loc, p->target, CI_ABI_CONSTANT, dst, src, 4);
+            }
+            case CC_TARGET_AARCH64_MACOS: {
+                overflow.offset = (uint32_t)((p->named_stack_size + 7) & ~(size_t)7);
+                CiAbiAddressSpec dst = {.mode = CI_ABI_SLOT_PTR, .pointer = slot, .offset = 0};
+                return ci_abi_emit(ctx->out, ctx->a, e->loc, p->target, CI_ABI_ADDRESS, dst, overflow, 8);
+            }
+            case CC_TARGET_X86_64_WINDOWS_MSVC:
+            case CC_TARGET_X86_64_WINDOWS_MINGW: {
+                CiAbiAddressSpec dst, src;
+                overflow.offset = (uint32_t)((p->named_stack_size + 7) & ~(size_t)7);
+                if(p->named_gp < 4){
+                    for(unsigned i = p->named_gp; i < 4; i++){
+                        dst = (CiAbiAddressSpec){.mode = CI_ABI_INCOMING_PTR, .base = {.bank = CI_ABI_STACK_BASE, .index = 0}, .offset = i * 8 - 32};
+                        src = (CiAbiAddressSpec){.mode = CI_ABI_INCOMING, .reg = {.bank = CI_ABI_GP, .index = i}};
+                        err = ci_abi_emit(ctx->out, ctx->a, e->loc, p->target, CI_ABI_COPY, dst, src, 8);
+                        if(err) return err;
+                    }
+                    overflow.offset = p->named_gp * 8 - 32;
+                }
+                dst = (CiAbiAddressSpec){.mode = CI_ABI_SLOT_PTR, .pointer = slot, .offset = 0};
+                return ci_abi_emit(ctx->out, ctx->a, e->loc, p->target, CI_ABI_ADDRESS, dst, overflow, 8);
+            }
+            case CC_TARGET_TEST: {
+                overflow.offset = (uint32_t)((p->named_stack_size + 7) & ~(size_t)7);
+                CiAbiAddressSpec dst = {.mode = CI_ABI_SLOT_PTR, .pointer = slot, .offset = 0};
+                return ci_abi_emit(ctx->out, ctx->a, e->loc, p->target, CI_ABI_ADDRESS, dst, overflow, 8);
+            }
+            case CC_TARGET_COUNT:
+                return ci_error(ci, e->loc, "va_start: unsupported target");
+            DRP_CASES_EXHAUSTED;
+        }
     }
     case CC_VA_END:
         return ci_lower_expr_discard(ci, ctx, e->lhs);
@@ -6364,20 +7364,21 @@ ci_emit_store_bitfield(CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_
 
 static
 _Bool
-ci_frame_lvalue(CiInterpreter* ci, const CcExpr* lv, uint32_t* offset){
+ci_frame_lvalue(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* lv, uint32_t* offset){
     if(ccqt_kind(lv->type) == CC_VLA) return 0;
     if(lv->type.is_volatile) return 0;
     switch((uint32_t)lv->kind){
         case CC_EXPR_VARIABLE:
             if(!lv->var->automatic) return 0;
+            if(lv->var->constexpr_ && !lv->var->mutable_storage) return 0;
             if(lv->type.is_atomic) return 0;
-            *offset = (uint32_t)lv->var->frame_offset;
+            *offset = ci_variable_slot(ctx,lv->var);
             return 1;
         case CC_EXPR_DOT:{
             if(cc_expr_field_bit_width(lv)) return 0;
             if(lv->type.is_atomic) return 0;
             uint32_t base;
-            if(!ci_frame_lvalue(ci, lv->values[0], &base)) return 0;
+            if(!ci_frame_lvalue(ci, ctx, lv->values[0], &base)) return 0;
             uint64_t field_offset;
             if(cc_expr_field_offset(ci_target(ci), lv, &field_offset)) return 0;
             *offset = base + (uint32_t)field_offset;
@@ -6470,12 +7471,12 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
             *out = (CiLowerAddr){.slot=value.slot};
             return 0;
         }
-        *out = (CiLowerAddr){.slot=(uint32_t)lv->var->frame_offset};
+        *out = (CiLowerAddr){.slot=ci_variable_slot(ctx,lv->var)};
         return 0;
     }
     CcParser* p = &ci->parser;
     uint32_t frame_off;
-    if(ci_frame_lvalue(ci, lv, &frame_off)){
+    if(ci_frame_lvalue(ci, ctx, lv, &frame_off)){
         // a local (or a member chain of one) lives in a slot
         uint32_t aslot;
         err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &aslot);
@@ -6527,6 +7528,8 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
         }
         case CC_EXPR_VARIABLE:{
             CcVariable* var = lv->var;
+            if(var->automatic && var->constexpr_ && !var->mutable_storage)
+                return ci_lower_materialize_addr(ci, ctx, lv, out);
             if(var->automatic){
                 // atomic locals miss the frame fast path above, but their
                 // storage is a slot all the same
@@ -6541,7 +7544,7 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
                         .kind = CI_OP_SLOT_ADDR,
                         .slot = aslot,
                         .slot_size = ctx->ptr_size,
-                        .src = (uint32_t)var->frame_offset,
+                        .src = ci_variable_slot(ctx,var),
                         .loc = lv->loc,
                     }
                 };
@@ -7283,6 +8286,7 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
     Allocator al = ci_allocator(ci);
     CiFuncOps* ops = Allocator_zalloc(al, sizeof *ops);
     if(!ops) return CI_OOM_ERROR;
+    f->interp_lowering = 1;
     f->frame_size = 0;
     AtomMap(uintptr_t) labels = {0};
     const CcTargetConfig* t = ci_target(ci);
@@ -7297,44 +8301,57 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
         .char_is_unsigned = !t->char_is_signed,
         .ldbl_fmt = t->long_double_format,
         .fold_cache = &fold_cache,
+        .function = f,
     };
-    Parray(CcVariable) storage = {0};
-    err = ci_constexpr_uses_stmt(ci, &ctx, f->body_tree, &storage);
-    if(err) goto finally;
-    err = ci_constexpr_dependencies(ci, &ctx, &storage);
-    if(err) goto finally;
-    pa_cleanup(&storage, al);
     err = nc_plan_create(al, t, f->type, &ops->abi);
     if(err) goto finally;
-    for(size_t i = 0; i < f->params.count; i++){
-        CiOp param = {.abi = {
-            .kind = CI_OP_ABI_ARG,
+    ctx.function_abi = ops->abi;
+    if(ops->abi->result.mode == NC_ABI_INDIRECT){
+        err = ci_alloc_slot(&ctx, ctx.ptr_size, ctx.ptr_size, &ctx.result_pointer_slot);
+        if(err) goto finally;
+        CiOp save = {.abi_move = {
+            .kind = CI_OP_ABI_MOVE,
             .incoming = 1,
-            .index = (uint32_t)i,
-            .plan = ops->abi,
+            .operation = CI_ABI_COPY,
+            .size = ctx.ptr_size,
+            .source_size = ctx.ptr_size,
+            .slot = ctx.result_pointer_slot,
+            .reg = ci_abi_resolve_register(t->target, (CiAbiRegister){.bank = CI_ABI_INDIRECT_RESULT}),
             .loc = f->loc,
         }};
-        err = ma_push(CiOp)(&ops->code, al, param);
+        err = ma_push(CiOp)(&ops->code, al, save);
+        if(err) goto finally;
+    }
+    uint32_t native_index = 0;
+    for(size_t i = 0; i < f->params.count; i++){
+        CcVariable* var = f->params.data[i].decl;
+        uint32_t size, align, slot;
+        err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &size);
+        if(err) goto finally;
+        err = cc_alignof_as_uint(&ci->parser, var->type, var->loc, &align);
+        if(err) goto finally;
+        if(var->alignment > align) align = var->alignment;
+        err = ci_alloc_slot(&ctx, size, align, &slot);
+        if(err) goto finally;
+        err = ci_bind_slot(&ctx, var, slot);
+        if(err) goto finally;
+        ci_inline_binding(&ctx, var)->parameter = 1;
+        f->params.data[i].offset = slot;
+        f->params.data[i].sz = size;
+        f->params.data[i].native_index = ci_arg_is_ignored(t->target, var->type) ? UINT32_MAX : native_index++;
+        err = ci_lower_abi_argument(&ops->code, al, ops->abi, (uint32_t)i, slot, 1, f->loc);
         if(err) goto finally;
     }
     err = ci_lower_stmt(ci, &ctx, f->body_tree);
     if(err) goto finally;
-    uint32_t native_index = 0;
-    for(size_t i = 0; i < f->params.count; i++){
-        CcVariable* var = f->params.data[i].decl;
-        f->params.data[i].offset = (uint32_t)var->frame_offset;
-        ops->code.data[i].abi.slot = (uint32_t)var->frame_offset;
-        f->params.data[i].native_index = ci_arg_is_ignored(t->target, var->type) ? UINT32_MAX : native_index++;
-        err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &f->params.data[i].sz);
-        if(err) goto finally;
-    }
-    err = ci_lower_native_signature(ci, al, f->type, &ops->native_type);
-    if(err) goto finally;
     err = ci_lower_resolve_gotos(ci, &ctx);
+    if(err) goto finally;
+    err = ci_lower_native_signature(ci, al, f->type, &ops->native_type);
     if(err) goto finally;
     err = ci_lower_deps_merge(deps, &ctx.deps, al);
     finally:
-    pa_cleanup(&storage, al);
+    f->interp_lowering = 0;
+    ci_bindings_cleanup(&ctx);
     ci_fold_cache_cleanup(&fold_cache, al);
     ci_lower_deps_cleanup(&ctx.deps, al);
     ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, al);
@@ -7344,7 +8361,11 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
         for(size_t i = 0; i < ops->code.count; i++){
             CiOp* o = &ops->code.data[i];
             if(o->kind == CI_OP_SWITCH && o->switch_.table)
-                Allocator_free(al, o->switch_.table, sizeof(CiSwitchTable) + o->switch_.table->count * sizeof(CcSwitchEntry));
+                Allocator_free(
+                    al,
+                    o->switch_.table,
+                    sizeof(CiSwitchTable) + o->switch_.table->count * sizeof(CcSwitchEntry)
+                );
         }
         ma_cleanup(CiOp)(&ops->code, al);
         Allocator_free(al, ops, sizeof *ops);
@@ -7357,7 +8378,7 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
 
 static
 int
-ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Marray(CiOp)* ops, AtomMap(uintptr_t)* labels, uint32_t* slot_size, CiLowerDeps* deps){
+ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Marray(CiOp)* ops, AtomMap(uintptr_t)* labels, uint32_t* slot_size, uint32_t* frame_alignment, CiLowerDeps* deps){
     int err = 0;
     size_t old_count = ops->count;
     uint32_t old_size = *slot_size;
@@ -7376,19 +8397,14 @@ ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Ma
         .out = ops,
         .labels = labels,
         .frame_size = slot_size,
+        .frame_alignment = *frame_alignment,
         .size_size = t->sizeof_[t->size_type],
         .ptr_size = t->sizeof_[CCBT_nullptr_t],
         .char_is_unsigned = !t->char_is_signed,
         .ldbl_fmt = t->long_double_format,
         .fold_cache = &fold_cache,
     };
-    Parray(CcVariable) storage = {0};
     for(size_t i = *lowered; i < nodes->count; i++){
-        err = ci_constexpr_uses_stmt(ci, &ctx, nodes->data[i], &storage);
-        if(err) goto cleanup;
-        err = ci_constexpr_dependencies(ci, &ctx, &storage);
-        if(err) goto cleanup;
-        pa_cleanup(&storage, al);
         err = ci_lower_stmt(ci, &ctx, nodes->data[i]);
         if(err) goto cleanup;
     }
@@ -7396,7 +8412,6 @@ ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Ma
     if(err) goto cleanup;
     err = ci_lower_deps_merge(deps, &ctx.deps, ctx.a);
     cleanup:
-    pa_cleanup(&storage, al);
     ci_fold_cache_cleanup(&fold_cache, al);
     ci_lower_deps_cleanup(&ctx.deps, ctx.a);
     ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, ctx.a);
@@ -7404,38 +8419,71 @@ ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Ma
         for(size_t i = old_count; i < ops->count; i++){
             CiOp* op = &ops->data[i];
             if(op->kind == CI_OP_SWITCH && op->switch_.table)
-                Allocator_free(al, op->switch_.table, sizeof(CiSwitchTable) + op->switch_.table->count * sizeof(CcSwitchEntry));
+                Allocator_free(
+                    al,
+                    op->switch_.table,
+                    sizeof(CiSwitchTable) + op->switch_.table->count * sizeof(CcSwitchEntry)
+                );
         }
         ops->count = old_count;
         *slot_size = old_size;
-        if(labels->cap) Allocator_free(al, labels->data, AM_alloc_size(labels->cap));
+        if(labels->cap)
+            Allocator_free(al, labels->data, AM_alloc_size(labels->cap));
         *labels = old_labels;
     }
     else {
+        *frame_alignment = ctx.frame_alignment > 16? ctx.frame_alignment : 16;
         *lowered = nodes->count;
-        if(old_labels.cap) Allocator_free(al, old_labels.data, AM_alloc_size(old_labels.cap));
+        if(old_labels.cap)
+            Allocator_free(al, old_labels.data, AM_alloc_size(old_labels.cap));
     }
     return err;
 }
 
 static
 int
-ci_lower_toplevel(CiInterpreter* ci, CiLowerDeps* deps){
-    CcParser* p = &ci->parser;
-    int err = ci_lower_nodes(ci, &p->toplevel_nodes, &ci->toplevel_lowered, &ci->toplevel_ops, &ci->toplevel_labels, &ci->toplevel_slot_size, deps);
-    if(err) return err;
-    if(ci->toplevel_slot_size > ci->toplevel_slots_cap){
-        uint32_t new_cap = ci->toplevel_slot_size * 2;
-        // FIXME: allocators need alignment param, overallocate and align ourselves.
-        void* storage = Allocator_zalloc(ci_allocator(ci), (size_t)new_cap + 63);
+ci_resize_toplevel_slots(CiInterpreter* ci){
+    uint32_t alignment = 16;
+    if(ci->toplevel_alignment > 16)
+        alignment = ci->toplevel_alignment;
+    if(ci->toplevel_slot_size > ci->toplevel_slots_cap || (ci->toplevel_slots && alignment > ci->toplevel_alloc_alignment)){
+        uint32_t new_cap = ci->toplevel_slot_size > ci->toplevel_slots_cap? ci->toplevel_slot_size : ci->toplevel_slots_cap;
+        void* storage = Allocator_zalloc(ci_allocator(ci), (size_t)new_cap + alignment - 1);
         if(!storage) return CI_OOM_ERROR;
-        void* slots = (void*)(((uintptr_t)storage + 63) & ~(uintptr_t)63);
-        if(ci->toplevel_slots)
-            Allocator_free(ci_allocator(ci), ci->toplevel_storage, (size_t)ci->toplevel_slots_cap + 63);
+        void* slots = (void*)(((uintptr_t)storage + alignment - 1) & ~(uintptr_t)(alignment - 1));
+        if(ci->toplevel_slots){
+            memcpy(slots, ci->toplevel_slots, ci->toplevel_slots_cap);
+            Allocator_free(
+                ci_allocator(ci),
+                ci->toplevel_storage,
+                (size_t)ci->toplevel_slots_cap + ci->toplevel_alloc_alignment - 1
+            );
+        }
         ci->toplevel_slots = slots;
         ci->toplevel_storage = storage;
         ci->toplevel_slots_cap = new_cap;
+        ci->toplevel_alloc_alignment = alignment;
     }
+    return 0;
+}
+
+static
+int
+ci_lower_toplevel(CiInterpreter* ci, CiLowerDeps* deps){
+    CcParser* p = &ci->parser;
+    int err = ci_lower_nodes(
+        ci,
+        &p->toplevel_nodes,
+        &ci->toplevel_lowered,
+        &ci->toplevel_ops,
+        &ci->toplevel_labels,
+        &ci->toplevel_slot_size,
+        &ci->toplevel_alignment,
+        deps
+    );
+    if(err) return err;
+    err = ci_resize_toplevel_slots(ci);
+    if(err) return err;
     ci->top_frame.ops = ci->toplevel_ops.data;
     ci->top_frame.op_count = ci->toplevel_ops.count;
     ci->top_frame.slots = ci->toplevel_slots;
@@ -7445,7 +8493,16 @@ ci_lower_toplevel(CiInterpreter* ci, CiLowerDeps* deps){
 static
 int
 ci_lower_module(CiInterpreter* ci, CiModule* module, CiLowerDeps* deps){
-    return ci_lower_nodes(ci, &module->nodes, &module->lowered, &module->ops, &module->labels, &module->slot_size, deps);
+    return ci_lower_nodes(
+        ci,
+        &module->nodes,
+        &module->lowered,
+        &module->ops,
+        &module->labels,
+        &module->slot_size,
+        &module->frame_alignment,
+        deps
+    );
 }
 
 static
@@ -7454,7 +8511,11 @@ ci_lowered_expr_cleanup(CiLoweredExpr* code, Allocator al){
     for(size_t i = 0; i < code->ops.count; i++){
         CiOp* op = &code->ops.data[i];
         if(op->kind == CI_OP_SWITCH && op->switch_.table)
-            Allocator_free(al, op->switch_.table, sizeof(CiSwitchTable) + op->switch_.table->count * sizeof(CcSwitchEntry));
+            Allocator_free(
+                al,
+                op->switch_.table,
+                sizeof(CiSwitchTable) + op->switch_.table->count * sizeof(CcSwitchEntry)
+            );
     }
     ma_cleanup(CiOp)(&code->ops, al);
     *code = (CiLoweredExpr){0};
@@ -7480,13 +8541,7 @@ ci_lower_standalone_expr(CiInterpreter* ci, CcExpr* expr, CiLoweredExpr* code, C
     };
     CiLowerVal value = {0};
     _Bool is_void = ccqt_bt_eq(expr->type, CCBT_void);
-    Parray(CcVariable) storage = {0};
-    int err = ci_constexpr_uses_expr(ci, &ctx, expr, 0, &storage);
-    if(err) goto cleanup;
-    err = ci_constexpr_dependencies(ci, &ctx, &storage);
-    if(err) goto cleanup;
-    pa_cleanup(&storage, al);
-    err = is_void ? ci_lower_expr_discard(ci, &ctx, expr) : ci_lower_expr(ci, &ctx, expr, CI_NO_SLOT, &value);
+    int err = is_void ? ci_lower_expr_discard(ci, &ctx, expr) : ci_lower_expr(ci, &ctx, expr, CI_NO_SLOT, &value);
     if(err) goto cleanup;
     err = ci_lower_resolve_gotos(ci, &ctx);
     if(err) goto cleanup;
@@ -7496,7 +8551,6 @@ ci_lower_standalone_expr(CiInterpreter* ci, CcExpr* expr, CiLoweredExpr* code, C
     code->value_slot = value.slot;
     code->value_size = value.size;
     cleanup:
-    pa_cleanup(&storage, al);
     ci_fold_cache_cleanup(&fold_cache, al);
     ci_lower_deps_cleanup(&ctx.deps, al);
     ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, al);
@@ -9175,6 +10229,13 @@ ci_fold_read(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* result)
 static
 int
 ci_fold_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded){
+    if(e->kind==CC_EXPR_VARIABLE && !e->type.is_volatile && !e->type.is_atomic){
+        CiInlineBinding* b = ci_inline_binding(ctx,e->var);
+        if(b && b->constant){
+            *folded = b->value;
+            return 0;
+        }
+    }
     CiFoldCache* cache = ctx->fold_cache;
     if(!cache || ctx->static_initializer)
         return ci_fold_expr_uncached(ci, ctx, e, folded);

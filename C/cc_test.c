@@ -12283,6 +12283,21 @@ TestFunction(test_parse_errors){
             SVI("(test):3:14: error: __hotswap function pointer types must match. The types are 'int (*)(int)' and 'long (*)(int)'\n"),
         },
         {
+            "hotswappable rejects objects", __LINE__,
+            SVI("[[drc::hotswappable]] int x;\n"),
+            SVI("(test):1:27: error: drc::hotswappable requires a function declaration\n"),
+        },
+        {
+            "hotswappable rejects typedefs", __LINE__,
+            SVI("[[drc::hotswappable]] typedef int F(void);\n"),
+            SVI("(test):1:35: error: drc::hotswappable requires a function declaration\n"),
+        },
+        {
+            "hotswappable rejects arguments", __LINE__,
+            SVI("[[drc::hotswappable(1)]] int f(void);\n"),
+            SVI("(test):1:20: error: drc::hotswappable takes no arguments\n"),
+        },
+        {
             "hotswap rejects different parameter pointee qualifiers", __LINE__,
             SVI("int f(int *x);\n"
                 "int g(const int *x);\n"

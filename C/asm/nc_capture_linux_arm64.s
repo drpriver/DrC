@@ -57,26 +57,22 @@ nc_capture_entry:
 .section .note.GNU-stack,"",%progbits
 
 .text
-.p2align 2
+.p2align 4
 .globl nc_abi_invoke
 nc_abi_invoke:
     hint #34
     .cfi_startproc
-    stp x29, x30, [sp, #-48]!
-    .cfi_def_cfa_offset 48
-    .cfi_offset 29, -48
-    .cfi_offset 30, -40
+    stp x29, x30, [sp, #-32]!
+    .cfi_def_cfa_offset 32
+    .cfi_offset 29, -32
+    .cfi_offset 30, -24
     mov x29, sp
     .cfi_def_cfa_register 29
     stp x19, x20, [sp, #16]
-    stp x21, x22, [sp, #32]
-    .cfi_offset 19, -32
-    .cfi_offset 20, -24
-    .cfi_offset 21, -16
-    .cfi_offset 22, -8
+    .cfi_offset 19, -16
+    .cfi_offset 20, -8
     mov x19, x0
     mov x20, x1
-    mov x21, x2
     add x9, x2, #15
     and x9, x9, #-16
     sub sp, sp, x9
@@ -85,14 +81,22 @@ nc_abi_invoke:
     and x9, x9, x3
     mov sp, x9
     ldr x10, [x19, #72]
-    mov x11, x21
+    mov x11, x2
 1:
-    cbz x11, 2f
-    ldrb w12, [x10], #1
-    strb w12, [x9], #1
-    sub x11, x11, #1
+    cmp x11, #16
+    b.lo 2f
+    ldp x12, x13, [x10], #16
+    stp x12, x13, [x9], #16
+    sub x11, x11, #16
     b 1b
 2:
+    cbz x11, 4f
+3:
+    ldrb w12, [x10], #1
+    strb w12, [x9], #1
+    subs x11, x11, #1
+    b.ne 3b
+4:
     ldp q0, q1, [x19, #80]
     ldp q2, q3, [x19, #112]
     ldp q4, q5, [x19, #144]
@@ -108,8 +112,7 @@ nc_abi_invoke:
     stp q2, q3, [x19, #256]
     mov sp, x29
     ldp x19, x20, [sp, #16]
-    ldp x21, x22, [sp, #32]
-    ldp x29, x30, [sp], #48
+    ldp x29, x30, [sp], #32
     .cfi_def_cfa sp, 0
     ret
     .cfi_endproc

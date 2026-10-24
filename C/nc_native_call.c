@@ -54,6 +54,7 @@ nc_plan_create(Allocator al, const CcTargetConfig* tc, CcFunction* f, NcCallPlan
     p->target = tc->target;
     p->count = f->param_count;
     p->fixed_count = f->fixed_param_count;
+    p->is_variadic = f->is_variadic || f->no_prototype;
     p->stack_alignment = 16;
     int err = nc_abi_type(tc, f->return_type, NC_ABI_RETURN, &p->result);
     if(err) goto fail;
@@ -89,20 +90,68 @@ static
 size_t
 nc_state_size(const NcCallPlan* p){
     size_t alignment = p->stack_alignment > 16? p->stack_alignment : 16;
-    return sizeof(NcCallState) + 32 + alignment - 1
-        + _nc_align_up(p->stack_size, alignment) + p->copy_size;
+    return sizeof(NcCallState) + alignment - 1 + nc_stack_storage_size(p);
+}
+
+static
+size_t
+nc_capture_size(CcTarget target){
+    return nc_abi_sysv(target) ? sizeof(NcCaptureSysV64)
+        : nc_abi_windows(target) ? sizeof(NcCaptureWin64)
+        : target == CC_TARGET_TEST ? sizeof(NcCaptureTest) : sizeof(NcCaptureArm64);
+}
+
+static
+size_t
+nc_capture_result_offset(CcTarget target){
+    return nc_abi_sysv(target) ? offsetof(NcCaptureSysV64, result_gp)
+        : nc_abi_windows(target) ? offsetof(NcCaptureWin64, result_gp)
+        : target == CC_TARGET_TEST ? offsetof(NcCaptureTest, result_gp)
+        : offsetof(NcCaptureArm64, result_gp);
+}
+
+static
+size_t
+nc_stack_storage_prefix(const NcCallPlan* p){
+    return nc_abi_windows(p->target) ? _nc_align_up(32, p->stack_alignment) : 0;
+}
+
+static
+size_t
+nc_stack_storage_size(const NcCallPlan* p){
+    size_t alignment = p->stack_alignment > 16 ? p->stack_alignment : 16;
+    size_t size = _nc_align_up(p->stack_size, alignment) + p->copy_size;
+    return size + nc_stack_storage_prefix(p);
 }
 
 static
 void
-nc_state_init(NcCallState* s, const NcCallPlan* p, void* _Nullable result){
-    memset(s, 0, nc_state_size(p));
-    size_t alignment = p->stack_alignment > 16? p->stack_alignment : 16;
-    unsigned char* stack = (void*)_nc_align_up((uintptr_t)s + sizeof *s + 32, alignment);
+nc_set_result_destination(NcCallState* s, const NcCallPlan* p, void* _Nullable result){
+    if(p->result.mode != NC_ABI_INDIRECT) return;
+    if(nc_abi_sysv(p->target)) s->sysv.gp[0] = (uintptr_t)result;
+    else if(nc_abi_windows(p->target)) s->win.gp[0] = (uintptr_t)result;
+    else if(p->target == CC_TARGET_TEST) s->test.indirect_result = result;
+    else s->arm.indirect_result = result;
+}
+
+static
+void* _Nullable
+nc_indirect_result(const NcCallState* s, const NcCallPlan* p){
+    if(p->result.mode != NC_ABI_INDIRECT) return NULL;
+    if(nc_abi_sysv(p->target)) return (void*)(uintptr_t)s->sysv.gp[0];
+    if(nc_abi_windows(p->target)) return (void*)(uintptr_t)s->win.gp[0];
+    if(p->target == CC_TARGET_TEST) return s->test.indirect_result;
+    return s->arm.indirect_result;
+}
+
+static
+void
+nc_registers_init(NcCallState* s, const NcCallPlan* p, void* stack_storage, void* _Nullable result){
+    memset(s, 0, sizeof *s);
+    unsigned char* stack = (unsigned char*)stack_storage + nc_stack_storage_prefix(p);
     if(nc_abi_sysv(p->target)){
         s->sysv.stack_args = stack;
         s->sysv.incoming_rax = p->fp;
-        s->sysv.result_x87_count = _nc_abi_bank_count(p->result, NC_ABI_X87);
         if(p->result.mode == NC_ABI_INDIRECT)
             s->sysv.gp[0] = (uintptr_t)result;
     }
@@ -119,6 +168,14 @@ nc_state_init(NcCallState* s, const NcCallPlan* p, void* _Nullable result){
         s->arm.stack_args = stack;
         s->arm.indirect_result = result;
     }
+}
+
+static
+void
+nc_state_init(NcCallState* s, const NcCallPlan* p, void* _Nullable result){
+    memset(s, 0, nc_state_size(p));
+    void* storage = (void*)_nc_align_up((uintptr_t)s + sizeof *s, p->stack_alignment);
+    nc_registers_init(s, p, storage, result);
 }
 
 static
@@ -253,11 +310,10 @@ nc_win64_arg_write(NcCaptureWin64* s, const NcCallPlan* p, const NcAbiArgument* 
     else if(a->on_stack)
         memcpy(s->stack_args + a->stack_offset, source, t.size);
     else {
-        memcpy(&s->gp[a->gp], source, t.size);
-        // Variadic FP arguments are supplied in both the GP and XMM banks.
-        memcpy(s->fp[a->gp], source, t.size);
+        _Bool fp=t.count && t.pieces[0].bank == NC_ABI_FP;
+        if(fp) memcpy(s->fp[a->gp], source, t.size);
+        if(!fp || p->is_variadic) memcpy(&s->gp[a->gp], source, t.size);
     }
-    memcpy(s->stack_args - 32, s->gp, 32);
 }
 
 static
@@ -368,7 +424,6 @@ nc_sysv_result_write(NcCaptureSysV64* s, NcAbiType t, const void* value){
         const void* obj = (const char*)value + piece.value_offset;
         memcpy(reg, obj, piece.size);
     }
-    s->result_x87_count = x87;
     if(t.sign_extend && t.size < 8 && gp){
         unsigned shift = (8 - t.size) * 8;
         s->result_gp[0] = (uint64_t)((int64_t)(s->result_gp[0] << shift) >> shift);
@@ -592,6 +647,8 @@ nc_result_read(const NcCallState* s, const NcCallPlan* p, void* value){
 static
 int
 nc_invoke(const NcCallPlan* p, void (*fn)(void), NcCallState* state){
+    if(nc_abi_sysv(CC_TARGET_NATIVE))
+        state->sysv.result_x87_count = _nc_abi_bank_count(p->result, NC_ABI_X87);
     nc_abi_invoke(state, fn, p->stack_size, p->stack_alignment);
     return 0;
 }
@@ -646,6 +703,8 @@ nc_capture_dispatch(NcClosure* c, NcCallState* state){
     }
     memset((unsigned char*)state + offset, 0, size - offset);
     c->cb(c->plan, state, c->userdata);
+    if(nc_abi_sysv(CC_TARGET_NATIVE))
+        state->sysv.result_x87_count = _nc_abi_bank_count(c->plan->result, NC_ABI_X87);
 }
 static int native_capture_allocate(NcClosure*, NcCaptureHandle*);
 static int native_capture_release(NcCaptureHandle);

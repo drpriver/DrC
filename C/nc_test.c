@@ -386,6 +386,8 @@ TestFunction(test_native_calls){
         nc_state_init(state, plan, &result);
         for(unsigned arg = 0; arg < cases[i].count; arg++)
             nc_arg_write(state, plan, arg, cases[i].args[arg].value);
+        if(plan->target==CC_TARGET_X86_64_LINUX || plan->target==CC_TARGET_X86_64_MACOS)
+            state->sysv.result_x87_count=cases[i].long_double_result?0:1;
         nc_invoke(plan, cases[i].fn, state);
         nc_result_read(state, plan, &result);
         _Bool equal = cases[i].long_double_result
@@ -622,6 +624,11 @@ nc_test_closure_callback(const NcCallPlan* plan, NcCallState* state, void* userd
         *dest = value;
     }
     nc_result_write(state, plan, &context->returned);
+    if(plan->target==CC_TARGET_X86_64_LINUX || plan->target==CC_TARGET_X86_64_MACOS){
+        unsigned x87=0;
+        for(unsigned i=0;i<plan->result.count;i++) x87+=plan->result.pieces[i].bank==NC_ABI_X87;
+        state->sysv.result_x87_count=x87?0:1;
+    }
 }
 
 TestFunction(test_native_closures){

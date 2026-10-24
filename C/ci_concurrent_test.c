@@ -371,6 +371,8 @@ TestFunction(test_concurrent_callbacks){
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .poison_frame_slots = 1,
+            .inline_budget = CI_DEFAULT_INLINE_BUDGET,
+            .inline_hint_budget = CI_DEFAULT_INLINE_HINT_BUDGET,
             .exit_code = -1,
             .parser = {
                 .cpp = {

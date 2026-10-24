@@ -51,6 +51,28 @@ TestFunction(test_snippets){
         _Bool skip;
     } testcases[] = {
         {
+            "zero inline budgets", __LINE__,
+            .program = CSVI(
+                "#include <stdio.h>\n"
+                "int leaf(int n){return n+1;}\n"
+                "inline int hinted(int n){return leaf(n)+1;}\n"
+                "printf(\"%d\",hinted(40));\n"
+            ),
+            .args = {CSVI("-finline-budget"), CSVI("0"), CSVI("-finline-hint-budget"), CSVI("0")},
+            .expected_output = SVI("42"),
+        },
+        {
+            "custom inline budgets", __LINE__,
+            .program = CSVI(
+                "#include <stdio.h>\n"
+                "int leaf(int n){return n+1;}\n"
+                "inline int hinted(int n){return leaf(n)+1;}\n"
+                "printf(\"%d\",hinted(40));\n"
+            ),
+            .args = {CSVI("-finline-budget"), CSVI("64"), CSVI("-finline-hint-budget"), CSVI("128")},
+            .expected_output = SVI("42"),
+        },
+        {
             // atexit callbacks require the interpreter to stay alive after main returns.
             "atexit cb", __LINE__,
             .program = CSVI(

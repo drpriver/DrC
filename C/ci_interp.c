@@ -14,7 +14,6 @@
 #endif
 #include "ci_interp.h"
 #include "ci_op.h"
-#include "ci_optimize.h"
 #include "cc_memory_order.h"
 #include "cc_errors.h"
 #include "cc_type_check.h"
@@ -85,7 +84,7 @@ struct CiModule {
     AtomMap(uintptr_t) labels; // label -> op index + 1
     size_t lowered; // count of nodes already lowered into ops
     uint32_t slot_size; // bytes of slot storage the ops need
-    size_t inlined;
+    uint32_t frame_alignment;
 };
 static int ci_lower_module(CiInterpreter*, CiModule*, CiLowerDeps*);
 
@@ -1066,7 +1065,7 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
             if(result != ci_discard_buf && sizeof ret > size)
                 return CI_RESULT_TOO_SMALL(ci, loc, sizeof ret, size);
             CiInterpFrame* module_frame;
-            err = ci_new_frame(ci, frame, module->slot_size, 16, &module_frame);
+            err = ci_new_frame(ci, frame, module->slot_size, module->frame_alignment, &module_frame);
             if(err) return err;
             module_frame->ops = module->ops.data;
             module_frame->op_count = module->ops.count;
@@ -1113,6 +1112,38 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
             return CI_UNREACHABLE_ERROR;
     }
     return CI_UNREACHABLE_ERROR;
+}
+
+
+static
+void*
+ci_abi_address(CiInterpFrame* frame, CiAbiAddress mode, uint32_t offset, uint32_t pointer){
+    NcCallState* registers = &frame->stack->registers;
+    char* base;
+    switch(mode){
+        case CI_ABI_SLOT: return (char*)frame->slots+offset;
+        case CI_ABI_REG: return (char*)registers + ((CiAbiRegister){.bits=offset}).capture_offset;
+        case CI_ABI_INCOMING: return (char*)frame->incoming + ((CiAbiRegister){.bits=offset}).capture_offset;
+        case CI_ABI_GP_SAVE:
+        case CI_ABI_FP_SAVE:
+            return (char*)frame->incoming + ((CiAbiRegister){.bits=pointer}).capture_offset + offset;
+        case CI_ABI_SLOT_PTR:
+            CI_INLINE_MEMCPY(&base, (char*)frame->slots+pointer, sizeof base);
+            return base+(int32_t)offset;
+        case CI_ABI_INCOMING_PTR:
+        case CI_ABI_INCOMING_PTR_INDIRECT:
+            registers = frame->incoming;
+            break;
+        case CI_ABI_REG_PTR:
+        case CI_ABI_REG_PTR_INDIRECT:
+            break;
+        DRP_CASES_EXHAUSTED;
+    }
+    CI_INLINE_MEMCPY(&base, (char*)registers + ((CiAbiRegister){.bits=pointer}).capture_offset, sizeof base);
+    base += (int32_t)offset;
+    if(mode == CI_ABI_REG_PTR_INDIRECT || mode == CI_ABI_INCOMING_PTR_INDIRECT)
+        CI_INLINE_MEMCPY(&base, base, sizeof(char*));
+    return base;
 }
 
 force_inline
@@ -1225,7 +1256,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     int ret = 1;
                     CcFunc* old_func = BPM_rget(&ci->closure_map, (void*)old_ptr);
                     CcFunc* new_func = BPM_rget(&ci->closure_map, (void*)new_ptr);
-                    if(!old_func || !(old_func->inline_ || old_func->always_inline)){
+                    if(old_func && old_func->hotswappable){
                         if(old_func == new_func)
                             ret = 0;
                         else if(old_func
@@ -2008,42 +2039,94 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             frame->pc++;
             return 0;
         }
-        case CI_OP_ABI_INIT: {
-            NcCallState* state = (void*)((char*)frame->slots + op->abi.state);
-            void* result = op->abi.slot == UINT32_MAX ? NULL : (char*)frame->slots + op->abi.slot;
-            nc_state_init(state, op->abi.plan, result);
+        case CI_OP_ABI_TRANSFER: {
+            void *dst = ci_abi_address(
+                frame,
+                op->abi_transfer.destination,
+                op->abi_transfer.dst, op->abi_transfer.dst_pointer
+            );
+            CiAbiTransfer action = op->abi_transfer.operation;
+            switch(action){
+                DRP_CASES_EXHAUSTED;
+                case CI_ABI_ZERO:
+                    memset(dst, 0, op->abi_transfer.size);
+                    break;
+                case CI_ABI_CONSTANT:{
+                    uint64_t value = op->abi_transfer.immediate;
+                    memcpy(dst, &value, op->abi_transfer.size);
+                    break;
+                }
+                case CI_ABI_COPY:{
+                    void* src = ci_abi_address(
+                        frame,
+                        op->abi_transfer.source,
+                        op->abi_transfer.src, op->abi_transfer.src_pointer
+                    );
+                    memmove(dst, src, op->abi_transfer.size);
+                    break;
+                }
+                case CI_ABI_ADDRESS:{
+                    uintptr_t address = (uintptr_t)ci_abi_address(
+                        frame,
+                        op->abi_transfer.source,
+                        op->abi_transfer.src, op->abi_transfer.src_pointer
+                    );
+                    CI_INLINE_MEMCPY(dst, &address, sizeof address);
+                    break;
+                }
+                case CI_ABI_ZERO_EXTEND:{
+                    void* src = ci_abi_address(
+                        frame,
+                        op->abi_transfer.source,
+                        op->abi_transfer.src, op->abi_transfer.src_pointer
+                    );
+                    uint64_t value = ci_read_uint(src, op->abi_transfer.source_size);
+                    memcpy(dst, &value, op->abi_transfer.size);
+                    break;
+                }
+                case CI_ABI_SIGN_EXTEND:{
+                    void* src = ci_abi_address(
+                        frame,
+                        op->abi_transfer.source,
+                        op->abi_transfer.src, op->abi_transfer.src_pointer
+                    );
+                    int64_t value = ci_read_int(src, op->abi_transfer.source_size);
+                    memcpy(dst, &value, op->abi_transfer.size);
+                    break;
+                }
+            }
             frame->pc++;
             return 0;
         }
-        case CI_OP_ABI_ARG:{
-            NcCallState* state = op->abi.incoming ? frame->incoming : (NcCallState*)((char*)frame->slots + op->abi.state);
-            if(!state) return ci_ice(ci, op->loc, "missing ABI call state%s", "");
-            void* value = (char*)frame->slots + op->abi.slot;
-            if(op->abi.write)
-                nc_arg_write(state, op->abi.plan, op->abi.index, value);
-            else
-                nc_arg_read(state, op->abi.plan, op->abi.index, value);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_ABI_RESULT: {
-            NcCallState* state = op->abi.incoming ? frame->incoming : (NcCallState*)((char*)frame->slots + op->abi.state);
-            if(!state) return ci_ice(ci, op->loc, "missing ABI call state%s", "");
-            void* value = (char*)frame->slots + op->abi.slot;
-            if(op->abi.write)
-                nc_result_write(state, op->abi.plan, value);
-            else
-                nc_result_read(state, op->abi.plan, value);
+        case CI_OP_ABI_MOVE: {
+            NcCallState* state = op->abi_move.incoming ? frame->incoming : &frame->stack->registers;
+            void* reg = (char*)state + op->abi_move.reg.capture_offset;
+            void* slot = (char*)frame->slots + op->abi_move.slot;
+            if(op->abi_move.write){
+                if(op->abi_move.operation != CI_ABI_COPY){
+                    union {
+                        uint64_t u;
+                        int64_t s;
+                    } value;
+                    if(op->abi_move.operation == CI_ABI_SIGN_EXTEND)
+                        value.s = ci_read_int(slot, op->abi_move.source_size);
+                    else
+                        value.u = ci_read_uint(slot, op->abi_move.source_size);
+                    memcpy(reg, &value, op->abi_move.size);
+                }
+                else memcpy(reg, slot, op->abi_move.size);
+            }
+            else memcpy(slot, reg, op->abi_move.size);
             frame->pc++;
             return 0;
         }
         case CI_OP_CALL: {
             CiCallDescriptor* d = op->call.descrip;
-            NcCallState* state = (void*)((char*)frame->slots + op->call.args_slot);
+            NcCallState* state = &frame->stack->registers;
             void (*fn)(void);
             CcFunc* func;
             if(op->call.is_indirect){
-                memcpy(&fn, (char*)state - 8, sizeof fn);
+                CI_INLINE_MEMCPY(&fn, (char*)frame->slots + op->call.args_slot - 8, sizeof fn);
                 func = BPM_rget(&ci->closure_map, (void*)fn);
             }
             else {
@@ -2058,7 +2141,10 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             #ifdef NO_NATIVE_CALL
             return CI_UNREACHABLE_ERROR;
             #endif
-            nc_invoke(d->abi, fn, state);
+            NcCallState native = *state;
+            nc_invoke(d->abi, fn, &native);
+            size_t result_offset = nc_capture_result_offset(CC_TARGET_NATIVE);
+            memcpy((char*)state + result_offset, (char*)&native + result_offset, nc_capture_size(CC_TARGET_NATIVE) - result_offset);
             frame->pc++;
             return 0;
         }
@@ -2249,11 +2335,6 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             return 0;
         }
         case CI_OP_RETURN_SLOT: {
-            if(frame->incoming){
-                nc_result_write(frame->incoming, frame->abi, (char*)frame->slots + op->return_slot.src);
-                frame->pc = frame->op_count;
-                return 0;
-            }
             if(op->return_slot.src_size > frame->return_size)
                 return CI_RESULT_TOO_SMALL(ci, op->loc, op->return_slot.src_size, frame->return_size);
             memcpy(frame->return_buf, (char*)frame->slots + op->return_slot.src, op->return_slot.src_size);
@@ -2622,15 +2703,6 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 DRP_CASES_EXHAUSTED;
             }
         }
-        case CI_OP_VA_START:{
-            void* ap;
-            memcpy(&ap, (char*)frame->slots + op->va_start_.slot, sizeof ap);
-            if(!frame->incoming || !frame->abi)
-                return ci_ice(ci, op->loc, "va_start without incoming ABI state%s", "");
-            nc_va_start((NcCallState* _Nonnull)frame->incoming, (NcCallPlan* _Nonnull)frame->abi, ap);
-            frame->pc++;
-            return 0;
-        }
         case CI_OP_VA_ARG:{
             void* ap;
             memcpy(&ap, (char*)frame->slots + op->va_arg_.src, sizeof ap);
@@ -2675,6 +2747,16 @@ ci_alloc_call_frame(CiInterpreter* ci, CiInterpFrame* _Nullable caller, CcFunc* 
     frame->ops = func->interp_ops->code.data;
     frame->op_count = func->interp_ops->code.count;
     frame->abi = func->interp_ops->abi;
+    frame->incoming = &frame->stack->registers;
+    if(func->type->is_variadic){
+        NcCallState* saved = ci_stack_alloc(frame->stack, sizeof *saved, _Alignof(NcCallState));
+        if(!saved){
+            ci_stack_rewind(frame->stack, frame->stack_mark);
+            return CI_OOM_ERROR;
+        }
+        *saved = *frame->incoming;
+        frame->incoming = saved;
+    }
     *out = frame;
     return 0;
 }
@@ -2688,8 +2770,6 @@ ci_make_abi_call_frame(CiInterpreter* ci, CiInterpFrame* caller, CcFunc* func, c
     CiInterpFrame* frame = NULL;
     int err = ci_alloc_call_frame(ci, caller, func, &frame);
     if(err) return err;
-    char* args = caller->slots ? (char*)caller->slots + op->call.args_slot : ci_discard_buf;
-    frame->incoming = (NcCallState*)args;
     frame->return_buf = op->call.ret_size ? (char*)caller->slots + op->call.ret_slot : ci_discard_buf;
     frame->return_size = op->call.ret_size ? op->call.ret_size : sizeof ci_discard_buf;
     *out = frame;
@@ -2706,8 +2786,13 @@ ci_free_call_frame(CiInterpreter* ci, CiInterpFrame* frame){
 static
 int
 ci_interp_run(CiInterpreter* ci, CiInterpFrame* root){
-    CiInterpFrame* frame = root;
     int err = 0;
+    if(!root->stack){
+        CiStack* stack;
+        err = ci_frame_stack(ci, root, &stack);
+        if(err) return err;
+    }
+    CiInterpFrame* frame = root;
     for(;;){
         CiInterpFrame* child = NULL;
         while(frame->pc < frame->op_count){
@@ -2728,8 +2813,14 @@ ci_interp_run(CiInterpreter* ci, CiInterpFrame* root){
 static
 int
 ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
+    int err;
+    if(!frame->stack){
+        CiStack* stack;
+        err = ci_frame_stack(ci, frame, &stack);
+        if(err) return err;
+    }
     CiInterpFrame* child = NULL;
-    int err = _ci_interp_step(ci, frame, &child);
+    err = _ci_interp_step(ci, frame, &child);
     if(err == CI_STEP_ENTER_FRAME){
         err = ci_interp_run(ci, child);
         ci_free_call_frame(ci, child);
@@ -2747,9 +2838,10 @@ ci_call_argv(CiInterpreter* ci, CiInterpFrame* _Nullable caller, CcFunc* func, v
     int err = ci_frame_stack(ci, caller, &stack);
     if(err) return err;
     CiStackMark mark = ci_stack_mark(stack);
-    NcCallState* state = ci_stack_alloc(stack, nc_state_size(plan), 64);
-    if(!state) return CI_OOM_ERROR;
-    nc_state_init(state, plan, result);
+    void* storage = ci_stack_alloc(stack, nc_stack_storage_size(plan), plan->stack_alignment);
+    if(!storage) return CI_OOM_ERROR;
+    NcCallState* state = &stack->registers;
+    nc_registers_init(state, plan, storage, result);
     for(uint32_t i = 0; i < func->params.count; i++){
         uint32_t n = func->params.data[i].native_index;
         if(n != UINT32_MAX) nc_arg_write(state, plan, i, argv[n]);
@@ -2764,11 +2856,16 @@ static int
 ci_call_abi(CiInterpreter* ci, CiInterpFrame* _Nullable caller, CcFunc* func, NcCallState* state, SrcLoc loc){
     CcFunc* target = ci_hotswap_target(func);
     if(!target) return ci_error(ci, loc, "hotswap cycle detected");
-    CiInterpFrame* frame = NULL;
-    int err = ci_alloc_call_frame(ci, caller, target, &frame);
+    CiStack* stack;
+    int err = ci_frame_stack(ci, caller, &stack);
     if(err) return err;
-    frame->incoming = state;
+    size_t capture_size = nc_capture_size(target->interp_ops->abi->target);
+    if(state != &stack->registers) memcpy(&stack->registers, state, capture_size);
+    CiInterpFrame* frame = NULL;
+    err = ci_alloc_call_frame(ci, caller, target, &frame);
+    if(err) return err;
     err = ci_interp_run(ci, frame);
+    if(state != &stack->registers) memcpy(state, &stack->registers, capture_size);
     ci_free_call_frame(ci, frame);
     return err;
 }
@@ -2962,10 +3059,6 @@ ci_resolve_module(CiInterpreter* ci, CiModule* module){
     err = ci_lower_module(ci, module, &ci->deps);
     if(err) goto finally;
     err = ci_resolve_deps(ci, &ci->deps);
-    if(!err){
-        err = ci_optimize_code(ci, &module->ops, &module->slot_size, module->inlined, &module->labels, NULL);
-        if(!err) module->inlined = module->ops.count;
-    }
     finally:
     ci_unlock_resolver(ci);
     return err;
@@ -3311,8 +3404,6 @@ ci_prepare_toplevel(CiInterpreter* ci){
     if(err) return err;
     err = ci_resolve_deps(ci, &ci->deps);
     if(err) return err;
-    err = ci_optimize_toplevel(ci);
-    if(err) return err;
     return 0;
 }
 
@@ -3419,13 +3510,6 @@ ci_resolve_deps(CiInterpreter* ci, CiLowerDeps* deps){
         }
         // Building one initializer can upgrade an already visited dependency.
         if(initializers.count != init_count) vi = 0;
-    }
-    for(size_t i = 0; i < deps->funcs.count; i++){
-        CcFunc* func = (CcFunc*)(uintptr_t)PM_items(&deps->funcs).data[i].key;
-        if(func->interp_ops){
-            err = ci_optimize_func(ci, func);
-            if(err) goto cleanup;
-        }
     }
     for(size_t i = 0; i < deps->funcs.count; i++){
         PointerMapItem item = PM_items(&deps->funcs).data[i];
@@ -4608,7 +4692,6 @@ ci_unlock_resolver(CiInterpreter* ci){
 #pragma clang assume_nonnull end
 #endif
 #include "ci_lower.c"
-#include "ci_optimize.c"
 
 // Execute prepared code only after its dependencies have been resolved.
 static
@@ -4643,8 +4726,6 @@ ci_eval_lowered_expr(CiInterpreter*_Nonnull ci, CiInterpFrame*_Nullable parent, 
     int err = ci_lower_standalone_expr(ci, expr, &code, &ci->deps);
     if(err) goto cleanup;
     err = ci_resolve_deps(ci, &ci->deps);
-    if(err) goto cleanup;
-    err = ci_optimize_code(ci, &code.ops, &code.frame_size, 0, NULL, NULL);
     if(err) goto cleanup;
     err = ci_run_lowered_expr(ci, parent, &code, expr->loc, result, size);
     cleanup:

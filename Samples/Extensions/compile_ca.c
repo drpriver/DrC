@@ -12,6 +12,7 @@ unsigned char next_grid[H][W];
 int tick;
 char status[1024] = "blank steps; type a rule expression to compile it";
 
+[[drc::hotswappable]]
 int rule(int alive, int n, int x, int y, int t){
     return n == 3 || (alive && n == 2);
 }

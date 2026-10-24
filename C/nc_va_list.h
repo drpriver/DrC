@@ -59,6 +59,8 @@ nc_aapcs64_va_start(NcCaptureArm64* state, const NcCallPlan* p, void* dest){
 static
 void
 nc_win64_va_start(NcCaptureWin64* state, const NcCallPlan* p, void* dest){
+    for(unsigned i=p->named_gp; i < 4; i++)
+        memcpy(state->stack_args - 32 + i*8, &state->gp[i], 8);
     void* cursor = p->named_gp < 4
         ? state->stack_args - 32 + p->named_gp * 8
         : state->stack_args + _nc_align_up(p->named_stack_size, 8);

@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include "nc_native_call.h"
 #include "../Drp/Allocators/allocator.h"
 #include "../Drp/ckdint.h"
 
@@ -30,6 +31,7 @@ _Static_assert(_Alignof(CiStackMark) == _Alignof(size_t), "hidden stack mark ali
 
 typedef struct CiStack CiStack;
 struct CiStack {
+    NcCallState registers; // Caller-clobbered ABI registers shared by this execution stack.
     Allocator allocator;
     CiStackSegment*_Nullable first;
     CiStackSegment*_Nullable last;

@@ -90,9 +90,8 @@ enum CiRuntimeOp TYPED_ENUM(uint32_t){
 TYPEDEF_ENUM(CiRuntimeOp, uint32_t);
 
 enum CiOpKind TYPED_ENUM(uint32_t){
-    CI_OP_ABI_INIT,
-    CI_OP_ABI_ARG,
-    CI_OP_ABI_RESULT,
+    CI_OP_ABI_MOVE,
+    CI_OP_ABI_TRANSFER,
     CI_OP_CONST,
     CI_OP_COPY,
     CI_OP_ALU_IMM32,
@@ -157,7 +156,6 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_STACK_RESTORE,
     CI_OP_BSWAP,
     CI_OP_BUILTIN,
-    CI_OP_VA_START,
     CI_OP_VA_ARG,
     CI_OP_RT_CALL,
 };
@@ -177,16 +175,92 @@ struct CiSwitchTable {
     CcSwitchEntry data[];
 };
 
+enum CiAbiBank TYPED_ENUM(uint32_t){
+    CI_ABI_GP,
+    CI_ABI_FP,
+    CI_ABI_RESULT_GP,
+    CI_ABI_RESULT_FP,
+    CI_ABI_RESULT_X87,
+    CI_ABI_STACK_BASE,
+    CI_ABI_INDIRECT_RESULT,
+    CI_ABI_VECTOR_COUNT,
+};
+TYPEDEF_ENUM(CiAbiBank, uint32_t);
+typedef union CiAbiRegister CiAbiRegister;
+union CiAbiRegister {
+    struct {
+        CiAbiBank bank:          8;
+        uint32_t index:          8,
+                 capture_offset: 16;
+    };
+    uint32_t bits;
+};
+
+enum CiAbiAddress TYPED_ENUM(uint32_t){
+    CI_ABI_SLOT,
+    CI_ABI_REG,
+    CI_ABI_INCOMING,
+    CI_ABI_REG_PTR,
+    CI_ABI_INCOMING_PTR,
+    CI_ABI_REG_PTR_INDIRECT,
+    CI_ABI_INCOMING_PTR_INDIRECT,
+    CI_ABI_SLOT_PTR,
+    CI_ABI_GP_SAVE,
+    CI_ABI_FP_SAVE,
+};
+TYPEDEF_ENUM(CiAbiAddress, uint32_t);
+enum CiAbiTransfer TYPED_ENUM(uint32_t){
+    CI_ABI_COPY,
+    CI_ABI_ADDRESS,
+    CI_ABI_ZERO,
+    CI_ABI_CONSTANT,
+    CI_ABI_ZERO_EXTEND,
+    CI_ABI_SIGN_EXTEND,
+};
+TYPEDEF_ENUM(CiAbiTransfer, uint32_t);
 typedef struct CiOp CiOp;
 struct CiOp {
     union {
         struct {
-            CiOpKind kind : 8;
-            uint32_t write : 1, incoming : 1, _pad : 22;
-            uint32_t slot, state, index;
-            NcCallPlan* _Nonnull plan;
+            CiOpKind kind:            8; // CI_OP_ABI_TRANSFER
+            CiAbiTransfer operation:  3;
+            CiAbiAddress source:      4,
+                         destination: 4;
+            uint32_t source_size:     5, // extension input width; otherwise size
+                     _pad:            8;
+            union {
+                uint32_t src,
+                         immediate;
+                CiAbiRegister src_reg;
+            };
+            union {
+                uint32_t dst;
+                CiAbiRegister dst_reg;
+            };
+            uint32_t size; // destination width in bytes
+            union {
+                uint32_t src_pointer;
+                CiAbiRegister src_base;
+            };
+            union {
+                uint32_t dst_pointer;
+                CiAbiRegister dst_base;
+            };
             SrcLoc loc;
-        } abi; // incoming selects the incoming call state; otherwise state is a slot offset
+        } abi_transfer;
+        struct {
+            CiOpKind kind: 8; // CI_OP_ABI_MOVE
+            uint32_t write: 1,
+                     incoming: 1,
+                     size: 5,
+                     source_size: 5,
+                     _pad: 9;
+            CiAbiTransfer operation: 3; // COPY, SIGN_EXTEND, ZERO_EXTEND
+            uint32_t slot;
+            CiAbiRegister reg;
+            uint32_t _padding[3];
+            SrcLoc loc;
+        } abi_move;
         struct {
             CiOpKind kind: 8;
             uint32_t _bitpad: 24;
@@ -557,13 +631,6 @@ struct CiOp {
             SrcLoc loc;
         } jump_false, jump_true;
         struct {
-            CiOpKind kind: 8; // CI_OP_RETURN
-            uint32_t _bitpad: 24;
-            uint32_t _pad;
-            uint64_t pad[2];
-            SrcLoc loc;
-        } return_;
-        struct {
             CiOpKind kind: 8; // CI_OP_RETURN_SLOT
             uint32_t _bitpad: 24;
             uint32_t _pad;
@@ -614,15 +681,6 @@ struct CiOp {
             SrcLoc loc;
         } builtin;
         struct {
-            CiOpKind kind: 8; // CI_OP_VA_START
-            uint32_t _bitpad: 24;
-            uint32_t _pad;
-            CcTarget target;
-            uint32_t slot;
-            uint64_t pad[1];
-            SrcLoc loc;
-        } va_start_;
-        struct {
             CiOpKind kind: 8; // CI_OP_VA_ARG
             uint32_t target : 8, align_log2 : 5, count : 3;
             NcAbiMode mode : 2;
@@ -635,6 +693,8 @@ struct CiOp {
     };
 };
 _Static_assert(sizeof(CiOp) == 32, "");
+_Static_assert(offsetof(CiOp, abi_transfer.loc) == offsetof(CiOp, loc), "ABI transfer source location layout");
+_Static_assert(offsetof(CiOp, abi_move.loc) == offsetof(CiOp, loc), "ABI move source location layout");
 _Static_assert(offsetof(CiOp, cmp.src) == offsetof(CiOp, cmp_jump.src), "comparison operand layout");
 _Static_assert(offsetof(CiOp, cmp.src2) == offsetof(CiOp, cmp_jump.src2), "comparison operand layout");
 _Static_assert(offsetof(CiOp, jump_false.jump) == offsetof(CiOp, cmp_jump.jump), "branch target layout");
@@ -645,13 +705,6 @@ _Static_assert(offsetof(CiOp, jump_false.jump) == offsetof(CiOp, cmp_jump.jump),
 #include "../Drp/Marray.h"
 #endif
 
-enum CiInlineState TYPED_ENUM(uint8_t){
-    CI_INLINE_UNVISITED,
-    CI_INLINE_VISITING,
-    CI_INLINE_FINISHED,
-};
-TYPEDEF_ENUM(CiInlineState, uint8_t);
-
 // The lowered code of one function, hung off CcFunc.interp_ops.
 typedef struct CiFuncOps CiFuncOps;
 struct CiFuncOps {
@@ -659,8 +712,6 @@ struct CiFuncOps {
     Marray(CiOp) code;
     CcFunction* _Nonnull native_type; // embedding API signature, excluding ignored arguments
     uint32_t frame_alignment;
-    CiInlineState inline_state; // 0: unvisited, 1: visiting, 2: prepared for execution
-    _Bool inline_blocked; // Recursive cycle or an operation requiring its own frame.
 };
 
 #endif

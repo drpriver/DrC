@@ -1707,10 +1707,9 @@ assert(x && *x == 42);
 ### `__hotswap(original, replacement)`
 
 Replaces the interpreted function reached by `original` with
-`replacement` at runtime. Both arguments must be function expressions or
-function pointers with the same exact function pointer type. `inline`,
-`__forceinline`, `__attribute__((always_inline))` functions cannot be
-swapped (as they may have been already inlined).
+`replacement` at runtime. The original function must have been declared with `hotswappable`.
+Both arguments must be function expressions or
+function pointers with the same exact function pointer type.
 
 
 Returns `0` on success and nonzero on failure.
@@ -1721,6 +1720,7 @@ swap. This applies to both direct interpreted calls and calls through
 interpreter-created function pointers. Chained swaps are followed.
 
 ```C
+[[drc::hotswappable]]
 int f(void){ return 1; }
 int g(void){ return 2; }
 
@@ -1733,6 +1733,7 @@ if(__hotswap(f, g) == 0)
 The replacement must have the same type as the original.
 
 ```C
+[[drc::hotswappable]]
 void old_tick(void){ puts("old"); }
 void new_tick(void){ puts("new"); }
 

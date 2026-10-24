@@ -37,10 +37,6 @@ nc_capture_entry PROC FRAME
     movdqu XMMWORD PTR [rsp+80], xmm1
     movdqu XMMWORD PTR [rsp+96], xmm2
     movdqu XMMWORD PTR [rsp+112], xmm3
-    mov QWORD PTR [rsp+176], rcx
-    mov QWORD PTR [rsp+184], rdx
-    mov QWORD PTR [rsp+192], r8
-    mov QWORD PTR [rsp+200], r9
     lea rax, [rsp+208]
     mov QWORD PTR [rsp+128], rax
     mov r11, QWORD PTR [r10+8]
