@@ -4343,6 +4343,12 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
             };
             return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
+        case CCBT_fp16: {
+            static const CppToken toks[] = {
+                {.type=CPP_IDENTIFIER, .txt=SVI("__fp16")},
+            };
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
+        }
         case CCBT_float16: {
             static const CppToken toks[] = {
                 {.type=CPP_IDENTIFIER, .txt=SVI("_Float16")},
@@ -4448,6 +4454,7 @@ ccbt_literal_suffix(CcBasicTypeKind kind){
         case CCBT_int128:
         case CCBT_unsigned_int128:
         case CCBT_bfloat16:
+        case CCBT_fp16:
         case CCBT_float16:
         case CCBT_float:
         case CCBT_double:

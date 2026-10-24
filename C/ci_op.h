@@ -107,10 +107,12 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_CMP128,
     CI_OP_CMP_JUMP32,
     CI_OP_CMP_JUMP64,
+    CI_OP_FALU16,
     CI_OP_FALU32,
     CI_OP_FALU64,
     CI_OP_FALU80,
     CI_OP_FALU128,
+    CI_OP_FCMP16,
     CI_OP_FCMP32,
     CI_OP_FCMP64,
     CI_OP_FCMP80,
@@ -341,9 +343,9 @@ struct CiOp {
             SrcLoc loc;
         } cmp_jump;
         struct {
-            CiOpKind kind: 8; // CI_OP_FALU32, CI_OP_FALU64
+            CiOpKind kind: 8; // CI_OP_FALU16, CI_OP_FALU32, CI_OP_FALU64
             CiFaluOp op: 8;
-            uint32_t _bitpad: 16;
+            uint32_t is_brian_float: 1, _bitpad: 15;
             uint32_t slot,
                      slot_size,
                      src,
@@ -352,9 +354,9 @@ struct CiOp {
             SrcLoc loc;
         } falu32, falu64;
         struct {
-            CiOpKind kind: 8; // CI_OP_FCMP32, CI_OP_FCMP64
+            CiOpKind kind: 8; // CI_OP_FCMP16, CI_OP_FCMP32, CI_OP_FCMP64
             CiCmpOp op: 8;
-            uint32_t _bitpad: 16;
+            uint32_t is_brian_float: 1, _bitpad: 15;
             uint32_t slot,
                      slot_size,
                      src,
@@ -401,7 +403,9 @@ struct CiOp {
                      dst_float: 8,
                      checked_index: 1,
                      checked_bound: 1,
-                     _bitpad: 5;
+                     src_is_brian_float: 1,
+                     dst_is_brian_float: 1,
+                     _bitpad: 3;
             uint32_t pad;
             uint32_t slot, slot_size,
                      src, src_size;

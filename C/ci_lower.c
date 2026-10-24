@@ -912,7 +912,8 @@ uint32_t
 ci_float_width(CcQualType t, CcLongDoubleFormat fmt){
     if(!ccqt_is_basic(t)) return 0;
     switch(ccqt_basic_kind(t)){
-        case CCBT_float16: return 16;
+        case CCBT_fp16:
+        case CCBT_float16: case CCBT_bfloat16: return 16;
         case CCBT_float: return 32;
         case CCBT_double: return 64;
         case CCBT_float128: return 128;
@@ -924,6 +925,7 @@ static
 CiOpKind
 ci_falu_kind(CcQualType t, CcLongDoubleFormat fmt){
     switch(ci_float_width(t, fmt)){
+        case 16: return CI_OP_FALU16;
         case 32: return CI_OP_FALU32;
         case 64: return CI_OP_FALU64;
         case 80: return CI_OP_FALU80;
@@ -1770,7 +1772,9 @@ ci_convert_scalar(CiLowerCtx* ctx, CiLowerVal v, CcQualType from, CcQualType to,
         .slot_size = size,
         .src = v.slot,
         .src_size = v.size,
+        .src_is_brian_float = ccqt_bt_eq(from, CCBT_bfloat16),
         .src_float = ci_float_width(from, ctx->ldbl_fmt),
+        .dst_is_brian_float = ccqt_bt_eq(to, CCBT_bfloat16),
         .dst_float = ci_float_width(to, ctx->ldbl_fmt),
         .is_unsigned = ccqt_is_unsigned(ff && !tf ? to : from, ctx->char_is_unsigned),
         .loc = loc
@@ -1840,9 +1844,12 @@ ci_lower_promoted_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32
     if(ci_falu_type(arithmetic)){
         CiFaluOp fop;
         if(!ci_falu_op_for(e->kind, &fop)) return ci_ice(ci, e->loc, "invalid floating compound operator%s", "");
-        *op = (CiOp){.falu32 = {.kind = ci_falu_kind(arithmetic, ctx->ldbl_fmt),
+        *op = (CiOp){.falu32 = {
+            .is_brian_float = ccqt_bt_eq(arithmetic, CCBT_bfloat16),
+            .kind = ci_falu_kind(arithmetic, ctx->ldbl_fmt),
             .op = fop, .slot = result, .slot_size = arithmetic_size,
-            .src = promoted, .src2 = r.slot, .loc = e->loc}};
+            .src = promoted, .src2 = r.slot, .loc = e->loc
+        }};
     }
     else *op = (CiOp){.alu = {.kind = ci_int_op_kind(arithmetic_size),
         .op = ci_alu_op_for(e->kind), .is_unsigned = ccqt_is_unsigned(arithmetic, ctx->char_is_unsigned),
@@ -2041,7 +2048,7 @@ ci_lower_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, 
     else if(lhs->type.is_atomic){
         // rmw handles the hardware ops at <= 8 bytes; floats and
         // 128-bit ints go through a compare-exchange loop instead.
-        _Bool op_is_float = opkind == CI_OP_FALU32 || opkind == CI_OP_FALU64 || opkind == CI_OP_FALU80 || opkind == CI_OP_FALU128;
+        _Bool op_is_float = opkind == CI_OP_FALU16 || opkind == CI_OP_FALU32 || opkind == CI_OP_FALU64 || opkind == CI_OP_FALU80 || opkind == CI_OP_FALU128;
         CiLowerVal ignored;
         return ci_lower_atomic_compound_assign(ci, ctx, e, dest, out ? (CiLowerVal*)out : &ignored, size, is_ptr, op_unsigned, op_is_float, fop);
     }
@@ -2134,6 +2141,7 @@ ci_lower_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, 
     else {
         *op = (CiOp){
             .falu32 = {
+                .is_brian_float = ccqt_bt_eq(e->type, CCBT_bfloat16),
                 .kind = opkind,
                 .op = fop,
                 .slot = cur,
@@ -2423,30 +2431,6 @@ ci_preserve_value(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerVal* val
     return 0;
 }
 
-// FIXME: Storage and ABI transfers preserve bfloat16 bits without arithmetic support.
-// but we should have arithmetic support
-static
-_Bool
-ci_bfloat_storage_expr(const CcExpr* e){
-    switch((uint32_t)e->kind){
-        case CC_EXPR_VARIABLE:
-        case CC_EXPR_DEREF:
-        case CC_EXPR_ARROW:
-        case CC_EXPR_DOT:
-        case CC_EXPR_SUBSCRIPT:
-        case CC_EXPR_CALL:
-        case CC_EXPR_ASSIGN:
-        case CC_EXPR_COMMA:
-        case CC_EXPR_TERNARY:
-        case CC_EXPR_OBJECT_VIEW:
-            return 1;
-        case CC_EXPR_CAST:
-            return ccqt_unaligned(e->type).unqual == ccqt_unaligned(e->lhs->type).unqual;
-        default:
-            return 0;
-    }
-}
-
 static
 int
 ci_emit_check(CiLowerCtx* ctx, uint32_t src, uint32_t size, _Bool negate,
@@ -2526,10 +2510,6 @@ static
 int
 ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out){
     int err;
-    if(ccqt_bt_eq(e->type, CCBT_bfloat16) && !ci_bfloat_storage_expr(e)){
-        ci_error(ci, e->loc, "bfloat16 expression lowering is not supported");
-        return CI_UNIMPLEMENTED_ERROR;
-    }
     if(ccqt_is_basic(e->type) && ccbt_is_complex(ccqt_basic_kind(e->type))){
         ci_error(ci, e->loc, "complex expression lowering is not supported");
         return CI_UNIMPLEMENTED_ERROR;
@@ -2892,7 +2872,9 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                     .slot_size = size,
                     .src = v.slot,
                     .src_size = v.size,
+                    .src_is_brian_float = ccqt_bt_eq(from, CCBT_bfloat16),
                     .src_float = ci_float_width(from, ctx->ldbl_fmt),
+                    .dst_is_brian_float = ccqt_bt_eq(to, CCBT_bfloat16),
                     .dst_float = ci_float_width(to, ctx->ldbl_fmt),
                     .is_unsigned = is_unsigned,
                     .checked_index = e->cast.checked_index,
@@ -2957,6 +2939,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             else {
                 *op = (CiOp){
                     .falu32 = {
+                        .is_brian_float = ccqt_bt_eq(e->type, CCBT_bfloat16),
                         .kind = kind,
                         .op = CI_FALU_NEG,
                         .slot = dest,
@@ -3321,6 +3304,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 if(err) return err;
                 *op = (CiOp){
                     .falu32 = {
+                        .is_brian_float = ccqt_bt_eq(e->type, CCBT_bfloat16),
                         .kind = kind,
                         .op = fop,
                         .slot = dest,
@@ -3371,7 +3355,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 err = cc_sizeof_as_uint(p, lhs->type, lhs->loc, &op_size);
                 if(err) return err;
                 uint32_t width = ci_float_width(lhs->type, ctx->ldbl_fmt);
-                kind = width == 32 ? CI_OP_FCMP32 : width == 64 ? CI_OP_FCMP64 : width == 80 ? CI_OP_FCMP80 : CI_OP_FCMP128;
+                kind = width == 16 ? CI_OP_FCMP16 : width == 32 ? CI_OP_FCMP32 : width == 64 ? CI_OP_FCMP64 : width == 80 ? CI_OP_FCMP80 : CI_OP_FCMP128;
             }
             else if(ccqt_is_integer(lhs->type) && ccqt_is_integer(rhs->type)){
                 uint32_t lsz, rsz;
@@ -3457,6 +3441,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 if(err) return err;
                 *op = (CiOp){
                     .fcmp32 = {
+                        .is_brian_float = ccqt_bt_eq(lhs->type, CCBT_bfloat16),
                         .kind = kind,
                         .op = cmp_op,
                         .slot = dest,
@@ -4079,7 +4064,10 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         is_float = 1;
         step_bt = (uint32_t)ccqt_basic_kind(e->type);
         step_immsize = size;
-        if(size == 4){
+        if(size == 2){
+            step = ccqt_bt_eq(e->type, CCBT_bfloat16) ? 0x3f80 : 0x3c00;
+        }
+        else if(size == 4){
             float one = 1.0f;
             uint32_t bits;
             memcpy(&bits, &one, 4);
@@ -4168,6 +4156,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
             if(is_float){
                 *op = (CiOp){
                     .falu32 = {
+                        .is_brian_float = ccqt_bt_eq(e->type, CCBT_bfloat16),
                         .kind = alukind,
                         .op = fop,
                         .slot = vslot,
@@ -4265,6 +4254,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
             if(is_float){
                 *op = (CiOp){
                     .falu32 = {
+                        .is_brian_float = ccqt_bt_eq(e->type, CCBT_bfloat16),
                         .kind = alukind,
                         .op = fop,
                         .slot = newv,
@@ -4448,6 +4438,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     else if(is_float){
         *op = (CiOp){
             .falu32 = {
+                .is_brian_float = ccqt_bt_eq(e->type, CCBT_bfloat16),
                 .kind = alukind,
                 .op = fop,
                 .slot = newv,
@@ -5532,6 +5523,7 @@ ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, u
         if(is_float){
             *op = (CiOp){
                 .falu32 = {
+                    .is_brian_float = ccqt_bt_eq(e->type, CCBT_bfloat16),
                     .kind = falukind,
                     .op = fop,
                     .slot = cur,
@@ -6632,7 +6624,7 @@ ci_expr_discardable(CiLowerCtx* ctx, CcExpr* e, _Bool* safe){
     if(e->is_lvalue && (e->type.is_volatile || e->type.is_atomic))
         return 0;
     // Keep unsupported-type diagnostics in the normal discard walker.
-    if(ccqt_bt_eq(e->type, CCBT_bfloat16) || (ccqt_is_basic(e->type) && ccbt_is_complex(ccqt_basic_kind(e->type))))
+    if(ccqt_is_basic(e->type) && ccbt_is_complex(ccqt_basic_kind(e->type)))
         return 0;
     CcExpr* children[3];
     unsigned count = 0;
@@ -6792,10 +6784,6 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         err = ci_lower_expr(ci, ctx, e, slot, &value);
         ctx->temp = temp;
         return err;
-    }
-    if(ccqt_bt_eq(e->type, CCBT_bfloat16) && !ci_bfloat_storage_expr(e)){
-        ci_error(ci, e->loc, "bfloat16 expression lowering is not supported");
-        return CI_UNIMPLEMENTED_ERROR;
     }
     if(ccqt_is_basic(e->type) && ccbt_is_complex(ccqt_basic_kind(e->type))){
         ci_error(ci, e->loc, "complex expression lowering is not supported");
@@ -7115,8 +7103,7 @@ static
 uint32_t
 ci_frame_alignment(const CiLowerCtx* ctx, uint32_t slot){
     uint32_t alignment = ctx->frame_alignment > 16 ? ctx->frame_alignment : 16;
-    uint32_t exponent = 0;
-    while(alignment > 1){ alignment >>= 1; exponent++; }
+    uint32_t exponent = (uint32_t)(31 - clz_32(alignment));
     return cc_offset_alignment(exponent, slot);
 }
 
@@ -7867,7 +7854,7 @@ _Bool
 ci_falu_type(CcQualType t){
     if(!ccqt_is_basic(t)) return 0;
     CcBasicTypeKind k = ccqt_basic_kind(t);
-    return k == CCBT_float || k == CCBT_double || k == CCBT_long_double || k == CCBT_float128;
+    return k == CCBT_fp16 || k == CCBT_float16 || k == CCBT_bfloat16 || k == CCBT_float || k == CCBT_double || k == CCBT_long_double || k == CCBT_float128;
 }
 
 static
@@ -8651,6 +8638,17 @@ ci_static_float_binary(CiInterpreter* ci, CcExpr* e, CiFoldValue* out){
     if(err) return err;
     *out = (CiFoldValue){.sz = size, .type = e->type};
     _Bool comparison = 0, result = 0;
+    if(ccqt_is_narrow_float(lhs.type)){
+        CcExpr a = {.kind = CC_EXPR_VALUE, .type = lhs.type};
+        CcExpr b = {.kind = CC_EXPR_VALUE, .type = rhs.type};
+        CcExpr value = {.kind = CC_EXPR_VALUE, .type = e->type};
+        memcpy(a.data, lhs.bits, 2);
+        memcpy(b.data, rhs.bits, 2);
+        err = cc_eval_wide_binary(ci_target(ci), e->kind, &a, &b, &value);
+        if(err) return err;
+        memcpy(out->bits, value.data, size);
+        return 0;
+    }
     if(ccqt_bt_eq(lhs.type, CCBT_float)){
         float a, b, value = 0;
         memcpy(&a, lhs.bits, sizeof a);
@@ -9937,6 +9935,7 @@ static
 int
 ci_fold_float_format(CiLowerCtx* ctx, CcQualType type, CiFoldFloatFormat* out){
     switch(ci_float_width(type, ctx->ldbl_fmt)){
+        case 16: *out = ccqt_bt_eq(type, CCBT_bfloat16) ? (CiFoldFloatFormat){7, 127, 255} : (CiFoldFloatFormat){10, 15, 31}; return 0;
         case 32: *out = (CiFoldFloatFormat){23, 127, 255}; return 0;
         case 64: *out = (CiFoldFloatFormat){52, 1023, 2047}; return 0;
         default: return FOLD_FAIL;
@@ -9951,7 +9950,14 @@ ci_fold_float_read(CiLowerCtx* ctx, const CiFoldValue* v, CiFoldFloat* out){
     if(err) return err;
     uint64_t fraction;
     uint32_t exponent;
-    if(format.precision == 23){
+    if(v->sz == 2){
+        uint16_t bits;
+        memcpy(&bits, v->bits, 2);
+        fraction = bits & ((1u << format.precision) - 1);
+        exponent = (bits >> format.precision) & format.max_exp;
+        out->negative = bits >> 15;
+    }
+    else if(format.precision == 23){
         CiIEE754Float32 f;
         memcpy(&f.u, v->bits, sizeof f.u);
         fraction = f.fraction;
@@ -9997,7 +10003,11 @@ ci_fold_float_write(CiLowerCtx* ctx, CiFoldValue* out, CiUint128 magnitude, int 
         fraction &= ((uint64_t)1 << precision) - 1;
         encoded_exp = (uint32_t)exp;
     }
-    if(precision == 23){
+    if(out->sz == 2){
+        uint16_t bits = (uint16_t)(((uint32_t)negative << 15) | (encoded_exp << precision) | (uint32_t)fraction);
+        memcpy(out->bits, &bits, 2);
+    }
+    else if(precision == 23){
         CiIEE754Float32 f = {.u = 0};
         f.sign = negative;
         f.exponent = encoded_exp;
@@ -10465,6 +10475,7 @@ ci_fold_expr_uncached(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue
                         bits ^= (uint32_t)1 << 31;
                         memcpy(result.bits, &bits, sizeof bits);
                     }
+                    else if(ci_float_width(l.type, ctx->ldbl_fmt) == 16) result.bits[0] ^= (uint64_t)1 << 15;
                     else if(ci_float_width(l.type, ctx->ldbl_fmt) == 80) result.bits[1] ^= (uint64_t)1 << 15;
                     else if(ci_float_width(l.type, ctx->ldbl_fmt) == 128) result.bits[1] ^= (uint64_t)1 << 63;
                     else result.bits[0] ^= (uint64_t)1 << 63;

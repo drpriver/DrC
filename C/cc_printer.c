@@ -38,6 +38,7 @@ static const char* _Null_unspecified cc_basic_names[] = {
     [CCBT_unsigned_long_long]         = "unsigned long long",
     [CCBT_int128]                     = "__int128",
     [CCBT_unsigned_int128]            = "unsigned __int128",
+    [CCBT_fp16]                       = "__fp16",
     [CCBT_float16]                    = "_Float16",
     [CCBT_bfloat16]                   = "__bf16",
     [CCBT_float]                      = "float",
@@ -342,6 +343,7 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
                 case CCBT_double_complex:
                 case CCBT_float128:
                 case CCBT_bfloat16:
+                case CCBT_fp16:
                 case CCBT_float16:
                 case CCBT_float_complex:
                 case CCBT_long_double_complex:
@@ -623,7 +625,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
                 cc_print_type(sb, (CcQualType){.bits = e->uinteger});
             }
             else if(ccqt_is_basic(e->type) && ccbt_is_float(ccqt_basic_kind(e->type))){
-                if(ccqt_basic_kind(e->type) == CCBT_float16 || ccqt_basic_kind(e->type) == CCBT_bfloat16){
+                if(ccqt_is_narrow_float(e->type)){
                     _Bool bfloat = ccqt_basic_kind(e->type) == CCBT_bfloat16;
                     unsigned bits = (unsigned)e->uinteger;
                     unsigned fraction_bits = bfloat ? 7 : 10;
@@ -634,7 +636,9 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
                         : ldexp((double)(fraction + (exponent ? 1u << fraction_bits : 0)),
                             (exponent ? (int)exponent : 1)-bias-(int)fraction_bits);
                     if(bits & 0x8000) value = -value;
+                    if(ccqt_basic_kind(e->type) == CCBT_fp16) msb_write_literal(sb, "((__fp16)");
                     msb_sprintf(sb, bfloat ? "%gbf16" : "%gf16", value);
+                    if(ccqt_basic_kind(e->type) == CCBT_fp16) msb_write_char(sb, ')');
                 }
                 else if(ccqt_basic_kind(e->type) == CCBT_float)
                     msb_sprintf(sb, "%gf", (double)e->float_);

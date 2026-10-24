@@ -192,6 +192,32 @@ TestFunction(test_parse_decls){
                 "static_assert(void(int[3])==void(int*));\n"),
         },
         {
+            "__fp16 is a distinct storage type with float promotions", __LINE__,
+            SVI("static_assert(sizeof(__fp16)==2&&alignof(__fp16)==2);\n"
+                "static_assert(__fp16!=_Float16&&__fp16!=__bf16);\n"
+                "static_assert(typeof(1.0f16)==_Float16);\n"
+                "static_assert(typeof(+(__fp16)1)==float);\n"
+                "static_assert(typeof(-(__fp16)1)==float);\n"
+                "static_assert(typeof((__fp16)1+(__fp16)2)==float);\n"
+                "static_assert(typeof((__fp16)1+(_Float16)2)==float);\n"
+                "static_assert(typeof((__fp16)1+2)==float);\n"
+                "static_assert(typeof((__fp16)1+2.0)==double);\n"
+                "static_assert(((__fp16)1+(__fp16)0x1p-11)-(__fp16)1==0x1p-11f);\n"
+                "constexpr __fp16 h=1.5;static_assert((float)h==1.5f);\n"),
+        },
+        {
+            "narrow floating constant arithmetic and conversions", __LINE__,
+            SVI("static int x=(int)1.0f16;static __bf16 b=(__bf16)1.5;\n"
+                "static_assert(1.5f16+2.0f16==3.5f16);\n"
+                "static_assert(1.5bf16*2.0bf16==3.0bf16);\n"
+                "static_assert(-1.5bf16==-1.5f16);\n"
+                "static_assert((int)3.5bf16==3);\n"
+                "static_assert((double)0x1p-24f16==0x1p-24);\n"
+                "static_assert((double)0x1p-133bf16==0x1p-133);\n"
+                "constexpr struct {__bf16 b;_Float16 h;} s={1.5bf16,2.0f16};\n"
+                "static_assert(s.b+s.h==3.5f16);\n"),
+        },
+        {
             "half float constant truth for zero and subnormals", __LINE__,
             SVI("static_assert(!0.0f16);\n"
                 "static_assert(0x1p-24f16&&1.0f16);\n"),
@@ -579,10 +605,10 @@ TestFunction(test_parse_decls){
             SVI("struct S{const int x;}; void f(struct S *a, struct S *b){*a=*b;}"),
         },
         {
-            "unsupported narrow floating casts do not manufacture constants", __LINE__,
-            SVI("static_assert(!__builtin_constant_p((_Float16)1.0));\n"
-                "static_assert(!__builtin_constant_p((_Float16)1));\n"
-                "static_assert(!__builtin_constant_p((__bf16)1.0));\n"
+            "narrow floating casts produce constants", __LINE__,
+            SVI("static_assert(__builtin_constant_p((_Float16)1.0));\n"
+                "static_assert(__builtin_constant_p((_Float16)1));\n"
+                "static_assert(__builtin_constant_p((__bf16)1.0));\n"
                 "static_assert(__builtin_constant_p((_Float16)1.0f16));\n"
                 "static_assert(__builtin_constant_p((__bf16)1.0bf16));\n"),
         },
@@ -10425,11 +10451,6 @@ TestFunction(test_parse_errors){
             "static initializer rejects runtime slice bounds", __LINE__,
             SVI("int n=1; static int a[3];\nstatic int s[:]=a[:n];\n"),
             SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
-        },
-        {
-            "static initializer rejects unsupported half numeric conversion", __LINE__,
-            SVI("static int x=(int)1.0f16;\n"),
-            SVI("(test):1:14: error: static initializer requires a link-time constant\n"),
         },
         {
             "static initializer rejects out-of-range float conversion", __LINE__,

@@ -316,6 +316,7 @@ static int cc_eval_symbolic_binary(CcParser*, CcExpr*, _Bool allow_const, int64_
 static int cc_eval_linktime_scalar(CcParser*, CcExpr*, CcExpr*_Nullable*_Nonnull);
 static int cc_eval_linktime_expr(CcParser*, CcExpr*, CcExpr*_Nullable*_Nonnull);
 static int cc_eval_numeric_cast(CcParser*, CcExpr*, CcExpr*, _Bool allow_inexact);
+static int cc_eval_wide_binary(const CcTargetConfig*, CcExprKind, CcExpr*, CcExpr*, CcExpr*);
 typedef struct CcEvalObjectView CcEvalObjectView;
 struct CcEvalObjectView {
     CcExpr* object;

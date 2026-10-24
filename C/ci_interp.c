@@ -1657,6 +1657,39 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             frame->pc++;
             return 0;
         }
+        case CI_OP_FALU16: {
+            uint16_t a = (uint16_t)ci_read_uint((char*)frame->slots + op->falu32.src, 2);
+            uint16_t b = (uint16_t)ci_read_uint((char*)frame->slots + op->falu32.src2, 2);
+            uint16_t r;
+            switch(op->falu32.op){
+                case CI_FALU_ADD: r = ci_float16_add(a, b, op->falu32.is_brian_float); break;
+                case CI_FALU_SUB: r = ci_float16_sub(a, b, op->falu32.is_brian_float); break;
+                case CI_FALU_MUL: r = ci_float16_mul(a, b, op->falu32.is_brian_float); break;
+                case CI_FALU_DIV: r = ci_float16_div(a, b, op->falu32.is_brian_float); break;
+                case CI_FALU_NEG: r = ci_float16_neg(a); break;
+                DRP_CASES_EXHAUSTED;
+            }
+            ci_write_uint((char*)frame->slots + op->falu32.slot, 2, r);
+            frame->pc++;
+            return 0;
+        }
+        case CI_OP_FCMP16: {
+            uint16_t a = (uint16_t)ci_read_uint((char*)frame->slots + op->fcmp32.src, 2);
+            uint16_t b = (uint16_t)ci_read_uint((char*)frame->slots + op->fcmp32.src2, 2);
+            _Bool r;
+            switch(op->fcmp32.op){
+                case CI_CMP_EQ: r =  ci_float16_eq(a, b, op->fcmp32.is_brian_float); break;
+                case CI_CMP_NE: r = !ci_float16_eq(a, b, op->fcmp32.is_brian_float); break;
+                case CI_CMP_LT: r =  ci_float16_lt(a, b, op->fcmp32.is_brian_float); break;
+                case CI_CMP_GT: r =  ci_float16_lt(b, a, op->fcmp32.is_brian_float); break;
+                case CI_CMP_LE: r =  ci_float16_le(a, b, op->fcmp32.is_brian_float); break;
+                case CI_CMP_GE: r =  ci_float16_le(b, a, op->fcmp32.is_brian_float); break;
+                DRP_CASES_EXHAUSTED;
+            }
+            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, r);
+            frame->pc++;
+            return 0;
+        }
         case CI_OP_FALU80: {
             CiFloat80 a = ci_float80_read((char*)frame->slots + op->falu32.src);
             CiFloat80 b = ci_float80_read((char*)frame->slots + op->falu32.src2), r;
@@ -1841,6 +1874,33 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         }
 
         case CI_OP_ITOF: {
+            if(op->convert.dst_float == 16){
+                const void* src = (char*)frame->slots + op->convert.src;
+                _Bool is_brian = op->convert.dst_is_brian_float;
+                uint16_t r;
+                if(op->convert.src_size > 8){
+                    CiUint128 v;
+                    ci_uint128_read(&v, src, op->convert.src_size);
+                    r = ci_float16_from_uint128(v, op->convert.is_unsigned, is_brian);
+                }
+                else if(op->convert.is_unsigned){
+                    uint64_t v = ci_read_uint(src, op->convert.src_size);
+                    if(op->convert.src_size <= 4)
+                        r = ci_float16_from_uint32((uint32_t)v, is_brian);
+                    else
+                        r = ci_float16_from_uint64(v, is_brian);
+                }
+                else {
+                    int64_t v = ci_read_int(src, op->convert.src_size);
+                    if(op->convert.src_size <= 4)
+                        r = ci_float16_from_int32((int32_t)v, is_brian);
+                    else
+                        r = ci_float16_from_int64(v, is_brian);
+                }
+                ci_write_uint((char*)frame->slots + op->convert.slot, 2, r);
+                frame->pc++;
+                return 0;
+            }
             if(op->convert.dst_float == 80){
                 const void* src = (char*)frame->slots + op->convert.src;
                 void* dest = (char*)frame->slots + op->convert.slot;
@@ -1894,6 +1954,31 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             return 0;
         }
         case CI_OP_FTOI: {
+            if(op->convert.src_float == 16){
+                uint16_t bits = (uint16_t)ci_read_uint((char*)frame->slots + op->convert.src, 2);
+                _Bool is_brian = op->convert.src_is_brian_float;
+                void* dest = (char*)frame->slots + op->convert.slot;
+                if(op->convert.slot_size > 8)
+                    ci_uint128_write(dest, op->convert.slot_size, ci_float16_to_uint128(bits, is_brian));
+                else {
+                    uint64_t v;
+                    if(op->convert.is_unsigned){
+                        if(op->convert.slot_size <= 4)
+                            v = ci_float16_to_uint32(bits, is_brian);
+                        else
+                            v = ci_float16_to_uint64(bits, is_brian);
+                    }
+                    else {
+                        if(op->convert.slot_size <= 4)
+                            v = (uint64_t)ci_float16_to_int32(bits, is_brian);
+                        else
+                            v = (uint64_t)ci_float16_to_int64(bits, is_brian);
+                    }
+                    ci_write_uint(dest, op->convert.slot_size, v);
+                }
+                frame->pc++;
+                return 0;
+            }
             if(op->convert.src_float == 80){
                 const void* src = (char*)frame->slots + op->convert.src;
                 void* dest = (char*)frame->slots + op->convert.slot;
@@ -1932,6 +2017,53 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             return 0;
         }
         case CI_OP_FTOF: {
+            if(op->convert.src_float == 16 || op->convert.dst_float == 16){
+                const void* src = (char*)frame->slots + op->convert.src;
+                void* dest = (char*)frame->slots + op->convert.slot;
+                if(op->convert.src_float == 16){
+                    uint16_t bits = (uint16_t)ci_read_uint(src, 2);
+                    _Bool is_brian = op->convert.src_is_brian_float;
+                    if(op->convert.dst_float == 16){
+                        uint16_t result = bits;
+                        if(is_brian != op->convert.dst_is_brian_float){
+                            float value = ci_float16_to_float(bits, is_brian);
+                            result = ci_float16_from_float(value, op->convert.dst_is_brian_float);
+                        }
+                        ci_write_uint(dest, 2, result);
+                    }
+                    else if(op->convert.dst_float == 80)
+                        ci_float80_write(dest, op->convert.slot_size, ci_float16_to_float80(bits, is_brian));
+                    else if(op->convert.dst_float == 128)
+                        ci_float128_write(dest, op->convert.slot_size, ci_float16_to_quad(bits, is_brian));
+                    else if(op->convert.dst_float == 32){
+                        float f = ci_float16_to_float(bits, is_brian);
+                        memcpy(dest, &f, sizeof f);
+                    }
+                    else {
+                        double d = ci_float16_to_double(bits, is_brian);
+                        memcpy(dest, &d, sizeof d);
+                    }
+                }
+                else {
+                    _Bool is_brian = op->convert.dst_is_brian_float;
+                    uint16_t bits;
+                    if(op->convert.src_float == 80) bits = ci_float16_from_float80(ci_float80_read(src), is_brian);
+                    else if(op->convert.src_float == 128) bits = ci_float16_from_quad(ci_float128_read(src), is_brian);
+                    else if(op->convert.src_float == 32){
+                        float f;
+                        memcpy(&f, src, sizeof f);
+                        bits = ci_float16_from_float(f, is_brian);
+                    }
+                    else {
+                        double d;
+                        memcpy(&d, src, sizeof d);
+                        bits = ci_float16_from_double(d, is_brian);
+                    }
+                    ci_write_uint(dest, 2, bits);
+                }
+                frame->pc++;
+                return 0;
+            }
             if(op->convert.dst_float == 80){
                 const void* src = (char*)frame->slots + op->convert.src;
                 void* dest = (char*)frame->slots + op->convert.slot;
@@ -4297,6 +4429,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
                     err = ci_error(ci, loc, "Invalid return type: int128 not expressable as cpp token");
                     goto cleanup;
                 case CCBT_bfloat16:
+                case CCBT_fp16:
                 case CCBT_float16:
                     err = ci_unimplemented(ci, loc, "TODO: float16a");
                     goto cleanup;

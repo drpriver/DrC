@@ -86,7 +86,15 @@ cc_default_promotion(CcQualType t){
     t = ccqt_enum_underlying(t);
     t = ccqt_unaligned(t);
     t.quals = 0;
-    if(ccqt_bt_eq(t, CCBT_float)) return ccqt_basic(CCBT_double);
+    if(ccqt_is_basic(t)){
+        switch(ccqt_basic_kind(t)){
+            case CCBT_fp16:
+            case CCBT_float:
+                return ccqt_basic(CCBT_double);
+            default:
+                break;
+        }
+    }
     return cc_promote_integer_rank(t);
 }
 
@@ -808,6 +816,10 @@ cc_integer_promotion(CcQualType t, CcQualType *out, const char *_Null_unspecifie
     CcBasicTypeKind k = ccqt_basic_kind(t);
     if(k == CCBT_void)
         return cc_type_check_fail(failure, "integer promotion of void");
+    if(k == CCBT_fp16){
+        *out = ccqt_basic(CCBT_float);
+        return 0;
+    }
     if(ccbt_is_float(k) || ccbt_is_complex(k)){
         *out = t;
         return 0;
@@ -829,6 +841,8 @@ cc_usual_arithmetic_conversions(const CcTargetConfig* target, CcQualType a, CcQu
     if(!ccqt_is_basic(a) || !ccqt_is_basic(b))
         return cc_type_check_fail(failure, "usual arithmetic conversions require arithmetic types");
     CcBasicTypeKind ak = ccqt_basic_kind(a), bk = ccqt_basic_kind(b);
+    if(ak == CCBT_fp16) ak = CCBT_float;
+    if(bk == CCBT_fp16) bk = CCBT_float;
     if(ccbt_is_complex(ak) || ccbt_is_complex(bk)){
         CcQualType real_a = ccqt_basic(ccbt_is_complex(ak) ? ccbt_complex_real(ak) : ak);
         CcQualType real_b = ccqt_basic(ccbt_is_complex(bk) ? ccbt_complex_real(bk) : bk);

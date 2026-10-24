@@ -42,6 +42,7 @@
 #define CCKWS6(X) \
     X(_Defer, _Defer) \
     X(__bf16, __bf16) \
+    X(__fp16, __fp16) \
     X(double, double) \
     X(extern, extern) \
     X(inline, inline) \

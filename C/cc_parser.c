@@ -825,6 +825,7 @@ cc_is_type_start(CcParser* p, CcToken* tok){
             case CC_typeof: case CC_typeof_unqual:
             case CC___auto_type:
             case CC__Complex: case CC__Imaginary:
+            case CC___fp16:
             case CC___bf16:
             case CC__Float16: case CC__Float32: case CC__Float64: case CC__Float128: case CC__Float32x: case CC__Float64x:
             case CC__Decimal32: case CC__Decimal64: case CC__Decimal128:
@@ -1807,16 +1808,16 @@ cc_type_alignment(CcParser* p, CcQualType type, SrcLoc loc, uint32_t* out){
     uint32_t alignment;
     int err = cc_alignof_as_uint(p, type, loc, &alignment);
     if(err) return err;
-    *out = 0;
-    while(alignment > 1){ alignment >>= 1; ++*out; }
+    *out = alignment ? (uint32_t)(31 - clz_32(alignment)) : 0;
     return 0;
 }
 
 static
 uint32_t
 cc_offset_alignment(uint32_t align_log2, uint64_t offset){
-    while(align_log2 && (offset & ((UINT64_C(1) << align_log2) - 1))) align_log2--;
-    return align_log2;
+    if(!offset) return align_log2;
+    uint32_t offset_log2 = (uint32_t)ctz_64(offset);
+    return offset_log2 < align_log2 ? offset_log2 : align_log2;
 }
 
 static
@@ -1948,8 +1949,8 @@ cc_lvalue_alignment(CcParser* p, const CcExpr* e, uint32_t* out){
     err = cc_type_alignment(p, e->type, e->loc, out);
     if(err) return err;
     if(e->kind == CC_EXPR_VARIABLE){
-        uint32_t alignment = e->var->alignment, exponent = 0;
-        while(alignment > 1){ alignment >>= 1; exponent++; }
+        uint32_t alignment = e->var->alignment;
+        uint32_t exponent = alignment ? (uint32_t)(31 - clz_32(alignment)) : 0;
         if(exponent > *out) *out = exponent;
     }
     return 0;
@@ -4971,6 +4972,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
             case CC__Decimal32:
             case CC__Decimal64:
             case CC__Float128:
+            case CC___fp16:
             case CC___bf16:
             case CC__Float16:
             case CC__Float32:
@@ -9527,7 +9529,7 @@ cc_sysv_classify_type(const CcTargetConfig* tc, CcQualType type, uint32_t off, C
                 // for two half-precision elements, but passes other small
                 // floating vectors in memory.
                 if(tc->os != CC_OS_MACOS && ccbt_is_float(elem)){
-                    if(sz == 4 && (elem == CCBT_float16 || elem == CCBT_bfloat16))
+                    if(sz == 4 && (elem == CCBT_float16 || elem == CCBT_bfloat16 || elem == CCBT_fp16))
                         return cc_sysv_mark(cls, off, sz, CC_SYSV_SSE);
                     return 1;
                 }
@@ -9667,7 +9669,7 @@ cc_arm64_homogeneous(const CcTargetConfig* tc, CcQualType type, CcArm64Aggregate
             }
             else if(!ccbt_is_float(bk)) return 0;
             // These are the same ABI fundamental type despite distinct C types.
-            if(bk == CCBT_bfloat16)
+            if(bk == CCBT_bfloat16 || bk == CCBT_fp16)
                 bk = CCBT_float16;
             if(bk == CCBT_long_double && tc->long_double_format == CC_LONG_DOUBLE_BINARY64)
                 bk = CCBT_double;
@@ -12744,49 +12746,40 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                             return cc_error(p, tok.loc, "constexpr after _Atomic");
                         spec->sp_constexpr = 1;
                         continue;
+                    {
+                        CcQualType t;
+                    case CC___fp16:
+                        t = ccqt_basic(CCBT_fp16);
+                        goto float_decl;
                     case CC___bf16:
+                        t = ccqt_basic(CCBT_bfloat16);
+                        goto float_decl;
                     case CC__Float16:
-                        if(base_type->bits)
-                            return cc_error(p, tok.loc, "Second type in declaration");
-                        if(spec->sp_typebits)
-                            return cc_error(p, tok.loc, "Second type in declaration");
-                        *base_type = ccqt_basic(tok.kw.kw == CC___bf16 ? CCBT_bfloat16 : CCBT_float16);
-                        continue;
+                        t = ccqt_basic(CCBT_float16);
+                        goto float_decl;
                     case CC__Float32:
-                        if(base_type->bits)
-                            return cc_error(p, tok.loc, "Second type in declaration");
-                        if(spec->sp_typebits)
-                            return cc_error(p, tok.loc, "Second type in declaration");
-                        *base_type = ccqt_basic(CCBT_float);
-                        continue;
+                        t = ccqt_basic(CCBT_float);
+                        goto float_decl;
                     case CC__Float64:
-                        if(base_type->bits)
-                            return cc_error(p, tok.loc, "Second type in declaration");
-                        if(spec->sp_typebits)
-                            return cc_error(p, tok.loc, "Second type in declaration");
-                        *base_type = ccqt_basic(CCBT_double);
-                        continue;
+                        t = ccqt_basic(CCBT_double);
+                        goto float_decl;
                     case CC__Float128:
-                        if(base_type->bits)
-                            return cc_error(p, tok.loc, "Second type in declaration");
-                        if(spec->sp_typebits)
-                            return cc_error(p, tok.loc, "Second type in declaration");
-                        *base_type = ccqt_basic(CCBT_float128);
-                        continue;
+                        t = ccqt_basic(CCBT_float128);
+                        goto float_decl;
                     case CC__Float32x:
-                        if(base_type->bits)
-                            return cc_error(p, tok.loc, "Second type in declaration");
-                        if(spec->sp_typebits)
-                            return cc_error(p, tok.loc, "Second type in declaration");
-                        *base_type = ccqt_basic(CCBT_double);
-                        continue;
+                        t = ccqt_basic(CCBT_double);
+                        goto float_decl;
                     case CC__Float64x:
+                        t = ccqt_basic(CCBT_long_double);
+                        goto float_decl;
+
+                        float_decl:
                         if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_typebits)
                             return cc_error(p, tok.loc, "Second type in declaration");
-                        *base_type = ccqt_basic(CCBT_long_double);
-                        continue;
+                        *base_type = t;
+                    }continue;
                     case CC__Imaginary:
                         return cc_unimplemented(p, tok.loc, "_Imaginary parsing in declaration");
                     case CC__Noreturn:
@@ -14231,6 +14224,7 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
                 case CC_restrict:
                 case CC_unsigned:
                 case CC_volatile:
+                case CC___fp16:
                 case CC___bf16:
                 case CC__Float16:
                 case CC__Float32:
@@ -16932,8 +16926,16 @@ static
 _Bool
 cc_eval_wide(CcQualType t){
     t = ccqt_enum_underlying(t);
-    return ccqt_bt_eq(t, CCBT_long_double) || ccqt_bt_eq(t, CCBT_float128)
-        || ccqt_bt_eq(t, CCBT_int128) || ccqt_bt_eq(t, CCBT_unsigned_int128);
+    if(!ccqt_is_basic(t)) return 0;
+    switch(ccqt_basic_kind(t)){
+        case CCBT_long_double:
+        case CCBT_float128:
+        case CCBT_int128:
+        case CCBT_unsigned_int128:
+            return 1;
+        default:
+            return 0;
+    }
 }
 
 static
@@ -16951,33 +16953,62 @@ cc_eval_u128(const CcTargetConfig* target, CcExpr* v){
 static
 CiFloat128
 cc_eval_quad(const CcTargetConfig* target, CcExpr* v){
-    if(ccqt_bt_eq(v->type, CCBT_bfloat16)){
-        uint32_t bits = (uint32_t)v->uinteger << 16;
-        float value;
-        memcpy(&value, &bits, sizeof value);
-        return ci_float128_from_float(value);
-    }
-    if(ccqt_bt_eq(v->type, CCBT_float128)) return v->quad;
-    if(ccqt_bt_eq(v->type, CCBT_long_double)){
-        switch(target->long_double_format){
-            case CC_LONG_DOUBLE_X87: return ci_float128_from_float80(v->x87);
-            case CC_LONG_DOUBLE_BINARY128: return v->quad;
-            case CC_LONG_DOUBLE_BINARY64: return ci_float128_from_double(v->double_);
+    if(ccqt_is_basic(v->type)){
+        switch(ccqt_basic_kind(v->type)){
+            case CCBT_fp16:
+            case CCBT_float16:
+                return ci_float16_to_quad((uint16_t)v->uinteger, 0);
+            case CCBT_bfloat16:
+                return ci_float16_to_quad((uint16_t)v->uinteger, 1);
+            case CCBT_float:
+                return ci_float128_from_float(v->float_);
+            case CCBT_double:
+                return ci_float128_from_double(v->double_);
+            case CCBT_float128:
+                return v->quad;
+            case CCBT_long_double:
+                switch(target->long_double_format){
+                    case CC_LONG_DOUBLE_X87:
+                        return ci_float128_from_float80(v->x87);
+                    case CC_LONG_DOUBLE_BINARY128:
+                        return v->quad;
+                    case CC_LONG_DOUBLE_BINARY64:
+                        return ci_float128_from_double(v->double_);
+                }
+                break;
+            default:
+                break;
         }
     }
-    if(ccqt_bt_eq(v->type, CCBT_float)) return ci_float128_from_float(v->float_);
-    if(ccqt_bt_eq(v->type, CCBT_double)) return ci_float128_from_double(v->double_);
     return ci_float128_from_uint128(cc_eval_u128(target, v), ccqt_is_unsigned(v->type, !target->char_is_signed));
 }
 
 static
 void
 cc_eval_store_quad(const CcTargetConfig* target, CcExpr* v, CiFloat128 q){
-    if(ccqt_bt_eq(v->type, CCBT_long_double)){
-        switch(target->long_double_format){
-            case CC_LONG_DOUBLE_X87: v->x87 = ci_float80_from_float128(q); return;
-            case CC_LONG_DOUBLE_BINARY64: v->double_ = ci_float128_to_double(q); return;
-            case CC_LONG_DOUBLE_BINARY128: break;
+    if(ccqt_is_basic(v->type)){
+        switch(ccqt_basic_kind(v->type)){
+            case CCBT_fp16:
+            case CCBT_float16:
+                v->uinteger = ci_float16_from_quad(q, 0);
+                return;
+            case CCBT_bfloat16:
+                v->uinteger = ci_float16_from_quad(q, 1);
+                return;
+            case CCBT_long_double:
+                switch(target->long_double_format){
+                    case CC_LONG_DOUBLE_X87:
+                        v->x87 = ci_float80_from_float128(q);
+                        return;
+                    case CC_LONG_DOUBLE_BINARY64:
+                        v->double_ = ci_float128_to_double(q);
+                        return;
+                    case CC_LONG_DOUBLE_BINARY128:
+                        break;
+                }
+                break;
+            default:
+                break;
         }
     }
     v->quad = q;
@@ -16986,14 +17017,197 @@ cc_eval_store_quad(const CcTargetConfig* target, CcExpr* v, CiFloat128 q){
 static
 _Bool
 cc_eval_value_truth(const CcTargetConfig* target, CcExpr* v){
-    if(ccqt_is_narrow_float(v->type))
-        return ci_narrow_float_nonzero((uint16_t)v->uinteger);
-    if(ccqt_bt_eq(v->type, CCBT_long_double) || ccqt_bt_eq(v->type, CCBT_float128))
-        return ci_float128_nonzero(cc_eval_quad(target, v));
-    if(ccqt_bt_eq(v->type, CCBT_float)) return v->float_ != 0;
-    if(ccqt_bt_eq(v->type, CCBT_double)) return v->double_ != 0;
-    if(cc_eval_wide(v->type)) return ci_uint128_nonzero(v->uinteger128);
-    return v->uinteger != 0;
+    CcQualType type = ccqt_enum_underlying(v->type);
+    if(!ccqt_is_basic(type)) return v->uinteger != 0;
+    switch(ccqt_basic_kind(type)){
+        case CCBT_fp16:
+        case CCBT_float16:
+        case CCBT_bfloat16:
+            return ci_narrow_float_nonzero((uint16_t)v->uinteger);
+        case CCBT_long_double:
+            switch(target->long_double_format){
+                case CC_LONG_DOUBLE_BINARY64:
+                    return v->double_ != 0;
+                case CC_LONG_DOUBLE_X87:
+                    return ci_float80_nonzero(v->x87);
+                case CC_LONG_DOUBLE_BINARY128:
+                    return ci_float128_nonzero(v->quad);
+            }
+            cc_unsafe_unreachable();
+        case CCBT_float128:
+            return ci_float128_nonzero(v->quad);
+        case CCBT_float:
+            return v->float_ != 0;
+        case CCBT_double:
+            return v->double_ != 0;
+        case CCBT_int128:
+        case CCBT_unsigned_int128:
+            return ci_uint128_nonzero(v->uinteger128);
+        default:
+            return v->uinteger != 0;
+    }
+}
+
+static
+int
+cc_eval_narrow_cast(CcParser* p, CcExpr* v, CcExpr* out, _Bool allow_inexact){
+    const CcTargetConfig* target = cc_target(p);
+    CcQualType source_type = ccqt_enum_underlying(v->type);
+    CcQualType dest_type = ccqt_enum_underlying(out->type);
+    if(!ccqt_is_basic(source_type) || !ccqt_is_basic(dest_type))
+        return CC_NOT_CONSTANT_ERROR;
+    CcBasicTypeKind source_kind = ccqt_basic_kind(source_type);
+    CcBasicTypeKind dest_kind = ccqt_basic_kind(dest_type);
+    if(ccqt_is_narrow_float(dest_type)){
+        _Bool is_brian_float = dest_kind == CCBT_bfloat16;
+        uint_fast8_t saved_flags = softfloat_exceptionFlags;
+        softfloat_exceptionFlags = 0;
+        uint16_t bits = 0;
+        int err = 0;
+        switch(source_kind){
+            case CCBT_bool:
+            case CCBT_char:
+            case CCBT_signed_char:
+            case CCBT_unsigned_char:
+            case CCBT_short:
+            case CCBT_unsigned_short:
+            case CCBT_int:
+            case CCBT_unsigned:
+            case CCBT_long:
+            case CCBT_unsigned_long:
+            case CCBT_long_long:
+            case CCBT_unsigned_long_long:
+            case CCBT_int128:
+            case CCBT_unsigned_int128:{
+                uint32_t size;
+                err = cc_sizeof_as_uint(p, source_type, v->loc, &size);
+                if(err) goto restore_flags;
+                _Bool uns = ccqt_is_unsigned(source_type, !target->char_is_signed);
+                if(size > 8){
+                    bits = ci_float16_from_uint128(v->uinteger128, uns, is_brian_float);
+                }
+                else if(uns){
+                    if(size <= 4)
+                        bits = ci_float16_from_uint32((uint32_t)v->uinteger, is_brian_float);
+                    else
+                        bits = ci_float16_from_uint64(v->uinteger, is_brian_float);
+                }
+                else {
+                    if(size <= 4)
+                        bits = ci_float16_from_int32((int32_t)v->integer, is_brian_float);
+                    else
+                        bits = ci_float16_from_int64(v->integer, is_brian_float);
+                }
+                break;
+            }
+            case CCBT_fp16:
+            case CCBT_float16:
+            case CCBT_bfloat16: {
+                _Bool source_is_brian_float = source_kind == CCBT_bfloat16;
+                float value = ci_float16_to_float((uint16_t)v->uinteger, source_is_brian_float);
+                bits = ci_float16_from_float(value, is_brian_float);
+                break;
+            }
+            case CCBT_float:
+                bits = ci_float16_from_float(v->float_, is_brian_float);
+                break;
+            case CCBT_double:
+                bits = ci_float16_from_double(v->double_, is_brian_float);
+                break;
+            case CCBT_float128:
+                bits = ci_float16_from_quad(v->quad, is_brian_float);
+                break;
+            case CCBT_long_double:
+                switch(target->long_double_format){
+                    case CC_LONG_DOUBLE_BINARY64:
+                        bits = ci_float16_from_double(v->double_, is_brian_float);
+                        break;
+                    case CC_LONG_DOUBLE_X87:
+                        bits = ci_float16_from_float80(v->x87, is_brian_float);
+                        break;
+                    case CC_LONG_DOUBLE_BINARY128:
+                        bits = ci_float16_from_quad(v->quad, is_brian_float);
+                        break;
+                }
+                break;
+            default:
+                err = CC_NOT_CONSTANT_ERROR;
+                goto restore_flags;
+        }
+        if(!allow_inexact){
+            uint16_t infinity = is_brian_float ? 0x7f80 : 0x7c00;
+            _Bool is_nan = (bits & 0x7fff) > infinity;
+            _Bool conversion_failed = softfloat_exceptionFlags & (softfloat_flag_inexact | softfloat_flag_invalid);
+            if(is_nan || conversion_failed)
+                err = CC_NOT_CONSTANT_ERROR;
+        }
+        restore_flags:
+        softfloat_exceptionFlags = saved_flags;
+        if(err) return err;
+        out->uinteger = bits;
+        return 0;
+    }
+    uint16_t bits = (uint16_t)v->uinteger;
+    _Bool is_brian_float = source_kind == CCBT_bfloat16;
+    if(ccqt_is_integer(dest_type)){
+        uint32_t size;
+        int err = cc_sizeof_as_uint(p, dest_type, out->loc, &size);
+        if(err) return err;
+        _Bool uns = ccqt_is_unsigned(dest_type, !target->char_is_signed);
+        // Every narrow finite value is exactly representable in binary64.
+        double value = ci_float16_to_double(bits, is_brian_float);
+        double bound;
+        uint64_t encoded_bound = (uint64_t)(1023 + size * 8 - !uns) << 52;
+        memcpy(&bound, &encoded_bound, sizeof bound);
+        double low = uns? 0 : -bound;
+        if(!(value >= low || value > low - 1) || !(value < bound))
+            return CC_OVERFLOW_ERROR;
+        if(size > 8)
+            out->uinteger128 = ci_float16_to_uint128(bits, is_brian_float);
+        else if(uns){
+            if(size <= 4)
+                out->uinteger = ci_float16_to_uint32(bits, is_brian_float);
+            else
+                out->uinteger = ci_float16_to_uint64(bits, is_brian_float);
+        }
+        else {
+            if(size <= 4)
+                out->integer = ci_float16_to_int32(bits, is_brian_float);
+            else
+                out->integer = ci_float16_to_int64(bits, is_brian_float);
+        }
+        return 0;
+    }
+    uint16_t infinity = is_brian_float? 0x7f80 : 0x7c00;
+    if(!allow_inexact && (bits & 0x7fff) > infinity)
+        return CC_NOT_CONSTANT_ERROR;
+    switch(dest_kind){
+        case CCBT_float:
+            out->float_ = ci_float16_to_float(bits, is_brian_float);
+            break;
+        case CCBT_double:
+            out->double_ = ci_float16_to_double(bits, is_brian_float);
+            break;
+        case CCBT_float128:
+            out->quad = ci_float16_to_quad(bits, is_brian_float);
+            break;
+        case CCBT_long_double:
+            switch(target->long_double_format){
+                case CC_LONG_DOUBLE_BINARY64:
+                    out->double_ = ci_float16_to_double(bits, is_brian_float);
+                    break;
+                case CC_LONG_DOUBLE_X87:
+                    out->x87 = ci_float16_to_float80(bits, is_brian_float);
+                    break;
+                case CC_LONG_DOUBLE_BINARY128:
+                    out->quad = ci_float16_to_quad(bits, is_brian_float);
+                    break;
+            }
+            break;
+        default:
+            return CC_NOT_CONSTANT_ERROR;
+    }
+    return 0;
 }
 
 static
@@ -17005,29 +17219,57 @@ cc_eval_numeric_cast(CcParser* p, CcExpr* v, CcExpr* out, _Bool allow_inexact){
         return 0;
     }
     if(ccqt_is_narrow_float(t) || ccqt_is_narrow_float(v->type))
-        return CC_NOT_CONSTANT_ERROR;
+        return cc_eval_narrow_cast(p, v, out, allow_inexact);
     _Bool from_float = ccqt_is_basic(v->type) && ccbt_is_float(ccqt_basic_kind(v->type));
     if(ccqt_is_basic(t) && ccbt_is_float(ccqt_basic_kind(t))){
         CiFloat128 q = cc_eval_quad(cc_target(p), v);
         if(from_float){
-            if(ccqt_bt_eq(t, CCBT_float)) out->float_ = ci_float128_to_float(q);
-            else if(ccqt_bt_eq(t, CCBT_double)) out->double_ = ci_float128_to_double(q);
-            else cc_eval_store_quad(cc_target(p), out, q);
+            switch(ccqt_basic_kind(t)){
+                case CCBT_float:
+                    out->float_ = ci_float128_to_float(q);
+                    break;
+                case CCBT_double:
+                    out->double_ = ci_float128_to_double(q);
+                    break;
+                case CCBT_long_double:
+                case CCBT_float128:
+                    cc_eval_store_quad(cc_target(p), out, q);
+                    break;
+                default:
+                    return CC_NOT_CONSTANT_ERROR;
+            }
         }
         else {
             // Convert integers directly to the destination precision. Rounding
             // through quad first can double-round a 128-bit integer.
             CiUint128 n = cc_eval_u128(cc_target(p), v);
             _Bool uns = ccqt_is_unsigned(v->type, !cc_target(p)->char_is_signed);
-            if(ccqt_bt_eq(t, CCBT_float)) out->float_ = ci_uint128_to_float(n, uns);
-            else if(ccqt_bt_eq(t, CCBT_double)
-                || (ccqt_bt_eq(t, CCBT_long_double)
-                    && cc_target(p)->long_double_format == CC_LONG_DOUBLE_BINARY64))
-                out->double_ = ci_uint128_to_double(n, uns);
-            else if(ccqt_bt_eq(t, CCBT_long_double)
-                && cc_target(p)->long_double_format == CC_LONG_DOUBLE_X87)
-                out->x87 = ci_float80_from_uint128(n, uns);
-            else out->quad = ci_float128_from_uint128(n, uns);
+            switch(ccqt_basic_kind(t)){
+                case CCBT_float:
+                    out->float_ = ci_uint128_to_float(n, uns);
+                    break;
+                case CCBT_double:
+                    out->double_ = ci_uint128_to_double(n, uns);
+                    break;
+                case CCBT_float128:
+                    out->quad = ci_float128_from_uint128(n, uns);
+                    break;
+                case CCBT_long_double:
+                    switch(cc_target(p)->long_double_format){
+                        case CC_LONG_DOUBLE_BINARY64:
+                            out->double_ = ci_uint128_to_double(n, uns);
+                            break;
+                        case CC_LONG_DOUBLE_X87:
+                            out->x87 = ci_float80_from_uint128(n, uns);
+                            break;
+                        case CC_LONG_DOUBLE_BINARY128:
+                            out->quad = ci_float128_from_uint128(n, uns);
+                            break;
+                    }
+                    break;
+                default:
+                    return CC_NOT_CONSTANT_ERROR;
+            }
         }
         if(allow_inexact) return 0;
         CiFloat128 back = cc_eval_quad(cc_target(p), out);
@@ -17048,8 +17290,8 @@ cc_eval_numeric_cast(CcParser* p, CcExpr* v, CcExpr* out, _Bool allow_inexact){
         if(uns) bound = ci_float128_add(bound, bound);
         CiFloat128 low = uns ? ci_float128_from_int64(0) : ci_float128_neg(bound);
         CiFloat128 below = ci_float128_sub(low, ci_float128_from_int64(1));
-        if(!(ci_float128_le(low, q) || ci_float128_lt(below, q))
-            || !ci_float128_lt(q, bound)) return CC_OVERFLOW_ERROR;
+        if(!(ci_float128_le(low, q) || ci_float128_lt(below, q)) || !ci_float128_lt(q, bound))
+            return CC_OVERFLOW_ERROR;
         u = ci_float128_to_uint128(q);
     }
     else u = cc_eval_u128(cc_target(p), v);
@@ -17061,6 +17303,24 @@ cc_eval_numeric_cast(CcParser* p, CcExpr* v, CcExpr* out, _Bool allow_inexact){
 static
 int
 cc_eval_wide_binary(const CcTargetConfig* target, CcExprKind op, CcExpr* l, CcExpr* r, CcExpr* out){
+    if(ccqt_is_narrow_float(l->type)){
+        uint16_t a = (uint16_t)l->uinteger,
+                 b = (uint16_t)r->uinteger;
+        _Bool is_brian_float = ccqt_bt_eq(l->type, CCBT_bfloat16);
+        switch(op){
+            case CC_EXPR_ADD: out->uinteger =  ci_float16_add(a, b, is_brian_float); return 0;
+            case CC_EXPR_SUB: out->uinteger =  ci_float16_sub(a, b, is_brian_float); return 0;
+            case CC_EXPR_MUL: out->uinteger =  ci_float16_mul(a, b, is_brian_float); return 0;
+            case CC_EXPR_DIV: out->uinteger =  ci_float16_div(a, b, is_brian_float); return 0;
+            case CC_EXPR_EQ:  out->integer  =  ci_float16_eq (a, b, is_brian_float); return 0;
+            case CC_EXPR_NE:  out->integer  = !ci_float16_eq (a, b, is_brian_float); return 0;
+            case CC_EXPR_LT:  out->integer  =  ci_float16_lt (a, b, is_brian_float); return 0;
+            case CC_EXPR_GT:  out->integer  =  ci_float16_lt (b, a, is_brian_float); return 0;
+            case CC_EXPR_LE:  out->integer  =  ci_float16_le (a, b, is_brian_float); return 0;
+            case CC_EXPR_GE:  out->integer  =  ci_float16_le (b, a, is_brian_float); return 0;
+            default: return CC_NOT_CONSTANT_ERROR;
+        }
+    }
     if(ccqt_bt_eq(l->type, CCBT_long_double) || ccqt_bt_eq(l->type, CCBT_float128)){
         // Perform arithmetic in the target format, avoiding double rounding.
         #define FLOAT_OPS(prefix, a, b, field) \
@@ -17194,6 +17454,7 @@ cc_eval_to_i(CcParser* p, CcExpr* v, int64_t* out){
             *out = v->integer;
             return 0;
         case CCBT_bfloat16:
+        case CCBT_fp16:
         case CCBT_float16:
         case CCBT_long_double:
         case CCBT_float128:
@@ -17275,6 +17536,7 @@ cc_eval_to_u(CcParser* p, CcExpr* v, uint64_t* out){
             *out = v->uinteger;
             return 0;
         case CCBT_bfloat16:
+        case CCBT_fp16:
         case CCBT_float16:
         case CCBT_long_double:
         case CCBT_float128:
@@ -17368,6 +17630,7 @@ cc_eval_to_f(CcParser* p, CcExpr* v, float* out){
         case CCBT_int128:
         case CCBT_unsigned_int128:
         case CCBT_bfloat16:
+        case CCBT_fp16:
         case CCBT_float16:
         case CCBT_long_double:
         case CCBT_float128:
@@ -17454,6 +17717,7 @@ cc_eval_to_d(CcParser* p, CcExpr* v, double* out){
         case CCBT__Any:
             return CC_UNIMPLEMENTED_ERROR;
         case CCBT_bfloat16:
+        case CCBT_fp16:
         case CCBT_float16:
         case CCBT_long_double:
         case CCBT_float128:
@@ -18884,7 +19148,7 @@ cc_eval_object_bytes_inner(CcEvalCtx* ctx, CcExpr* e, uint32_t offset, uint32_t 
             if(offset + size > sizeof(float)) err = CC_NOT_CONSTANT_ERROR;
             else memcpy(out, (const unsigned char*)&v->float_ + offset, size);
         }
-        else if(ccqt_bt_eq(t, CCBT_double) || cc_eval_wide(t))
+        else if(ccqt_bt_eq(t, CCBT_double) || cc_eval_wide(t) || ccqt_is_narrow_float(t))
             memcpy(out, v->data + offset, size);
         else if(ccbt_is_integer(ccqt_basic_kind(t)))
             memcpy(out, (const unsigned char*)&v->uinteger + offset, size);
@@ -18983,9 +19247,37 @@ cc_eval_object_scalar(CcEvalCtx* ctx, CcExpr* base, uint32_t offset, CcQualType 
     CcQualType t = type;
     t = ccqt_enum_underlying(t);
     _Bool pointer = ccqt_kind(t) == CC_POINTER || ccqt_kind(t) == CC_BLOCK_POINTER;
-    if(!pointer && (!ccqt_is_basic(t) || !(ccbt_is_integer(ccqt_basic_kind(t)) || ccqt_bt_eq(t, CCBT_float)
-        || ccqt_bt_eq(t, CCBT_double) || cc_eval_wide(t) || ccqt_bt_eq(t, CCBT__Type) || ccqt_bt_eq(t, CCBT_nullptr_t))))
-        return CC_NOT_CONSTANT_ERROR;
+    if(!pointer){
+        if(!ccqt_is_basic(t)) return CC_NOT_CONSTANT_ERROR;
+        switch(ccqt_basic_kind(t)){
+            case CCBT_bool:
+            case CCBT_char:
+            case CCBT_signed_char:
+            case CCBT_unsigned_char:
+            case CCBT_short:
+            case CCBT_unsigned_short:
+            case CCBT_int:
+            case CCBT_unsigned:
+            case CCBT_long:
+            case CCBT_unsigned_long:
+            case CCBT_long_long:
+            case CCBT_unsigned_long_long:
+            case CCBT_int128:
+            case CCBT_unsigned_int128:
+            case CCBT_fp16:
+            case CCBT_float16:
+            case CCBT_bfloat16:
+            case CCBT_float:
+            case CCBT_double:
+            case CCBT_long_double:
+            case CCBT_float128:
+            case CCBT__Type:
+            case CCBT_nullptr_t:
+                break;
+            default:
+                return CC_NOT_CONSTANT_ERROR;
+        }
+    }
     uint32_t size;
     int err = cc_sizeof_as_uint(p, t, loc, &size);
     if(err) return err;
@@ -20053,6 +20345,16 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 err = CC_UNREACHABLE_ERROR;
                 goto fini_neg;
             }
+            if(ccqt_is_narrow_float(operand->type)){
+                CcExpr* narrow = cc_value_expr(p, e->loc, e->type);
+                if(!narrow){
+                    err = CC_OOM_ERROR;
+                    goto fini_neg;
+                }
+                narrow->uinteger = operand->uinteger ^ 0x8000;
+                *result = narrow;
+                goto fini_neg;
+            }
             if(cc_eval_wide(operand->type)){
                 CcExpr* wide = cc_value_expr(p, e->loc, e->type);
                 if(!wide){
@@ -20149,6 +20451,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CCBT_int128:
                 case CCBT_unsigned_int128:
                 case CCBT_bfloat16:
+                case CCBT_fp16:
                 case CCBT_float16:
                 case CCBT_long_double:
                 case CCBT_float128:
@@ -20243,6 +20546,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CCBT_int128:
                 case CCBT_unsigned_int128:
                 case CCBT_bfloat16:
+                case CCBT_fp16:
                 case CCBT_float16:
                 case CCBT_long_double:
                 case CCBT_float128:
@@ -20374,7 +20678,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             }
             node = cc_value_expr(p, e->loc, e->type);
             if(!node) {err = CC_OOM_ERROR; goto fini_binary;}
-            if(cc_eval_wide(optype)){
+            if(cc_eval_wide(optype) || ccqt_is_narrow_float(optype)){
                 err = cc_eval_wide_binary(cc_target(p), e->kind, L, R, node);
                 goto fini_binary;
             }
@@ -20568,6 +20872,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 case CCBT_int128:
                 case CCBT_unsigned_int128:
                 case CCBT_bfloat16:
+                case CCBT_fp16:
                 case CCBT_float16:
                 case CCBT_long_double:
                 case CCBT_float128:
@@ -20614,9 +20919,6 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 *result = cc_int64_expr(p, e->loc, e->type, truth);
                 return *result ? 0 : CC_OOM_ERROR;
             }
-            if(ccqt_unaligned(e->type).unqual != ccqt_unaligned(e->lhs->type).unqual
-                && (ccqt_is_narrow_float(e->type) || ccqt_is_narrow_float(e->lhs->type)))
-                return CC_NOT_CONSTANT_ERROR;
             CcExpr* operand, *node = NULL;
             int err = cc_eval_expr(ctx, e->lhs, &operand);
             if(err) return err;
@@ -20688,10 +20990,12 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             }
             node = cc_value_expr(p, e->loc, e->type);
             if(!node) {err = CC_OOM_ERROR; goto fini_cast;}
-            if(cc_eval_wide(operand->type) || cc_eval_wide(e->type)
-                || (ctx->allow_inexact_float_casts && ccbt_is_float(tk))
-                || (ccqt_is_integer(target) && ccqt_is_basic(operand->type)
-                    && ccbt_is_float(ccqt_basic_kind(operand->type)))){
+            if(cc_eval_wide(operand->type)
+            || cc_eval_wide(e->type)
+            || ccqt_is_narrow_float(operand->type)
+            || ccqt_is_narrow_float(e->type)
+            || (ctx->allow_inexact_float_casts && ccbt_is_float(tk))
+            || (ccqt_is_integer(target) && ccqt_is_basic(operand->type) && ccbt_is_float(ccqt_basic_kind(operand->type)))){
                 err = cc_eval_numeric_cast(p, operand, node, ctx->allow_inexact_float_casts);
                 if(!err) cc_eval_truncate(p, node);
                 goto fini_cast;

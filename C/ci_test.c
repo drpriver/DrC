@@ -12678,6 +12678,57 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "__fp16 storage, arithmetic promotion, and variadic promotion", __LINE__,
+            SVI("__fp16 echo(__fp16 x){return x;}"
+                "int arithmetic(__fp16 a,__fp16 b){"
+                "float sum=a+b;if(sum-a!=0x1p-11f)return 0;"
+                "a+=b;if(a!=1.0f)return 0;"
+                "__fp16 old=a++;if(old!=1.0f||a!=2.0f)return 0;"
+                "--a;return a==1.0f&&-a==-1.0f;}"
+                "double var(int n,...){__builtin_va_list ap;__builtin_va_start(ap,n);"
+                "double x=__builtin_va_arg(ap,double);__builtin_va_end(ap);return x;}"
+                "static __fp16 h=1.5;__fp16 a[2]={1.0,0x1p-11};"
+                "union{__fp16 f;unsigned short u;}bits={.f=1.0};"
+                "return bits.u==0x3c00&&echo(h)==1.5f&&arithmetic(a[0],a[1])"
+                "&&var(1,h)==1.5&&sizeof(h+h)==sizeof(float);"),
+            .exit_code = 1,
+        },
+        {
+            "narrow floating static initializers and wide conversions", __LINE__,
+            SVI("static _Float16 h=(_Float16)1.5;static __bf16 b=1.5bf16*2.0bf16;"
+                "static int i=(int)1.0f16;"
+                "__bf16 from(unsigned __int128 x){return (__bf16)x;}"
+                "unsigned __int128 to(__bf16 x){return (unsigned __int128)x;}"
+                "_Float128 q(__bf16 x){return (_Float128)x;}"
+                "__bf16 fromq(_Float128 x){return (__bf16)x;}"
+                "return h==1.5f16&&b==3.0bf16&&i==1"
+                "&&to(from((unsigned __int128)1<<100))==((unsigned __int128)1<<100)"
+                "&&fromq(q(b))==b;"),
+            .exit_code = 1,
+        },
+        {
+            "narrow floating arithmetic and conversions", __LINE__,
+            SVI("#define TEST(T,N) int N(T a,T b){ T c=a+b; if((float)c!=5.0f)return 0; "
+                "c-=b;c*=b;c/=b;if(c!=a||a>=b||!(a<b)||a>b||!(a<=b)||!(b>=a))return 0;"
+                "if((float)-a!=-2.0f)return 0;T old=c++;if(old!=a||c!=b)return 0;--c;"
+                "_Atomic T x=a;x+=b;x++;if((int)x!=6)return 0;"
+                "return (int)c==2&&(double)b==3.0&&(long double)b==3.0L; }\n"
+                "TEST(_Float16,h) TEST(__bf16,b)\n"
+                "return h(2.0f16,3.0f16)&&b(2.0bf16,3.0bf16);\n"),
+            .exit_code = 1,
+        },
+        {
+            "narrow floating rounding and special values", __LINE__,
+            SVI("unsigned short h(double x){union{_Float16 f;unsigned short u;}v={.f=(_Float16)x};return v.u;}"
+                "unsigned short b(double x){union{__bf16 f;unsigned short u;}v={.f=(__bf16)x};return v.u;}"
+                "int f(__bf16 x,__bf16 y){return x!=x&&!(x==y)&&!(x<y)&&!(x>=y); }"
+                "union{__bf16 f;unsigned short u;}n={.u=0x7fc1};"
+                "return h(1.00048828125)==0x3c00&&h(1.0004882812500002)==0x3c01"
+                "&&b(1.00390625)==0x3f80&&b(1.0039062500000002)==0x3f81"
+                "&&h(0x1p-24)==1&&b(0x1p-133)==1&&h(-0.0)==0x8000&&b(-0.0)==0x8000&&f(n.f,1.0bf16);"),
+            .exit_code = 1,
+        },
+        {
             "narrow floating conditions recognize both zero signs", __LINE__,
             SVI("union H {_Float16 f;unsigned short bits;};"
                 "union B {__bf16 f;unsigned short bits;};\n"
@@ -19120,12 +19171,6 @@ TestFunction(test_interpreter_diagnostics){
             .lowering_error = 1,
         },
         {
-            "bfloat16 literal fails during lowering", __LINE__,
-            SVI("1.5bf16;\n"),
-            SVI("(test):1:1: error: bfloat16 expression lowering is not supported\n"),
-            .lowering_error = 1,
-        },
-        {
             "half precision complex literal fails during lowering", __LINE__,
             SVI("1.5f16i;\n"),
             SVI("(test):1:1: error: complex expression lowering is not supported\n"),
@@ -19544,7 +19589,7 @@ TestFunction(test_interpreter_diagnostics){
         err = cc_parse_all(&interp.parser);
         if(err){
             StringView log = msb_borrow_sv(&log_sb);
-            TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); 
+            TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line);
             TestPrintf("    %.*s", sv_p(log));
             goto finally;
         }

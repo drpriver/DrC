@@ -560,6 +560,30 @@ static struct AbiHalf abi_half_record_callback(struct AbiHalf (*fn)(struct AbiHa
 #define ABI_HALF_SYMBOL(name) NULL
 #define ABI_HALF_SKIP 1
 #endif
+#if defined __DRC__ || (defined __aarch64__ && (defined __clang__ || defined __GNUC__))
+#define ABI_FP16_SYMBOL(name) (void*)name
+#define ABI_FP16_SKIP 0
+struct AbiFp16 { __fp16 x, y, z; };
+static __fp16
+abi_fp16(__fp16 x){
+    return x;
+}
+static __fp16
+abi_fp16_callback(__fp16 (*fn)(__fp16), __fp16 x){
+    return fn(x);
+}
+static struct AbiFp16
+abi_fp16_record(struct AbiFp16 x){
+    return x;
+}
+static struct AbiFp16
+abi_fp16_record_callback(struct AbiFp16 (*fn)(struct AbiFp16), struct AbiFp16 x){
+    return fn(x);
+}
+#else
+#define ABI_FP16_SYMBOL(name) NULL
+#define ABI_FP16_SKIP 1
+#endif
 #if defined __DRC__ || ((defined __GNUC__ && !defined __clang__ && __GNUC__ >= 13) || (defined __clang__ && __clang_major__ >= 17))
 #define ABI_BFLOAT_SYMBOL(name) (void*)name
 #define ABI_BFLOAT_SKIP 0
@@ -890,6 +914,22 @@ TestFunction(test_interop){
         {{SV("echo"),ABI_HALF_SYMBOL(abi_half)},{SV("apply"),ABI_HALF_SYMBOL(abi_half_callback)},
          {SV("echo_record"),ABI_HALF_SYMBOL(abi_half_record)},{SV("apply_record"),ABI_HALF_SYMBOL(abi_half_record_callback)}},
         .exit_code=1, .skip=ABI_HALF_SKIP,
+    },
+    {
+        "ABI: __fp16 scalars and HFAs, including callbacks", __LINE__,
+        SVI("__fp16 echo(__fp16); __fp16 apply(__fp16 (*)(__fp16), __fp16);\n"
+            "struct S { __fp16 x, y, z; };\n"
+            "struct S echo_record(struct S); struct S apply_record(struct S (*)(struct S), struct S);\n"
+            "__fp16 f(__fp16 x){ return x; } struct S g(struct S s){ return s; }\n"
+            "union U { __fp16 f; unsigned short u; }; union R { struct S s; unsigned short u[3]; };\n"
+            "union R a = {.u = {0x3c00, 0x4000, 0x4200}}, r, q;\n"
+            "r.s = echo_record(a.s); q.s = apply_record(g, a.s);\n"
+            "union U x = {.u = 0x4000}, z, w; z.f = echo(x.f); w.f = apply(f, x.f);\n"
+            "return z.u == x.u && w.u == x.u && r.u[0] == a.u[0] && r.u[1] == a.u[1] && r.u[2] == a.u[2]"
+            " && q.u[0] == a.u[0] && q.u[1] == a.u[1] && q.u[2] == a.u[2];\n"),
+        {{SV("echo"), ABI_FP16_SYMBOL(abi_fp16)}, {SV("apply"), ABI_FP16_SYMBOL(abi_fp16_callback)},
+         {SV("echo_record"), ABI_FP16_SYMBOL(abi_fp16_record)}, {SV("apply_record"), ABI_FP16_SYMBOL(abi_fp16_record_callback)}},
+        .exit_code = 1, .skip = ABI_FP16_SKIP,
     },
     {
         "ABI: bfloat16 arguments, results and callbacks", __LINE__,
