@@ -9,6 +9,7 @@
 #define REPLACE_MALLOCATOR
 #define HEAVY_RECORDING
 #endif
+#include "../Drp/compiler_warnings.h"
 #include "../Drp/testing.h"
 #include "../Drp/switch_macros.h"
 #include "../Drp/Allocators/testing_allocator.h"
@@ -73,7 +74,7 @@ nc_test_fp_spill(double a, double b, double c, double d, double e, double f, dou
 static
 double
 nc_test_mixed(int a, double b, long long c, float d){
-    return 4*a + 2*b + (double)c + d;
+    return 4*a + 2*b + (double)c + (double)d;
 }
 
 static
@@ -587,6 +588,9 @@ nc_test_call_large(void (*entry)(void), const NcTestClosureCase* tc, NcTestResul
 static
 void
 nc_test_closure_callback(const NcCallPlan* plan, NcCallState* state, void* userdata){
+    assert(plan->target == CC_TARGET_NATIVE);
+    if(plan->target != CC_TARGET_NATIVE)
+        unreachable();
     NcTestClosureContext* context = userdata;
     const NcTestClosureCase* tc = context->test;
     context->calls++;
@@ -601,8 +605,6 @@ nc_test_closure_callback(const NcCallPlan* plan, NcCallState* state, void* userd
         if(!equal) context->bad_arguments |= 1u << i;
     }
     if(tc->variadic){
-        // Read the captured arguments with the host compiler's va_arg, not
-        // with the same argument-decoding helper under test.
         va_list ap;
         nc_va_start(state, plan, &ap);
         for(unsigned i = named; i < tc->count; i++){
@@ -624,9 +626,10 @@ nc_test_closure_callback(const NcCallPlan* plan, NcCallState* state, void* userd
         *dest = value;
     }
     nc_result_write(state, plan, &context->returned);
-    if(plan->target==CC_TARGET_X86_64_LINUX || plan->target==CC_TARGET_X86_64_MACOS){
-        unsigned x87=0;
-        for(unsigned i=0;i<plan->result.count;i++) x87+=plan->result.pieces[i].bank==NC_ABI_X87;
+    if(plan->target == CC_TARGET_X86_64_LINUX || plan->target == CC_TARGET_X86_64_MACOS){
+        unsigned x87 = 0;
+        for(unsigned i = 0; i < plan->result.count; i++)
+            x87 += plan->result.pieces[i].bank == NC_ABI_X87;
         state->sysv.result_x87_count=x87?0:1;
     }
 }
