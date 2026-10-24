@@ -19977,6 +19977,55 @@ cc_eval_expr(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
 
 static
 int
+cc_eval_initializer_value(CcEvalCtx* ctx, CcExpr* e, unsigned depth, CcExpr*_Nullable*_Nonnull out){
+    CcParser* p = ctx->parser;
+    if(depth >= 256) return cc_clone_expr(p, e, 0, (SrcLoc){0}, 0, out);
+    int err = cc_eval_expr(ctx, e, out);
+    if(err == CC_OOM_ERROR) return err;
+    if(err) goto symbolic;
+    CcExpr* folded = *out;
+    if(!folded || cc_types_compatible_unqualified(e->type, folded->type))
+        return 0;
+    cc_release_expr(p, folded);
+    *out = NULL;
+    symbolic:
+    if(!ccqt_has_pointer_representation(e->type))
+        goto preserve;
+    CcExpr* selected = NULL;
+    if(e->kind == CC_EXPR_CAST && ccqt_has_pointer_representation(e->lhs->type)){
+        err = cc_eval_initializer_value(ctx, e->lhs, depth+1, &selected);
+        if(err) return err;
+        if(selected->type.unqual == e->type.unqual){
+            selected->type = e->type;
+            *out = selected;
+            return 0;
+        }
+        *out = cc_unary_expr(p, CC_EXPR_CAST, e->loc, e->type, selected);
+        if(!*out){
+            cc_release_expr(p, selected);
+            return CC_OOM_ERROR;
+        }
+        return 0;
+    }
+    if(e->kind == CC_EXPR_DOT
+    || e->kind == CC_EXPR_ARROW
+    || e->kind == CC_EXPR_SUBSCRIPT
+    || e->kind == CC_EXPR_DEREF){
+        _Bool handled = 0;
+        err = cc_eval_object_view_select(ctx, e, 1, &handled, &selected);
+        if(err == CC_OOM_ERROR) return err;
+        if(err) goto preserve;
+        if(!handled) goto preserve;
+        err = cc_eval_initializer_value(ctx, selected, depth+1, out);
+        cc_release_expr(p, selected);
+        return err;
+    }
+    preserve:
+    return cc_clone_expr(p, e, 0, (SrcLoc){0}, 0, out);
+}
+
+static
+int
 cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
     CcParser* p = ctx->parser;
     if(cc_eval_slice_expr(e)) return cc_eval_slice_value(ctx, e, result);
@@ -21086,8 +21135,30 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 return cc_eval_object_scalar(ctx, e, 0, e->type, e->loc, NULL, result);
             CcExpr* node = cc_make_expr(p, CC_EXPR_INIT_LIST, e->loc, e->type, 0);
             if(!node) return CC_OOM_ERROR;
-            e->init_list->rc++;
-            node->init_list = e->init_list;
+            CcInitList* source = e->init_list;
+            CcInitList* list = Allocator_zalloc(cc_allocator(p), sizeof *list + source->count * sizeof(CcInitEntry));
+            if(!list){
+                _cc_release_expr(p, node, 0);
+                return CC_OOM_ERROR;
+            }
+            node->init_list = list;
+            list->loc = source->loc;
+            list->count = source->count;
+            for(uint32_t i = 0; i < source->count; i++){
+                CcInitEntry* entry = &list->entries[i];
+                CcExpr* value = source->entries[i].value;
+                int err = cc_field_path_concat(cc_allocator(p), (CcFieldPath){0}, source->entries[i].path, &entry->path);
+                if(err){
+                    cc_release_expr(p, node);
+                    return CC_OOM_ERROR;
+                }
+                if(!value) continue;
+                err = cc_eval_initializer_value(ctx, value, 0, &entry->value);
+                if(err){
+                    cc_release_expr(p, node);
+                    return err;
+                }
+            }
             *result = node;
             return 0;
         }

@@ -260,6 +260,63 @@ TestFunction(test_samples){
             SVI("Hello world" EOL),
         },
         {
+            __LINE__, CSVI("Samples/static-traversal.c"),
+            SVI(
+                "Foo:" EOL
+                "  b:" EOL
+                "    [0]:" EOL
+                "      x = 0" EOL
+                "      y = 1" EOL
+                "    [1]:" EOL
+                "      x = 2" EOL
+                "      y = 3" EOL
+                "  ba:" EOL
+                "    b:" EOL
+                "      x = 4" EOL
+                "      y = 5" EOL
+                "    z = 6" EOL
+                "  q:" EOL
+                "    a:" EOL
+                "      x = 7" EOL
+                "      y = 8" EOL
+                "    c:" EOL
+                "      b:" EOL
+                "        x = 9" EOL
+                "        y = 10" EOL
+                "      z = 11" EOL
+                "    i = 12" EOL
+                "  w:" EOL
+                "    q:" EOL
+                "      a:" EOL
+                "        x = 13" EOL
+                "        y = 14" EOL
+                "      c:" EOL
+                "        b:" EOL
+                "          x = 15" EOL
+                "          y = 16" EOL
+                "        z = 17" EOL
+                "      i = 18" EOL
+                "    w:" EOL
+                "      a:" EOL
+                "        x = 19" EOL
+                "        y = 20" EOL
+                "      c:" EOL
+                "        b:" EOL
+                "          x = 21" EOL
+                "          y = 22" EOL
+                "        z = 23" EOL
+                "      i = 24" EOL
+                "    b:" EOL
+                "      x = 25" EOL
+                "      y = 26" EOL
+                "    c:" EOL
+                "      b:" EOL
+                "        x = 27" EOL
+                "        y = 28" EOL
+                "      z = 29" EOL
+            ),
+        },
+        {
             __LINE__, CSVI("Samples/main.c"),
             SVI(
                 "Hello from main!" EOL

@@ -6854,8 +6854,61 @@ TestFunction(test_interpreter){
             .exit_code = 6,
         },
         {
+            "static for: linked snapshots unwind a bounded traversal", __LINE__,
+            SVI("struct Cursor {int depth, done, steps; const struct Cursor* parent;};\n"
+                "int count=0, sequence=0;\n"
+                "static for(struct Cursor c={0}; c.depth>=0 && c.steps<8;\n"
+                "c=!c.done && c.depth<3\n"
+                "? (struct Cursor){c.depth+1,0,c.steps+1,&c}\n"
+                ": c.parent\n"
+                "? (struct Cursor){c.parent->depth,1,c.steps+1,c.parent->parent}\n"
+                ": (struct Cursor){-1,0,c.steps+1,0}){\n"
+                "count++; sequence=sequence*10+c.depth;\n"
+                "} return count==7 && sequence==123210;"),
+            .exit_code = 1,
+        },
+        {
             "static for: floating point binding", __LINE__,
             SVI("double x=0; static for(double i=0.5; i<2; i+=0.5){x+=i;} return x==3;"),
+            .exit_code = 1,
+        },
+        {
+            "static for: aggregate rebinding folds field values", __LINE__,
+            SVI("struct Counter {int i;}; int count=0;\n"
+                "static for(struct Counter c={0}; c.i<300; c=(struct Counter){c.i+1}){count++;}\n"
+                "return count==300;"),
+            .exit_code = 1,
+        },
+        {
+            "static for: nested folding preserves type metadata and symbolic pointers", __LINE__,
+            SVI("static int target=17; struct Inner {int n; _Type t; int* p;};\n"
+                "struct State {struct Inner a; int values[2];}; int count=0;\n"
+                "static for(struct State s={{0,int,&target},{1,2}}; s.a.n<300;\n"
+                "s=(struct State){{s.a.n+1,s.a.t,s.a.p},{s.values[0]+1,s.values[1]+2}}){\n"
+                "static_assert(s.a.t==int); static_assert(s.a.p==&target);\n"
+                "static_assert(s.values[0]==s.a.n+1 && s.values[1]==2*(s.a.n+1));\n"
+                "count++; *s.a.p+=1;} return count==300 && target==317;"),
+            .exit_code = 1,
+        },
+        {
+            "static for: recursive reflection traversal folds cursor snapshots", __LINE__,
+            SVI("struct Bar {int x,y;}; struct Baz {struct Bar b;int z;};\n"
+                "struct Qux {struct Bar a;struct Baz c;int i;};\n"
+                "struct Wux {struct Qux q,w;struct Bar b;struct Baz c;};\n"
+                "struct Foo {struct Bar b[2];struct Baz ba;struct Qux q;struct Wux w;};\n"
+                "struct Cursor {_Type type;unsigned offset,depth,index,steps;const struct Cursor* parent;};\n"
+                "int iterations=0,nodes=0,leaves=0;unsigned offsets=0;\n"
+                "static for(struct Cursor c={.type=struct Foo}; c.type!=void && c.steps<110;\n"
+                "c=c.type.is_struct && c.index<c.type.fields\n"
+                "? (struct Cursor){c.type.field(c.index).type,c.offset+c.type.field(c.index).offset,c.depth+1,0,c.steps+1,&c}\n"
+                ": c.type.is_array && c.index<c.type.count\n"
+                "? (struct Cursor){c.type.element_type,c.offset+c.index*c.type.element_type.sizeof_,c.depth+1,0,c.steps+1,&c}\n"
+                ": c.parent\n"
+                "? (struct Cursor){c.parent->type,c.parent->offset,c.parent->depth,c.parent->index+1,c.steps+1,c.parent->parent}\n"
+                ": (struct Cursor){.type=void}){\n"
+                "iterations++; static if(c.index!=0) static continue; nodes++;\n"
+                "static if(c.type==int){leaves++;offsets+=c.offset;}\n"
+                "} return iterations==103 && nodes==52 && leaves==30 && offsets==435*sizeof(int);"),
             .exit_code = 1,
         },
         {

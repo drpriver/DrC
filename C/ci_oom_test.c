@@ -114,6 +114,10 @@ static struct OomTestCase {
     {__LINE__, SVI("static for(int i=7;i<9;i++){static if(i==7){int first(void){return i;}}\n"
          "static if(i==8){int second(void){return i;}}} return first()*10+second()==78;\n")},
     {__LINE__, SVI("int x=0; static for(struct S{int i;} s={0};s.i<3;s=(struct S){s.i+1}){x+=s.i;} return x==3;\n")},
+    {__LINE__, SVI("int target=0; struct S{int a[2];_Type t;int* p;};\n"
+         "static for(struct S s={{0,1},int,&target};s.a[0]<3;\n"
+         "s=(struct S){{s.a[0]+1,s.a[1]+2},s.t,s.p}){*s.p+=s.a[1];}\n"
+         "return target==9;\n")},
     {__LINE__, SVI("int sum=0; static for(int i=0,j=0; i<3; i++,j=sizeof(int[6/i])/sizeof(int)){sum+=j;} return sum==9;\n")},
     {__LINE__, SVI("int sum=0; static for(int i=0,j=0; i<3; ((i++),(j=sizeof(int[i+1])/sizeof(int)))){sum+=j;} return sum==5;\n")},
     {__LINE__, SVI("int x=0; static for(int i=0,j=0; i<3; (i++,j=i)){x+=i*10+j;}\n"
