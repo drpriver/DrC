@@ -4519,6 +4519,7 @@ cpp_def_target_int(CppPreprocessor* cpp, StringView name, int val){
         DIGITS(6);
         DIGITS(7);
         DIGITS(8);
+        DIGITS(9);
         DIGITS(15);
         DIGITS(16);
         DIGITS(17);
@@ -4816,6 +4817,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFFLOAT("__FLT_DENORM_MIN__", "1.40129846432481707092372958328991613128e-45F");
     DEFINT("__FLT_MANT_DIG__",   24);
     DEFINT("__FLT_DIG__",        6);
+    DEFINT("__FLT_DECIMAL_DIG__", 9);
     DEFINT("__FLT_MIN_EXP__",    -125);
     DEFINT("__FLT_MAX_EXP__",    128);
     DEFINT("__FLT_MIN_10_EXP__", -37);
@@ -4832,6 +4834,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFFLOAT("__DBL_DENORM_MIN__", "4.9406564584124654e-324");
     DEFINT("__DBL_MANT_DIG__",   53);
     DEFINT("__DBL_DIG__",        15);
+    DEFINT("__DBL_DECIMAL_DIG__", 17);
     DEFINT("__DBL_MIN_EXP__",    -1021);
     DEFINT("__DBL_MAX_EXP__",    1024);
     DEFINT("__DBL_MIN_10_EXP__", -307);
@@ -4854,6 +4857,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
             DEFINT("__LDBL_MIN_10_EXP__", -307);
             DEFINT("__LDBL_MAX_10_EXP__", 308);
             DEFINT("__DECIMAL_DIG__", 17);
+            DEFINT("__LDBL_DECIMAL_DIG__", 17);
             break;
         case CC_LONG_DOUBLE_X87:
             DEFFLOAT("__LDBL_MAX__",        "1.18973149535723176502126385303097021e+4932L");
@@ -4867,6 +4871,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
             DEFINT("__LDBL_MIN_10_EXP__", -4931);
             DEFINT("__LDBL_MAX_10_EXP__", 4932);
             DEFINT("__DECIMAL_DIG__", 21);
+            DEFINT("__LDBL_DECIMAL_DIG__", 21);
             break;
         case CC_LONG_DOUBLE_BINARY128:
             DEFFLOAT("__LDBL_MAX__",        "1.18973149535723176508575932662800702e+4932L");
@@ -4880,6 +4885,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
             DEFINT("__LDBL_MIN_10_EXP__", -4931);
             DEFINT("__LDBL_MAX_10_EXP__", 4932);
             DEFINT("__DECIMAL_DIG__", 36);
+            DEFINT("__LDBL_DECIMAL_DIG__", 36);
             break;
     }
     DEFINT("__LDBL_HAS_DENORM__", 1);
@@ -4899,7 +4905,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
             {SVI("__INT64_C"),   i64_suf},
             {SVI("__INT128_C"),  "LLL"},
             {SVI("__UINT8_C"),   NULL},
-            {SVI("__UINT16_C"),  "U"},
+            {SVI("__UINT16_C"),  NULL},
             {SVI("__UINT32_C"),  "U"},
             {SVI("__UINT64_C"),  u64_suf},
             {SVI("__UINT128_C"),  "ULLL"},
@@ -5065,6 +5071,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#defifndef FLT_TRUE_MIN __FLT_DENORM_MIN__\n"
                               "#defifndef FLT_MANT_DIG __FLT_MANT_DIG__\n"
                               "#defifndef FLT_DIG __FLT_DIG__\n"
+                              "#defifndef FLT_DECIMAL_DIG __FLT_DECIMAL_DIG__\n"
                               "#defifndef FLT_MIN_EXP __FLT_MIN_EXP__\n"
                               "#defifndef FLT_MAX_EXP __FLT_MAX_EXP__\n"
                               "#defifndef FLT_MIN_10_EXP __FLT_MIN_10_EXP__\n"
@@ -5076,6 +5083,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "#defifndef DBL_TRUE_MIN __DBL_DENORM_MIN__\n"
                               "#defifndef DBL_MANT_DIG __DBL_MANT_DIG__\n"
                               "#defifndef DBL_DIG __DBL_DIG__\n"
+                              "#defifndef DBL_DECIMAL_DIG __DBL_DECIMAL_DIG__\n"
                               "#defifndef DBL_MIN_EXP __DBL_MIN_EXP__\n"
                               "#defifndef DBL_MAX_EXP __DBL_MAX_EXP__\n"
                               "#defifndef DBL_MIN_10_EXP __DBL_MIN_10_EXP__\n"
@@ -5088,6 +5096,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                                   "#defifndef LDBL_TRUE_MIN __LDBL_DENORM_MIN__\n"
                                   "#defifndef LDBL_MANT_DIG __LDBL_MANT_DIG__\n"
                                   "#defifndef LDBL_DIG __LDBL_DIG__\n"
+                                  "#defifndef LDBL_DECIMAL_DIG __LDBL_DECIMAL_DIG__\n"
                                   "#defifndef LDBL_MIN_EXP __LDBL_MIN_EXP__\n"
                                   "#defifndef LDBL_MAX_EXP __LDBL_MAX_EXP__\n"
                                   "#defifndef LDBL_MIN_10_EXP __LDBL_MIN_10_EXP__\n"
@@ -5188,13 +5197,13 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                               "typedef _Atomic unsigned long long atomic_ullong;\n"
                               "#include <__stdatomic_typedefs.h>\n"
                               "#define ATOMIC_VAR_INIT(value) (value)\n"
-                              "#define atomic_init(obj, ...) ((void)(*obj = __VA_ARGS__))\n"
+                              "#define atomic_init(obj, ...) ((void)(*(obj) = __VA_ARGS__))\n"
                               "typedef _Atomic bool atomic_flag;\n"
                               "#define ATOMIC_FLAG_INIT 0\n"
                               "#include <__stdatomic_ops.h>\n"
                            )},
         {SVI("__stdatomic_ops.h"), SVI("#pragma once\n"
-                              "#define atomic_is_lock_free(x) ((sizeof(*(x)) == 1 || sizeof(*(x)) == 2 || sizeof(*(x)) == 4 || sizeof(*(x)) == 8 || sizeof(*(x)) == 16) && sizeof(*(x)) <= __DVM_ATOMIC_LOCK_FREE_MAX)\n"
+                              "#define atomic_is_lock_free(x) ((void)(x), (_Bool)((sizeof(*(x)) == 1 || sizeof(*(x)) == 2 || sizeof(*(x)) == 4 || sizeof(*(x)) == 8 || sizeof(*(x)) == 16) && sizeof(*(x)) <= __DVM_ATOMIC_LOCK_FREE_MAX))\n"
                               "#define kill_dependency(y) (y)\n"
                               "#define atomic_store(obj, value) __atomic_store_n(obj, value, __ATOMIC_SEQ_CST)\n"
                               "#define atomic_store_explicit(obj, value, order) __atomic_store_n(obj, value, order)\n"

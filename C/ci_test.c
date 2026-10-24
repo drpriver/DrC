@@ -17875,6 +17875,38 @@ TestFunction(test_interpreter){
             .builtin_headers = 1,
         },
         {
+            "stdint: UINT16_C uses the promoted least-width type", __LINE__,
+            SVI("#include <stdint.h>\n"
+               "static_assert(typeof(UINT16_C(1)) == typeof(+(uint_least16_t)1));\n"
+               "return -1 < UINT16_C(1) && UINT16_C(65535) == 65535;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: atomic_init parenthesizes pointer expressions", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "atomic_int a[2] = {0, 0};\n"
+               "atomic_int *p = a;\n"
+               "int calls = 0;\n"
+               "int value(void){ calls++; return 3; }\n"
+               "atomic_init(p++ + 1, value());\n"
+               "return p == a + 1 && calls == 1 && a[0] == 0 && a[1] == 3;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
+            "stdatomic: atomic_is_lock_free evaluates its argument once and returns bool", __LINE__,
+            SVI("#include <stdatomic.h>\n"
+               "volatile atomic_int a[2] = {0, 0};\n"
+               "volatile atomic_int *p = a;\n"
+               "int calls = 0;\n"
+               "bool result = atomic_is_lock_free((++calls, p++));\n"
+               "static_assert(typeof(atomic_is_lock_free(&a[0])) == bool);\n"
+               "return result && calls == 1 && p == a + 1;\n"),
+            .exit_code = 1,
+            .builtin_headers = 1,
+        },
+        {
             "stdatomic: atomic_is_lock_free", __LINE__,
             SVI("#include <stdatomic.h>\n"
                "atomic_int x = 0;\n"
