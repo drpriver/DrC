@@ -119,10 +119,12 @@ struct CppFrame {
     };
     StringView txt;
     CppIncludePosition include_position;
-    uint32_t include_depth: 31; // zero for the main input file.
-                                // Honestly 31 bits is too many, but whatever, we can steal
-                                // some if we need more flags.
-    uint32_t is_system_header: 1;
+
+    // Honestly 30 bits is too many, but whatever, we can steal
+    // some if we need more flags.
+    uint32_t include_depth:   30, // zero for the main input file.
+             is_system_header: 1,
+             line_has_token:   1;
 };
 
 typedef struct CppPoundIf CppPoundIf;
@@ -200,7 +202,6 @@ struct CppPreprocessor {
     Marray(CppFrame) frames;
     Marray(CppPoundIf) if_stack;
     CppTokens pending; // push in reverse order so you can pop in LIFO order
-    _Bool at_line_start;
     FreeList(CppTokens) scratch_list; // reusable scratch space for collecting tokens
     FreeList(Marray(size_t)) scratch_idxes;
     uint64_t counter;

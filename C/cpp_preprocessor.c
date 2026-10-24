@@ -698,6 +698,7 @@ cpp_next_c_token(CppPreprocessor* cpp, CcToken* ctok){
             case CPP_PLACEMARKER:
             case CPP_REENABLE:
             case CPP_HEADER_NAME:
+            case CPP_DIRECTIVE:
             case CPP_END_OF_SOURCE_FILE:
                 return CPP_UNREACHABLE_ERROR;
             case CPP_PUNCTUATOR:
@@ -777,6 +778,7 @@ cpp_next_c_token_array(CppPreprocessor* cpp, const CppToken*_Nonnull*_Nonnull to
             case CPP_PLACEMARKER:
             case CPP_REENABLE:
             case CPP_HEADER_NAME:
+            case CPP_DIRECTIVE:
             case CPP_END_OF_SOURCE_FILE:
                 return CPP_UNREACHABLE_ERROR;
             case CPP_PUNCTUATOR:
@@ -851,30 +853,24 @@ cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){
         int err = cpp_next_raw_token(cpp, &tok);
         if(err) return err;
         if(tok.type == CPP_END_OF_SOURCE_FILE){
-            cpp->at_line_start = 1;
             continue;
         }
         if(tok.type == CPP_END_OF_INPUT && cpp->if_stack.count)
             return cpp_error(cpp, ma_tail(cpp->if_stack).start, "Unterminated conditional directive");
         if(cpp->if_stack.count && !ma_tail(cpp->if_stack).is_active){
             if(tok.type == CPP_NEWLINE){
-                cpp->at_line_start = 1;
                 *ptok = tok;
                 return 0;
             }
-            if(tok.type == CPP_PUNCTUATOR && cpp->at_line_start && tok.punct == '#'){
-                cpp->at_line_start = 0;
+            if(tok.type == CPP_DIRECTIVE){
                 err = cpp_handle_directive_in_inactive_region(cpp);
                 if(err) return err;
                 continue;
             }
-            if(tok.type != CPP_WHITESPACE)
-                cpp->at_line_start = 0;
             continue; // swallow all other tokens
         }
         switch(tok.type){
             case CPP_NEWLINE:
-                cpp->at_line_start = 1;
                 *ptok = tok;
                 return 0;
                 continue;
@@ -923,6 +919,7 @@ cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){
                     for(int paren = 1;;){
                         err = cpp_next_raw_token(cpp, &next);
                         if(err) goto invoke_cleanup;
+                        if(next.type == CPP_DIRECTIVE) next.type = CPP_PUNCTUATOR;
                         if(next.type == CPP_END_OF_SOURCE_FILE){
                             next.type = CPP_NEWLINE;
                             next.txt = SV("\n");
@@ -977,18 +974,12 @@ cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){
 
                 noexp:
                 *ptok = tok;
-                cpp->at_line_start = 0;
             }return 0;
+            case CPP_DIRECTIVE:
+                err = cpp_handle_directive(cpp);
+                if(err) return err;
+                continue;
             case CPP_PUNCTUATOR:
-                if(cpp->at_line_start && tok.punct == '#'){
-                    cpp->at_line_start = 0;
-                    err = cpp_handle_directive(cpp);
-                    if(err) return err;
-                    continue;
-                }
-                *ptok = tok;
-                cpp->at_line_start = 0;
-                return 0;
             case CPP_END_OF_INPUT:
             case CPP_STRING:
             case CPP_EMBED:
@@ -996,7 +987,6 @@ cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){
             case CPP_NUMBER:
             case CPP_OTHER:
                 *ptok = tok;
-                cpp->at_line_start = 0;
                 return 0;
             case CPP_HEADER_NAME:
             case CPP_PLACEMARKER:
@@ -1169,7 +1159,7 @@ cpp_clean_token(CppPreprocessor* cpp, size_t len, const char* txt){
         }
         p = back+1;
     }
-    if(prev==txt) return (StringView){len, txt};
+    if(prev == txt) return (StringView){len, txt};
     if(end != prev) msb_write_str(&sb, prev, end-prev);
     return msb_detach_sv(&sb);
 }
@@ -1557,7 +1547,28 @@ cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
 
 static
 int
-cpp_next_raw_token(CppPreprocessor* cpp, CppToken* tok){
+cpp_tokenize_header_name(CppPreprocessor *cpp, CppFrame *f, CppToken *tok){
+    SrcLoc loc = {.file_id=f->file_id, .line=f->line, .column=f->column};
+    size_t start = f->cursor;
+    int opener = cpp_next_char(f);
+    int closer = opener == '<' ? '>' : '"';
+    for(;;){
+        int c = cpp_next_char(f);
+        if(c == '\n' || c == -1)
+            return cpp_error(cpp, loc, "Unterminated header name in #include");
+        if(c == closer) break;
+    }
+    *tok = (CppToken){
+        .type=CPP_HEADER_NAME,
+        .loc=loc,
+        .txt=cpp_clean_token(cpp, f->cursor-start, &f->txt.text[start])
+    };
+    return 0;
+}
+
+static
+int
+cpp_next_raw_token_mode(CppPreprocessor* cpp, CppToken* tok, _Bool header_name){
     while(cpp->pending.count){
         *tok = ma_tail(cpp->pending);
         cpp->pending.count--;
@@ -1574,9 +1585,6 @@ cpp_next_raw_token(CppPreprocessor* cpp, CppToken* tok){
     }
     CppFrame* f = &ma_tail(cpp->frames);
     if(f->include_depth == 0) cpp->base_file_id = f->file_id;
-    // Start of file is start of line
-    if(f->cursor == 0)
-        cpp->at_line_start = 1;
     cpp_handle_continuation(f);
     if(f->cursor == f->txt.length){
         *tok = (CppToken){
@@ -1589,14 +1597,38 @@ cpp_next_raw_token(CppPreprocessor* cpp, CppToken* tok){
         };
     }
     else {
-        int err = cpp_tokenize_from_frame(cpp, f, tok);
+        int c = cpp_peek_char(f);
+        int err;
+        if(header_name && (c == '<' || c =='"'))
+            err = cpp_tokenize_header_name(cpp, f, tok);
+        else
+            err = cpp_tokenize_from_frame(cpp, f, tok);
         if(err) return err;
+        if(tok->type == CPP_NEWLINE)
+            f->line_has_token = 0;
+        else if(tok->type != CPP_WHITESPACE){
+            if(!f->line_has_token && tok->type == CPP_PUNCTUATOR && tok->punct == '#')
+                tok->type = CPP_DIRECTIVE;
+            f->line_has_token = 1;
+        }
     }
     if(tok->type == CPP_END_OF_SOURCE_FILE){
         if(cpp->frames.count == 1) cpp->eof_loc = tok->loc;
         cpp->frames.count--;
     }
     return 0;
+}
+
+static
+int
+cpp_next_raw_token(CppPreprocessor* cpp, CppToken* tok){
+    return cpp_next_raw_token_mode(cpp, tok, 0);
+}
+
+static
+int
+cpp_next_include_token(CppPreprocessor* cpp, CppToken* tok){
+    return cpp_next_raw_token_mode(cpp, tok, 1);
 }
 
 static
@@ -2206,6 +2238,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
         for(;;){
             err = cpp_next_raw_token(cpp, &tok);
             if(err) goto finish_defblock;
+            if(tok.type == CPP_DIRECTIVE) tok.type = CPP_PUNCTUATOR;
             if(cpp_token_is_end(tok)){
                 err = cpp_error(cpp, tok.loc, "unterminated #defblock (missing #endblock)");
                 goto finish_defblock;
@@ -2638,7 +2671,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
         CppIncludePosition source_pos = ma_tail(cpp->frames).include_position;
         uint32_t source_depth = ma_tail(cpp->frames).include_depth;
         do {
-            err = cpp_next_raw_token(cpp, &tok);
+            err = cpp_next_include_token(cpp, &tok);
             if(err) return err;
         } while(tok.type == CPP_WHITESPACE);
         _Bool quote = 0;
@@ -2657,25 +2690,9 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 if(err) goto cleanup;
                 break;
             }
-            if(tok.type == CPP_STRING){
-                quote = 1;
+            if(tok.type == CPP_HEADER_NAME){
+                quote = tok.txt.text[0] == '"';
                 header_name = (StringView){tok.txt.length - 2, tok.txt.text + 1};
-            }
-            else if(tok.type == CPP_PUNCTUATOR && tok.punct == '<'){
-                quote = 0;
-                msb_reset(&header_sb);
-                for(;;){
-                    err = cpp_next_raw_token(cpp, &tok);
-                    if(err) goto cleanup;
-                    if(cpp_token_is_end(tok) || tok.type == CPP_NEWLINE){
-                        err = cpp_error(cpp, directive_loc, "Unterminated < in #include");
-                        goto cleanup;
-                    }
-                    if(tok.type == CPP_PUNCTUATOR && tok.punct == '>')
-                        break;
-                    msb_write_str(&header_sb, tok.txt.text, tok.txt.length);
-                }
-                header_name = msb_borrow_sv(&header_sb);
             }
             else {
                 break;
@@ -2696,7 +2713,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 }
             }
             do {
-                err = cpp_next_raw_token(cpp, &tok);
+                err = cpp_next_include_token(cpp, &tok);
                 if(err) goto cleanup;
             } while(tok.type == CPP_WHITESPACE);
         }
@@ -2843,7 +2860,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 err = cpp_push_tok(cpp, scratch, tok);
                 if(err) goto scan_finally;
             }while(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE);
-            if(tok.type == CPP_PUNCTUATOR && tok.punct == '#'){
+            if(tok.type == CPP_DIRECTIVE){
                 do {
                     err = cpp_next_raw_token(cpp, &tok);
                     if(err) goto scan_finally;
@@ -7565,6 +7582,7 @@ cpp_eval_ts_next(CppPreprocessor* cpp, CppTokenStream* s, CppToken *outtok){
                 return 0;
             case CPP_HEADER_NAME:
             case CPP_END_OF_SOURCE_FILE:
+            case CPP_DIRECTIVE:
                 return CPP_UNREACHABLE_ERROR;
             case CPP_IDENTIFIER:
                 break;
@@ -8192,6 +8210,7 @@ cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, CppEvalValue* result, _Bo
             }
         case CPP_END_OF_INPUT:
         case CPP_HEADER_NAME:
+        case CPP_DIRECTIVE:
         case CPP_END_OF_SOURCE_FILE:
         case CPP_IDENTIFIER:
         case CPP_STRING:
@@ -8400,7 +8419,6 @@ cpp_discard_all_input(CppPreprocessor* cpp){
     cpp->frames.count = 0;
     cpp->if_stack.count = 0;
     cpp->pending.count = 0;
-    cpp->at_line_start = 1;
 }
 
 enum {
