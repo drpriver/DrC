@@ -74,6 +74,7 @@ warn_unused static int cc_pointer_of(CcParser* p, CcQualType pointee, CcQualType
 warn_unused static int cc_slice_of(CcParser* p, CcQualType pointee, SrcLoc loc, CcQualType* out);
 LOG_PRINTF(3, 4) static int cc_error(CcParser*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static MStringBuilder* cc_start_error(CcParser*, SrcLoc, const char*, ...);
+static MStringBuilder* cc_start_errorv(CcParser*, SrcLoc, const char*, va_list);
 static int cc_finish_error(CcParser*, SrcLoc);
 LOG_PRINTF(3, 4) static void cc_warn(CcParser*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static void cc_info(CcParser*, SrcLoc, const char*, ...);
@@ -375,10 +376,9 @@ cc_pop_scope(CcParser* p){
 static
 int
 cc_type_error(CcParser* p, SrcLoc loc, CcQualType type, const char* fmt, ...){
-    MStringBuilder* sb = cc_start_error(p, loc, "");
     va_list va;
     va_start(va, fmt);
-    msb_vsprintf(sb, fmt, va);
+    MStringBuilder* sb = cc_start_errorv(p, loc, fmt, va);
     va_end(va);
     msb_write_literal(sb, ". The type is '");
     cc_print_type(sb, type);
@@ -389,10 +389,9 @@ cc_type_error(CcParser* p, SrcLoc loc, CcQualType type, const char* fmt, ...){
 static
 int
 cc_types_error(CcParser* p, SrcLoc loc, CcQualType a, CcQualType b, const char* fmt, ...){
-    MStringBuilder* sb = cc_start_error(p, loc, "");
     va_list va;
     va_start(va, fmt);
-    msb_vsprintf(sb, fmt, va);
+    MStringBuilder* sb = cc_start_errorv(p, loc, fmt, va);
     va_end(va);
     msb_write_literal(sb, ". The types are '");
     cc_print_type(sb, a);
@@ -7910,13 +7909,20 @@ cc_check_transfer(CcParser* p, SrcLoc loc, CcDeferContext from, CcDeferContext t
 
 static
 MStringBuilder*
-cc_start_error(CcParser* p, SrcLoc loc, const char* fmt, ...){
-    va_list va;
-    va_start(va, fmt);
+cc_start_errorv(CcParser* p, SrcLoc loc, const char* fmt, va_list va){
     cpp_include_backtrace(&p->cpp, LOG_PRINT_ERROR);
     cpp_msg_preamble(&p->cpp, loc, "error");
     MStringBuilder* sb = &p->cpp.logger->buff;
     msb_vsprintf(sb, fmt, va);
+    return sb;
+}
+
+static
+MStringBuilder*
+cc_start_error(CcParser* p, SrcLoc loc, const char* fmt, ...){
+    va_list va;
+    va_start(va, fmt);
+    MStringBuilder *sb = cc_start_errorv(p, loc, fmt, va);
     va_end(va);
     return sb;
 }
