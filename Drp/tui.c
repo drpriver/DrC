@@ -792,17 +792,17 @@ tui_sprintf(Tui* tui, const char* fmt, ...){
     va_copy(retry, va);
     char* buff = tui->canvas.buff.data + tui->canvas.buff.cursor;
     size_t remainder = tui->canvas.buff.capacity - tui->canvas.buff.cursor;
-    int capacity = remainder > INT_MAX ? INT_MAX : (int)remainder;
-    int n = _tui_vsnprintf(buff, capacity, fmt, va);
+    size_t capacity = remainder;
+    ptrdiff_t n = _tui_vsnprintf(buff, capacity, fmt, va);
     va_end(va);
     if(n < 0 || (size_t)n > SIZE_MAX - tui->canvas.buff.cursor - 1){
         tui->canvas.buff.errored = 1;
     }
-    else if(n >= capacity){
+    else if((size_t)n >= capacity){
         size_t needed = tui->canvas.buff.cursor + (size_t)n + 1;
         size_t cap = tui->canvas.buff.capacity <= SIZE_MAX / 2 ? tui->canvas.buff.capacity * 2 : SIZE_MAX;
         if(cap < needed) cap = needed;
-        char* new_buff = Allocator_realloc(tui->canvas.buff.allocator, tui->canvas.buff.data, tui->canvas.buff.capacity, cap);
+        char* new_buff = Allocator_realloc(tui->canvas.buff.allocator, tui->canvas.buff.data, tui->canvas.buff.capacity, cap, 1, 1);
         if(!new_buff){
             tui->canvas.buff.errored = 1;
         }
@@ -810,9 +810,9 @@ tui_sprintf(Tui* tui, const char* fmt, ...){
             tui->canvas.buff.data = new_buff;
             tui->canvas.buff.capacity = cap;
             remainder = cap - tui->canvas.buff.cursor;
-            capacity = remainder > INT_MAX ? INT_MAX : (int)remainder;
+            capacity = remainder;
             n = _tui_vsnprintf(new_buff + tui->canvas.buff.cursor, capacity, fmt, retry);
-            if(n < 0 || n >= capacity) tui->canvas.buff.errored = 1;
+            if(n < 0 || (size_t)n >= capacity) tui->canvas.buff.errored = 1;
         }
     }
     va_end(retry);
@@ -1335,10 +1335,10 @@ tui_printf(Tui* tui, const char* fmt, ...){
     char buff[1024];
     va_list va;
     va_start(va, fmt);
-    int n = _tui_vsnprintf(buff, sizeof buff, fmt, va);
+    ptrdiff_t n = _tui_vsnprintf(buff, sizeof buff, fmt, va);
     va_end(va);
     if(n < 0) return;
-    tui_puts_utf8(tui, buff, n < (int)sizeof buff ? (size_t)n : sizeof buff - 1);
+    tui_puts_utf8(tui, buff, (size_t)n < sizeof buff ? (size_t)n : sizeof buff - 1);
 }
 void
 tui_clear_to_end_of_row(Tui*tui){
@@ -1365,12 +1365,12 @@ tui_resize_canvas(Tui* tui, uint32_t w, uint32_t h){
         size_t count, bytes, output;
         if(tui_allocation_sizes(nw, nh, &count, &bytes, &output)) return -1;
         TuiCell* cells[2] = {
-            Allocator_zalloc(c->buff.allocator, bytes),
-            Allocator_zalloc(c->buff.allocator, bytes),
+            Allocator_zalloc(c->buff.allocator, count, sizeof *c->cells[0], _Alignof(TuiCell)),
+            Allocator_zalloc(c->buff.allocator, count, sizeof *c->cells[0], _Alignof(TuiCell)),
         };
         if(!cells[0] || !cells[1]){
             for(int i = 0; i < 2; i++)
-                if(cells[i]) Allocator_free(c->buff.allocator, cells[i], bytes);
+                if(cells[i]) Allocator_free(c->buff.allocator, cells[i], count, sizeof *cells[i], _Alignof(TuiCell));
             return -1;
         }
         for(int i = 0; i < 2; i++){
@@ -1378,7 +1378,7 @@ tui_resize_canvas(Tui* tui, uint32_t w, uint32_t h){
                 memcpy(cells[i] + (size_t)y*nw, c->cells[i] + (size_t)y*c->alloc_w,
                     (size_t)c->alloc_w*sizeof(TuiCell));
             if(c->cells[i])
-                Allocator_free(c->buff.allocator, c->cells[i], (size_t)c->alloc_w*c->alloc_h*sizeof(TuiCell));
+                Allocator_free(c->buff.allocator, c->cells[i], (size_t)c->alloc_w*c->alloc_h, sizeof *c->cells[i], _Alignof(TuiCell));
             c->cells[i] = cells[i];
         }
         c->alloc_w = nw;
@@ -1558,7 +1558,7 @@ tui_close(Tui* tui){
     TuiCanvas* c = &tui->canvas;
     for(int i = 0; i < 2; i++){
         if(c->cells[i])
-            Allocator_free(c->buff.allocator, c->cells[i], (size_t)c->alloc_w*c->alloc_h*sizeof(TuiCell));
+            Allocator_free(c->buff.allocator, c->cells[i], (size_t)c->alloc_w*c->alloc_h, sizeof *c->cells[i], _Alignof(TuiCell));
     }
     if(c->buff.data) msb_destroy(&c->buff);
     *c = (TuiCanvas){0};

@@ -77,7 +77,7 @@ AM_reserve(AtomMap* am, Allocator al, size_t capacity){
     size_t old_size = AM_alloc_size(old_cap);
     size_t new_size = AM_alloc_size(new_cap);
     uint32_t count = am->count;
-    void* data = Allocator_realloc(al, am->data, old_size, new_size);
+    void* data = Allocator_realloc(al, am->data, old_size, new_size, 1, _Alignof(AtomMapItem));
     if(!data) return 1;
     const void** items = data;
     uint32_t* idxes = (uint32_t*)(void*)(new_cap*(sizeof(Atom)+(sizeof(void*)))+(char*)(data));
@@ -300,7 +300,7 @@ int
 AM_clone_into(AtomMap* dst, Allocator al, const AtomMap* src){
     if(dst == src) return 0;
     if(dst->cap < src->cap){
-        void* data = Allocator_realloc(al, dst->data, AM_alloc_size(dst->cap), AM_alloc_size(src->cap));
+        void* data = Allocator_realloc(al, dst->data, AM_alloc_size(dst->cap), AM_alloc_size(src->cap), 1, _Alignof(AtomMapItem));
         if(!data) return 1;
         dst->data = data;
         dst->cap = src->cap;

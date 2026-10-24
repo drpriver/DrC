@@ -9,6 +9,7 @@
 #include "cstring_view.h"
 #include "stringview.h"
 #include "Allocators/allocator.h"
+#include "ckdint.h"
 
 #if 0
 #include "debugging.h"
@@ -32,13 +33,21 @@
 #endif
 #endif
 
-#if !defined(likely) && !defined(unlikely)
-#if defined(__GNUC__) || defined(__clang__)
+#if !defined likely && !defined unlikely
+#if defined __GNUC__ || defined __clang__
 #define likely(x)      __builtin_expect(!!(x), 1)
 #define unlikely(x)    __builtin_expect(!!(x), 0)
 #else
 #define likely(x) (x)
 #define unlikely(x) (x)
+#endif
+#endif
+
+#ifndef unreachable
+#if defined __GNUC__ || defined __clang__ || defined __DRC__
+#define unreachable() __builtin_unreachable()
+#else
+#define unreachable() __assume(0)
 #endif
 #endif
 
@@ -60,7 +69,7 @@ struct MStringBuilder {
 static inline
 void
 msb_destroy(MStringBuilder* msb){
-    Allocator_free(msb->allocator, msb->data, msb->capacity);
+    Allocator_free(msb->allocator, msb->data, msb->capacity, 1, 1);
     msb->data=0;
     msb->cursor=0;
     msb->capacity=0;
@@ -78,7 +87,6 @@ int
 _msb_resize(MStringBuilder*, size_t);
 
 
-//
 // Nul-terminates the builder without actually increasing the length
 // of the string.
 static inline
@@ -86,6 +94,8 @@ void
 msb_nul_terminate(MStringBuilder* msb){
     int err = _check_msb_remaining_size(msb, 1);
     if(unlikely(err)) return;
+    if(!msb->data || msb->data == ALLOCATOR_SUCCESS_BUT_NO_DATA)
+        unreachable(); // some versions of GCC get confused
     msb->data[msb->cursor] = '\0';
 }
 
@@ -198,7 +208,7 @@ warn_unused
 int
 _msb_resize(MStringBuilder* msb, size_t size){
     if(msb->errored) return 1;
-    char* new_data = Allocator_realloc(msb->allocator, msb->data, msb->capacity, size);
+    char* new_data = Allocator_realloc(msb->allocator, msb->data, msb->capacity, size, 1, 1);
     if(!new_data){
         msb->errored = 1;
         return 1;
@@ -213,17 +223,29 @@ force_inline
 warn_unused
 int
 _check_msb_remaining_size(MStringBuilder* msb, size_t len){
-    if(msb->cursor + len > msb->capacity){
-        size_t new_size = msb->capacity?(msb->capacity*3)/2:16;
-        while(new_size < msb->cursor+len){
-            new_size *= 2;
+    if(msb->errored) return 1;
+    size_t required;
+    if(add_overflow(msb->cursor, len, &required))
+        goto overflow;
+    if(required > msb->capacity){
+        size_t new_size = 16;
+        if(msb->capacity){
+            if(add_overflow(msb->capacity, msb->capacity / 2, &new_size))
+                goto overflow;
         }
-        if(new_size & 15){
-            new_size += (16- (new_size&15));
+        while(new_size < required){
+            if(mul_overflow(new_size, (size_t)2, &new_size))
+                goto overflow;
         }
+        if(add_overflow(new_size, (size_t)15, &new_size))
+            goto overflow;
+        new_size &= ~(size_t)15;
         return _msb_resize(msb, new_size);
     }
     return 0;
+    overflow:
+    msb->errored = 1;
+    return 1;
 }
 
 //
@@ -253,6 +275,8 @@ msb_write_char(MStringBuilder* msb, char c){
     int err = _check_msb_remaining_size(msb, 1);
     if(unlikely(err))
         return;
+    if(!msb->data || msb->data == ALLOCATOR_SUCCESS_BUT_NO_DATA)
+        unreachable(); // some versions of GCC get confused
     msb->data[msb->cursor++] = c;
 }
 
@@ -376,7 +400,11 @@ msb_replace_range(MStringBuilder* msb, size_t start, size_t end, const char* rep
         return;
     }
     size_t rangelen = end-start;
-    size_t new_cursor = msb->cursor - rangelen + len;
+    size_t new_cursor;
+    if(add_overflow(msb->cursor - rangelen, len, &new_cursor)){
+        msb->errored = 1;
+        return;
+    }
     if(new_cursor > msb->capacity){
        if(_check_msb_remaining_size(msb, new_cursor - msb->cursor))
            return;

@@ -1,5 +1,5 @@
 //
-// Copyright © 2024-2025, David Priver <david@davidpriver.com>
+// Copyright © 2024-2026, David Priver <david@davidpriver.com>
 //
 #ifndef ATOMF_H
 #define ATOMF_H
@@ -38,9 +38,10 @@ static inline
 Atom _Nullable
 AT_atomize_fv(AtomTable* at, const char* fmt, va_list vap){
     char buff[2048];
-    int n = stbsp_vsnprintf(buff, sizeof buff, fmt, vap);
-    if(n > (int)sizeof buff)
-        n = -1+(int)sizeof buff;
+    ptrdiff_t n = stbsp_vsnprintf(buff, sizeof buff, fmt, vap);
+    if(n < 0) return NULL;
+    if((size_t)n > sizeof buff)
+        n = -1+(ptrdiff_t)sizeof buff;
     Atom a = AT_atomize(at, buff, n);
     return a;
 }

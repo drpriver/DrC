@@ -74,8 +74,8 @@ static inline
 Atom _Nullable
 AT_raw_atomize_hashed(AtomTable* at, const char* txt, size_t len, uint32_t hash){
     if(!len) return nil_atom;
-    if(len + 1 > UINT32_MAX/2) return NULL;
-    Atom_* atom = ArenaAllocator_alloc(&at->arena, 1+len+sizeof *atom);
+    if(len >= UINT32_MAX/2) return NULL;
+    Atom_* atom = ArenaAllocator_alloc(&at->arena, 1+len+sizeof *atom, 1, _Alignof(Atom_));
     if(!atom) return NULL;
     atom->flags = ATOM_ALLOCATED;
     atom->length = (uint32_t)len;
@@ -89,7 +89,7 @@ static inline
 Atom _Nullable
 AT_raw_atomize(AtomTable* at, const char* txt, size_t len){
     if(!len) return nil_atom;
-    if(len + 1 > UINT32_MAX/2) return NULL;
+    if(len >= UINT32_MAX/2) return NULL;
     return AT_raw_atomize_hashed(at, txt, len, drp_hash(txt, len));
 }
 
@@ -97,7 +97,7 @@ static inline
 Atom _Nullable
 AT_atomize(AtomTable* at, const char* txt, size_t len){
     if(!len) return nil_atom;
-    if(len + 1 > UINT32_MAX/2) return NULL;
+    if(len >= UINT32_MAX/2) return NULL;
     uint32_t hash = drp_hash(txt, len);
     Atom atom = AT_get_atom_hashed(at, txt, len, hash);
     if(atom) return atom;
@@ -106,7 +106,7 @@ AT_atomize(AtomTable* at, const char* txt, size_t len){
     int err = AT_store_atom(at, atom);
     if(err){
         if(err == 2) __builtin_trap();
-        ArenaAllocator_free(&at->arena, atom, 1+atom->length+sizeof *atom);
+        ArenaAllocator_free(&at->arena, atom, 1+atom->length+sizeof *atom, 1, _Alignof(Atom_));
         return NULL;
     }
     return atom;
@@ -127,7 +127,7 @@ AT_reserve(AtomTable* at, size_t capacity){
     if(new_cap > SIZE_MAX/(2*sizeof(uint32_t)+sizeof(Atom))) return 1;
     size_t new_size = sizeof(uint32_t)*new_cap*2+new_cap*sizeof(Atom);
     size_t old_size = sizeof(uint32_t)*old_cap*2+old_cap*sizeof(Atom);
-    void* new_data = ArenaAllocator_realloc(&at->arena, at->data, old_size, new_size);
+    void* new_data = ArenaAllocator_realloc(&at->arena, at->data, old_size, new_size, 1, _Alignof(Atom));
     if(!new_data) return 1;
     Atom* atoms = new_data;
     uint32_t* idxes = (uint32_t*)(void*)(sizeof(Atom)*new_cap+(char*)new_data);

@@ -71,7 +71,7 @@ ci_stack_alloc(CiStack* stack, size_t size, size_t alignment){
     size_t capacity = required > CI_STACK_SEGMENT_SIZE ? required : CI_STACK_SEGMENT_SIZE;
     size_t allocation_size;
     if(add_overflow(sizeof *segment, capacity, &allocation_size)) return NULL;
-    segment = Allocator_alloc(stack->allocator, allocation_size);
+    segment = Allocator_alloc(stack->allocator, allocation_size, 1, _Alignof(CiStackSegment));
     if(!segment) return NULL;
     *segment = (CiStackSegment){.capacity = capacity};
     if(stack->last) stack->last->next = segment;
@@ -96,7 +96,7 @@ ci_stack_destroy(CiStack* stack){
     CiStackSegment* segment = stack->first;
     while(segment){
         CiStackSegment* next = segment->next;
-        Allocator_free(stack->allocator, segment, sizeof *segment + segment->capacity);
+        Allocator_free(stack->allocator, segment, sizeof *segment + segment->capacity, 1, _Alignof(CiStackSegment));
         segment = next;
     }
     stack->first = stack->last = NULL;

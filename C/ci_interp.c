@@ -275,8 +275,8 @@ ci_ensure_var_storage(CiInterpreter* ci, CcVariable* var){
 typedef struct CiTlsSlot CiTlsSlot;
 struct CiTlsSlot {
     void*_Nullable address;
-    void*_Nullable allocation;
     size_t allocation_size;
+    size_t alignment;
 };
 
 struct CiTlsThread {
@@ -295,11 +295,11 @@ ci_tls_free_thread(CiTlsThread* state){
     Allocator al = state->allocator;
     for(size_t i = 0; i < state->capacity; i++){
         CiTlsSlot* slot = &state->slots[i];
-        if(slot->allocation) Allocator_free(al, slot->allocation, slot->allocation_size);
+        if(slot->address) Allocator_free(al, slot->address, slot->allocation_size, 1, slot->alignment);
     }
-    if(state->slots) Allocator_free(al, state->slots, state->capacity * sizeof *state->slots);
+    if(state->slots) Allocator_free(al, state->slots, state->capacity, sizeof *state->slots, _Alignof(CiTlsSlot));
     ci_stack_destroy(&state->stack);
-    Allocator_free(al, state, sizeof *state);
+    Allocator_free(al, state, 1, sizeof *state, _Alignof(CiTlsThread));
 }
 
 static
@@ -351,13 +351,13 @@ ci_tls_get(CiInterpreter* ci, CiTlsThread*_Nullable*_Nonnull out){
     CiTlsThread* state = thread_local_key_get(ci->tls_key);
     if(!state){
         Allocator al = ci_allocator(ci);
-        state = Allocator_zalloc(al, sizeof *state);
+        state = Allocator_zalloc(al, 1, sizeof *state, _Alignof(CiTlsThread));
         if(!state) return CI_OOM_ERROR;
         state->owner = ci;
         state->allocator = al;
         state->stack.allocator = al;
         if(thread_local_key_set(ci->tls_key, state)){
-            Allocator_free(al, state, sizeof *state);
+            Allocator_free(al, state, 1, sizeof *state, _Alignof(CiTlsThread));
             return ci_error(ci, (SrcLoc){0}, "could not set interpreter TLS state");
         }
         LOCK_T_lock(&ci->tls_lock);
@@ -424,13 +424,11 @@ ci_tls_address(CiInterpreter* ci, CcVariable* var, void*_Nonnull*_Nonnull out){
             if(bits >= sizeof(size_t) * 8) return CI_OOM_ERROR;
             capacity = (size_t)1 << bits;
         }
-        size_t slots_size;
-        if(mul_overflow(capacity, sizeof(CiTlsSlot), &slots_size)) return CI_OOM_ERROR;
-        CiTlsSlot* slots = Allocator_zalloc(state->allocator, slots_size);
+        CiTlsSlot* slots = Allocator_zalloc(state->allocator, capacity, sizeof *slots, _Alignof(CiTlsSlot));
         if(!slots) return CI_OOM_ERROR;
         if(state->slots){
             memcpy(slots, state->slots, state->capacity * sizeof *slots);
-            Allocator_free(state->allocator, state->slots, state->capacity * sizeof *slots);
+            Allocator_free(state->allocator, state->slots, state->capacity, sizeof *state->slots, _Alignof(CiTlsSlot));
         }
         state->slots = slots;
         state->capacity = capacity;
@@ -439,13 +437,10 @@ ci_tls_address(CiInterpreter* ci, CcVariable* var, void*_Nonnull*_Nonnull out){
     if(!slot->address){
         size_t alignment = var->tls_alignment;
         size_t size = var->tls_size ? var->tls_size : 1;
-        size_t allocation_size;
-        if(add_overflow(size, alignment - 1, &allocation_size)) return CI_OOM_ERROR;
-        void* allocation = Allocator_alloc(state->allocator, allocation_size);
-        if(!allocation) return CI_OOM_ERROR;
-        void* address = (void*)(((uintptr_t)allocation + alignment - 1) & ~(uintptr_t)(alignment - 1));
+        void* address = Allocator_alloc(state->allocator, size, 1, alignment);
+        if(!address) return CI_OOM_ERROR;
         memcpy(address, var->interp_val, var->tls_size);
-        *slot = (CiTlsSlot){.address=address, .allocation=allocation, .allocation_size=allocation_size};
+        *slot = (CiTlsSlot){.address = address, .allocation_size = size, .alignment = alignment};
     }
     *out = (void*_Nonnull)slot->address;
     return 0;
@@ -601,9 +596,9 @@ ci_closure_cleanup(CiInterpreter* ci){
         if(cd->closure) nc_destroy_closure(al, (NcClosure* _Nonnull)cd->closure);
         cd->func->native_closure = NULL;
         cd->func->native_func = NULL;
-        Allocator_free(al, cd, sizeof *cd);
+        Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
     }
-    if(ci->closure_map.cap) Allocator_free(al, ci->closure_map.data, BPM_alloc_size(ci->closure_map.cap));
+    if(ci->closure_map.cap) Allocator_free(al, ci->closure_map.data, BPM_alloc_size(ci->closure_map.cap), 1, _Alignof(BidiPointerMapItem));
     ci->closure_map = (BidiPointerMap){0};
 }
 
@@ -629,7 +624,7 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
         // at interpreted call sites.
         entry = (void(*)(void))(uintptr_t)func;
     #else
-        CiClosureData* cd = Allocator_zalloc(al, sizeof *cd);
+        CiClosureData* cd = Allocator_zalloc(al, 1, sizeof *cd, _Alignof(CiClosureData));
         if(!cd) return CI_OOM_ERROR;
         cd->ci = ci;
         cd->func = func;
@@ -637,14 +632,14 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
             err = cc_sizeof_as_uint(&ci->parser, func->type->return_type, func->loc, &cd->ret_sz);
             // This should never happen, but who knows.
             if(err){
-                Allocator_free(al, cd, sizeof *cd);
+                Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
                 return err;
             }
         }
         NcClosure* nc;
         err = nc_create_closure(al, func->interp_ops->native_type, ci_closure_callback, cd, &nc);
         if(err){
-            Allocator_free(al, cd, sizeof *cd);
+            Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
             if(err == CI_UNIMPLEMENTED_ERROR)
                 ci_ice(ci, func->loc, "function should've already been rejected in lowering%s", "");
             return err;
@@ -655,7 +650,7 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
     if(err){
         #ifndef NO_NATIVE_CALL
         nc_destroy_closure(al, nc);
-        Allocator_free(al, cd, sizeof *cd);
+        Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
         #endif
         return err == 1 ? CI_OOM_ERROR : CI_RUNTIME_ERROR;
     }
@@ -2919,13 +2914,13 @@ ci_call_by_name(CiInterpreter* ci, StringView name, const CiArg* _Nullable args,
             return ci_error(ci, func->loc, "ci_call_by_name '%.*s': arg %u buffer too small",
                 (int)name.length, name.text, i);
     }
-    size_t argv_size = (nargs ? nargs : 1) * sizeof(void*);
-    void** argv = Allocator_alloc(ci_allocator(ci), argv_size);
+    size_t argv_count = nargs ? nargs : 1;
+    void** argv = Allocator_alloc(ci_allocator(ci), argv_count, sizeof *argv, _Alignof(void*));
     if(!argv) return CI_OOM_ERROR;
     for(uint32_t i = 0; i < nargs; i++)
         argv[i] = (void*)(uintptr_t)args[i].data;
     int err = ci_call_argv(ci, NULL, func, argv, nargs, result, size, func->loc);
-    Allocator_free(ci_allocator(ci), argv, argv_size);
+    Allocator_free(ci_allocator(ci), argv, argv_count, sizeof *argv, _Alignof(void*));
     return err;
 }
 
@@ -3006,7 +3001,7 @@ ci_compile_module(CiInterpreter* ci, StringView source, StringView path, CiModul
     CcScope* old_current = p->current;
     Parray(CcStmtNode) old = p->toplevel_nodes;
 
-    CiModule* module = Allocator_zalloc(ci_allocator(ci), sizeof *module);
+    CiModule* module = Allocator_zalloc(ci_allocator(ci), 1, sizeof *module, _Alignof(CiModule));
     if(!module){
         err = CI_OOM_ERROR;
         goto done;
@@ -3016,7 +3011,7 @@ ci_compile_module(CiInterpreter* ci, StringView source, StringView path, CiModul
     char* source_copy = "";
     if(source_len){
         // TODO: maybe this should just go through the file cache?
-        source_copy = Allocator_dupe(ci_allocator(ci), source.text, source_len);
+        source_copy = Allocator_dupe(ci_allocator(ci), source.text, source_len, 1, 1);
         if(!source_copy){
             err = CI_OOM_ERROR;
             goto done;
@@ -3489,15 +3484,8 @@ ci_resolve_deps(CiInterpreter* ci, CiLowerDeps* deps){
                         alignment = _Alignof(void*);
                     if(var->alignment > alignment) alignment = var->alignment;
                     if(!alignment) alignment = 1;
-                    // FIXME: Allocator abstraction needs to take an alignment
-                    size_t allocation_size;
-                    if(add_overflow((size_t)(sz ? sz : 1), (size_t)alignment - 1, &allocation_size)){
-                        err = CI_OOM_ERROR;
-                        goto cleanup;
-                    }
-                    void* storage = Allocator_zalloc(al, allocation_size);
-                    if(!storage){ err = CI_OOM_ERROR; goto cleanup; }
-                    var->interp_val = (void*)(((uintptr_t)storage + alignment - 1) & ~(uintptr_t)(alignment - 1));
+                    var->interp_val = Allocator_zalloc(al, sz ? sz : 1, 1, alignment);
+                    if(!var->interp_val){ err = CI_OOM_ERROR; goto cleanup; }
                 }
             }
             if(var->thread_local_ && !var->tls_slot){
@@ -4028,7 +4016,7 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
         }
         err = cmd_run_capture(&cmd, envp, scratch, &output, CMD_CAPTURE_STDOUT);
         cmd_destroy(&cmd);
-        Allocator_free(scratch, envp, envp_size);
+        env_free_envp(cpp->env, scratch, envp, envp_size);
         if(err){
             if(optional){
                 err = 0;
@@ -4143,7 +4131,7 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
         }
     }
     finally:
-    if(output.text) Allocator_free(scratch, output.text, output.length+1);
+    if(output.text) Allocator_free(scratch, output.text, output.length+1, 1, 1);
     cpp_release_scratch(cpp, expanded);
     return err;
 }
@@ -4216,11 +4204,14 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     uint32_t result_sz;
     err = cc_sizeof_as_uint(p, ftype->return_type, loc, &result_sz);
     if(err) return err;
+    uint32_t result_alignment;
+    err = cc_alignof_as_uint(p, ftype->return_type, loc, &result_alignment);
+    if(err) return err;
     _Alignas(16) char result_buf[16];
     char* result = result_buf;
-    uint32_t orig_result_sz = result_sz;
-    if(result_sz > 16){
-        result = Allocator_zalloc(ci_scratch_allocator(ci), result_sz);
+    uint32_t orig_result_sz = result_sz ? result_sz : 1;
+    if(result_sz > sizeof result_buf || result_alignment > 16){
+        result = Allocator_zalloc(ci_scratch_allocator(ci), orig_result_sz, 1, result_alignment);
         if(!result){
             return CI_OOM_ERROR;
         }
@@ -4453,7 +4444,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     goto cleanup;
     cleanup:
     if(expr) cc_release_expr(&ci->parser, expr);
-    if(orig_result != result_buf) Allocator_free(ci_scratch_allocator(ci), orig_result, orig_result_sz);
+    if(orig_result != result_buf) Allocator_free(ci_scratch_allocator(ci), orig_result, orig_result_sz, 1, result_alignment);
     return err;
 }
 
@@ -4626,9 +4617,9 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
     }
     err = cmd_run_capture(&cmd, envp, scratch, &output, CMD_CAPTURE_STDOUT);
     cmd_destroy(&cmd);
-    Allocator_free(scratch, envp, envp_size);
+    env_free_envp(cpp->env, scratch, envp, envp_size);
     if(err){
-        if(output.text) Allocator_free(scratch, output.text, output.length + 1);
+        if(output.text) Allocator_free(scratch, output.text, output.length + 1, 1, 1);
         return cpp_error(cpp, loc, "__SHELL__: command failed");
     }
     // Strip trailing newlines.
@@ -4636,7 +4627,7 @@ ci_shell(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppToken
     while(output.length > 0 && (output.text[output.length-1] == '\n' || output.text[output.length-1] == '\r'))
         output.length--;
     Atom v = cpp_quote_string(cpp, CSV_to_SV(output));
-    Allocator_free(scratch, output.text, output_alloc_size);
+    Allocator_free(scratch, output.text, output_alloc_size, 1, 1);
     if(!v) return CI_OOM_ERROR;
     CppToken result = {
         .txt = {v->length, v->data},
@@ -4669,11 +4660,11 @@ ci_register_sym(CiInterpreter*ci, StringView libname, StringView symname, void* 
     if(!name) return CI_OOM_ERROR;
     CiVirtualLib* lib = AM_get(&ci->virtual_libs, lname);
     if(!lib){
-        lib = Allocator_zalloc(ci_allocator(ci), sizeof *lib);
+        lib = Allocator_zalloc(ci_allocator(ci), 1, sizeof *lib, _Alignof(CiVirtualLib));
         if(!lib) return CI_OOM_ERROR;
         err = AM_put(&ci->virtual_libs, ci_allocator(ci), lname, lib);
         if(err){
-            Allocator_free(ci_allocator(ci), lib, sizeof *lib);
+            Allocator_free(ci_allocator(ci), lib, 1, sizeof *lib, _Alignof(CiVirtualLib));
             return CI_OOM_ERROR;
         }
     }

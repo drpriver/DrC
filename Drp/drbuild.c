@@ -35,17 +35,25 @@
 #endif
 
 #ifndef __builtin_debugtrap
-#if defined __GNUC__ && !defined __clang__ && !defined __DRC__
-    #if defined __x86_64__ || defined __i386__
-        #define __builtin_debugtrap() __asm__ volatile("int3")
-    #elif defined __aarch64__
-        #define __builtin_debugtrap() __asm__ volatile("brk #0xf000")
-    #else
-        #define __builtin_debugtrap() __builtin_trap()
+    #if defined __clang__ || defined __DRC__
+        #define __builtin_debugtrap() __builtin_debugtrap()
+    #elif defined __has_builtin
+        #if __has_builtin(__builtin_debugtrap)
+            #define __builtin_debugtrap() __builtin_debugtrap()
+        #endif
     #endif
-#elif defined _MSC_VER
-#define __builtin_debugtrap() __debugbreak()
-#endif
+    #if !defined __builtin_debugtrap && defined __GNUC__
+        #if defined __x86_64__ || defined __i386__
+            #define __builtin_debugtrap() __asm__ volatile("int3")
+        #elif defined __aarch64__
+            #define __builtin_debugtrap() __asm__ volatile("brk #0xf000")
+        #else
+            #define __builtin_debugtrap() __builtin_trap()
+        #endif
+    #endif
+    #if !defined __builtin_debugtrap && defined _MSC_VER
+        #define __builtin_debugtrap() __debugbreak()
+    #endif
 #endif
 
 #ifndef __builtin_trap
@@ -217,7 +225,7 @@ b_file_info(BuildCtx* ctx, const char* path, size_t length){
         if(fi->valid) return fi;
     }
     else {
-        fi = Allocator_zalloc(allocator_from_arena(&ctx->perm_aa), sizeof *fi);
+        fi = Allocator_zalloc(allocator_from_arena(&ctx->perm_aa), 1, sizeof *fi, _Alignof(BuildFileInfo));
         if(!fi) b_oom(ctx);
 
         {
@@ -306,7 +314,7 @@ b_file_info_uncached(BuildCtx* ctx, const char* path, size_t length){
         if(fi->valid) return fi;
     }
     else {
-        fi = Allocator_zalloc(allocator_from_arena(&ctx->perm_aa), sizeof *fi);
+        fi = Allocator_zalloc(allocator_from_arena(&ctx->perm_aa), 1, sizeof *fi, _Alignof(BuildFileInfo));
         if(!fi) b_oom(ctx);
         {
             int err = AM_put(&ctx->file_infos, allocator_from_arena(&ctx->perm_aa), key, fi);
@@ -598,7 +606,7 @@ static int read_from_json_file(BuildCtx* ctx, void* dst, const TypeInfo* ti, Ato
 static
 BuildCtx*_Nullable
 b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified*_Nonnull envp, const char*_Nonnull basefile){
-    BuildCtx* ctx = Allocator_zalloc(MALLOCATOR, sizeof *ctx);
+    BuildCtx* ctx = Allocator_zalloc(MALLOCATOR, 1, sizeof *ctx, _Alignof(BuildCtx));
     if(!ctx) return NULL;
     ctx->t0 = monotonic_time_us();
     if(0){
@@ -606,7 +614,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
         if(ctx){
             ArenaAllocator_free_all(&ctx->perm_aa);
             ArenaAllocator_free_all(&ctx->tmp_aa);
-            Allocator_free(MALLOCATOR, ctx, sizeof *ctx);
+            Allocator_free(MALLOCATOR, ctx, 1, sizeof *ctx, _Alignof(BuildCtx));
             ctx = NULL;
         }
         return NULL;
@@ -2733,7 +2741,7 @@ b_execute_targets(BuildCtx* ctx){
                             }
                             Marray(Atom)* cached = AM_get(&ctx->cmd_history, tgt->name);
                             if(!cached){
-                                cached = Allocator_zalloc(allocator_from_arena(&ctx->perm_aa), sizeof *cached);
+                                cached = Allocator_zalloc(allocator_from_arena(&ctx->perm_aa), 1, sizeof *cached, _Alignof(Marray(Atom)));
                                 if(!cached) goto finally;
                                 err = AM_put(&ctx->cmd_history, allocator_from_arena(&ctx->perm_aa), tgt->name, cached);
                                 if(err) goto finally;
@@ -3020,7 +3028,7 @@ BuildTarget*
 b_targeta(BuildCtx* ctx, Atom name){
     BuildTarget* t = AM_get(&ctx->targets, name);
     if(t) b_debug_break(ctx, "target already allocated");
-    t = Allocator_zalloc(allocator_from_arena(&ctx->perm_aa), sizeof *t);
+    t = Allocator_zalloc(allocator_from_arena(&ctx->perm_aa), 1, sizeof *t, _Alignof(BuildTarget));
     if(!t) b_oom(ctx);
     int err = AM_put(&ctx->targets, allocator_from_arena(&ctx->perm_aa), name, t);
     if(err) b_oom(ctx);
@@ -3692,11 +3700,11 @@ b_run_cmd_async(BuildCtx* ctx, BuildTarget* target, CmdBuilder* cmd){
         Allocator a = allocator_from_arena(&ctx->perm_aa);
         void* p;
 
-        p = Allocator_alloc(a, ctx->jobs.cap * sizeof *ctx->jobs.jobs);
+        p = Allocator_alloc(a, ctx->jobs.cap, sizeof *ctx->jobs.jobs, _Alignof(BuildJob));
         if(!p) return 1;
         ctx->jobs.jobs = p;
 
-        p = Allocator_alloc(a, ctx->jobs.cap * sizeof *ctx->jobs.processes);
+        p = Allocator_alloc(a, ctx->jobs.cap, sizeof *ctx->jobs.processes, _Alignof(intptr_t));
         if(!p) return 1;
         ctx->jobs.processes = p;
     }
@@ -3718,7 +3726,7 @@ b_run_cmd_async(BuildCtx* ctx, BuildTarget* target, CmdBuilder* cmd){
         }
     }
     int err = cmd_run(cmd, envp, proc);
-    if(alloc_size) Allocator_free(scratch, envp, alloc_size);
+    if(alloc_size) env_free_envp(&ctx->env, scratch, envp, alloc_size);
     if(err){
         b_loglvl(BLOG_ERROR, ctx, "Error running command: ");
         b_print_command(ctx, cmd);
@@ -3750,7 +3758,7 @@ b_run_cmd_sync(BuildCtx* ctx, CmdBuilder* cmd){
         }
     }
     int err = cmd_run(cmd, envp, NULL);
-    if(alloc_size) Allocator_free(scratch, envp, alloc_size);
+    if(alloc_size) env_free_envp(&ctx->env, scratch, envp, alloc_size);
     if(err){
         b_loglvl(BLOG_ERROR, ctx, "Error running command: ");
         b_print_command(ctx, cmd);

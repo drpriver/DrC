@@ -556,7 +556,7 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
     err = ma_push(CppFrame)(&interp.parser.cpp.frames, interp.parser.cpp.allocator, frame_data);
     if(err) goto cleanup;
     if(setup_allocs_out){
-        TestingAllocator* ta = al._data;
+        TestingAllocator* ta = Allocator_get_ptr(al);
         *setup_allocs_out = ta->nallocs;
     }
     err = cc_parse_all(&interp.parser);
@@ -591,10 +591,11 @@ size_t
 recording_count_leaked(RecordingAllocator* r){
     size_t leaked = 0;
     for(size_t i = 0; i < r->count; i++){
-        if(r->allocation_sizes[i]){
-            leaked += r->allocation_sizes[i];
+        RaRecord *rec = &r->records[i];
+        if(r->allocations[i]){
+            leaked += rec->count * rec->size;
             #ifdef HEAVY_RECORDING
-            dump_bt(r->backtraces[i]);
+            dump_bt(rec->backtrace);
             #endif
         }
     }
@@ -606,7 +607,7 @@ TestFunction(test_oom_setup){
     // Baseline to find setup_allocs.
     TestingAllocator ta0 = {0};
     LOCK_T_init(&ta0.lock);
-    Allocator al0 = {.type = ALLOCATOR_TESTING, ._data = &ta0};
+    Allocator al0 = Allocator_make(ALLOCATOR_TESTING, &ta0);
     int64_t setup_allocs = 0;
     int err = run_one(al0, SV("return 0;\n"), &setup_allocs);
     if(err) TestReport("setup baseline failed");
@@ -618,7 +619,7 @@ TestFunction(test_oom_setup){
         for(int64_t fail = test_atomic_increment(&idx) + 1; fail <= setup_allocs; fail = test_atomic_increment(&idx) + 1){
             TestingAllocator ta = {0};
             LOCK_T_init(&ta.lock);
-            Allocator al = {.type = ALLOCATOR_TESTING, ._data = &ta};
+            Allocator al = Allocator_make(ALLOCATOR_TESTING, &ta);
             ta.fail_at = fail;
             run_one(al, SV("return 0;\n"), NULL);
             if(check_leaks){
@@ -648,7 +649,7 @@ TestFunction(test_oom){
                     if(test_atomic_cas(&tc->baseline_done, NOT_STARTED, IN_PROGRESS)){
                         TestingAllocator ta = {0};
                         LOCK_T_init(&ta.lock);
-                        Allocator al = {.type = ALLOCATOR_TESTING, ._data = &ta};
+                        Allocator al = Allocator_make(ALLOCATOR_TESTING, &ta);
                         int err = run_one(al, tc->program, &tc->setup_allocs);
                         TestExpectFalse(int, err);
                         tc->max_allocs = err ? 0 : ta.nallocs;
@@ -667,7 +668,7 @@ TestFunction(test_oom){
             did_work = 1;
             TestingAllocator ta = {0};
             LOCK_T_init(&ta.lock);
-            Allocator al = {.type = ALLOCATOR_TESTING, ._data = &ta};
+            Allocator al = Allocator_make(ALLOCATOR_TESTING, &ta);
             ta.fail_at = fail;
             run_one(al, tc->program, NULL);
             if(check_leaks){
@@ -694,7 +695,7 @@ TestFunction(test_blob_size_overflow){
         // Deny allocations so an unchecked length cannot reach memcpy.
         TestingAllocator ta = {0};
         LOCK_T_init(&ta.lock);
-        Allocator al = {.type = ALLOCATOR_TESTING, ._data = &ta};
+        Allocator al = Allocator_make(ALLOCATOR_TESTING, &ta);
         BlobTable bt = {.arena.base = al};
         unsigned char byte = 0;
         BlobAtom seed = BT_atomize(&bt, &byte, 1);

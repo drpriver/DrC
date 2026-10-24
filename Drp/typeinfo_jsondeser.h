@@ -372,7 +372,7 @@ atommap_from_json(void* dst, const TypeInfoAtomMap* ti, DrJsonContext* jsctx, Dr
         DrJsonValue k = drjson_get_by_index(jsctx, items, i);
         DrJsonValue val = drjson_get_by_index(jsctx, items, i+1);
         Atom a = k.atom;
-        void* pval = Allocator_zalloc(al, ti->type->size);
+        void* pval = Allocator_zalloc(al, 1, ti->type->size, ti->type->align);
         if(!pval) return 1;
         int err;
         err = any_from_json(pval, ti->type, jsctx, val, al);
@@ -410,9 +410,7 @@ marray_from_json(void* dst, const TypeInfoMarray* ti, DrJsonContext* jsctx, DrJs
     void** pdata = (void**)(pcap+1);
     void* data = *pdata;
     if(*pcap < (size_t)len){
-        size_t oldsz = *pcap * ti->type->size;
-        size_t newsz = (size_t)len * ti->type->size;
-        data = Allocator_realloc(al, data, oldsz, newsz);
+        data = Allocator_realloc(al, data, *pcap, (size_t)len, ti->type->size, ti->type->align);
         if(!data) return 1;
         *pdata = data;
         *pcap = (size_t)len;

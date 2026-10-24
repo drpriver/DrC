@@ -729,10 +729,12 @@ static
 void
 ci_bindings_cleanup(CiLowerCtx* ctx){
     PointerMapItems items = PM_items(&ctx->bindings);
-    for(size_t i = 0; i < items.count; i++)
-        Allocator_free(ctx->a, items.data[i].value, sizeof(CiInlineBinding));
+    for(size_t i = 0; i < items.count; i++){
+        CiInlineBinding* binding = items.data[i].value;
+        Allocator_free(ctx->a, binding, 1, sizeof *binding, _Alignof(CiInlineBinding));
+    }
     if(ctx->bindings.data)
-        Allocator_free(ctx->a, ctx->bindings.data, PM_alloc_size(ctx->bindings.cap));
+        Allocator_free(ctx->a, ctx->bindings.data, PM_alloc_size(ctx->bindings.cap), 1, _Alignof(PointerMapItem));
     ctx->bindings = (PointerMap){0};
 }
 
@@ -751,11 +753,11 @@ ci_bind_slot(CiLowerCtx* ctx, CcVariable* var, uint32_t slot){
     if(!ctx->function) return 0;
     CiInlineBinding* b=ci_inline_binding(ctx,var);
     if(!b){
-        b=Allocator_zalloc(ctx->a,sizeof *b);
+        b = Allocator_zalloc(ctx->a, 1, sizeof *b, _Alignof(CiInlineBinding));
         if(!b) return CI_OOM_ERROR;
         b->var = var;
         if(PM_put(&ctx->bindings, ctx->a, var, b)){
-            Allocator_free(ctx->a, b, sizeof *b);
+            Allocator_free(ctx->a, b, 1, sizeof *b, _Alignof(CiInlineBinding));
             return CI_OOM_ERROR;
         }
     }
@@ -979,9 +981,9 @@ static
 void
 ci_fold_cache_cleanup(CiFoldCache* cache, Allocator al){
     if(cache->expressions.cap)
-        Allocator_free(al, cache->expressions.data, PM_alloc_size(cache->expressions.cap));
+        Allocator_free(al, cache->expressions.data, PM_alloc_size(cache->expressions.cap), 1, _Alignof(PointerMapItem));
     if(cache->discardable.cap)
-        Allocator_free(al, cache->discardable.data, PM_alloc_size(cache->discardable.cap));
+        Allocator_free(al, cache->discardable.data, PM_alloc_size(cache->discardable.cap), 1, _Alignof(PointerMapItem));
     ma_cleanup(CiFoldValue)(&cache->values, al);
     *cache = (CiFoldCache){0};
 }
@@ -1089,7 +1091,7 @@ ci_lower_cleanups(CiInterpreter* ci, CiLowerCtx* ctx, CcCleanupRange range){
         err = ci_lower_resolve_gotos(ci, ctx);
         cleanup:
         ma_cleanup(CiBackpatchTarget)(&ctx->backpatches, ctx->a);
-        if(labels.data) Allocator_free(ctx->a, labels.data, AM_alloc_size(labels.cap));
+        if(labels.data) Allocator_free(ctx->a, labels.data, AM_alloc_size(labels.cap), 1, _Alignof(AtomMapItem));
         ctx->labels = saved_labels;
         ctx->backpatches = saved_patches;
         ctx->sw = saved_switch;
@@ -1396,11 +1398,10 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             if(err) goto switch_cleanup;
             // Sort entries by value
             if(sw.entries.count){
-                size_t scratch_sz = sw.entries.count * sizeof(CcSwitchEntry);
-                void* scratch = Allocator_alloc(ctx->a, scratch_sz);
+                void* scratch = Allocator_alloc(ctx->a, sw.entries.count, sizeof *sw.entries.data, _Alignof(CcSwitchEntry));
                 if(!scratch){ err = CI_OOM_ERROR; goto switch_cleanup; }
                 drp_merge_sort(scratch, sw.entries.data, sw.entries.count, sizeof(CcSwitchEntry), &is_unsigned, ci_cmp_switch_entry);
-                Allocator_free(ctx->a, scratch, scratch_sz);
+                Allocator_free(ctx->a, scratch, sw.entries.count, sizeof *sw.entries.data, _Alignof(CcSwitchEntry));
             }
             // Check for overlaps in the controlling type's order.
             uint64_t sign = is_unsigned ? 0 : UINT64_C(1) << 63;
@@ -1417,8 +1418,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             }
             // Copy the sorted entries into the op's out-of-line table
             {
-                size_t table_size = sizeof(CiSwitchTable) + sw.entries.count * sizeof(CcSwitchEntry);
-                CiSwitchTable* table = Allocator_alloc(ctx->a, table_size);
+                CiSwitchTable* table = Allocator_alloc_extra(ctx->a, sw.entries.count, sizeof *table->data, sizeof *table, _Alignof(CiSwitchTable));
                 if(!table){ err = CI_OOM_ERROR; goto switch_cleanup; }
                 table->count = sw.entries.count;
                 if(sw.entries.count)
@@ -4847,13 +4847,16 @@ ci_lower_native_signature(CiInterpreter* ci, Allocator al, CcFunction* type, CcF
         if(i < type->fixed_param_count) fixed++;
     }
     if(total == type->param_count) return 0;
-    CcQualType* types = total ? Allocator_alloc(al, total * sizeof *types) : NULL;
-    if(total && !types) return CI_OOM_ERROR;
+    CcQualType* types = NULL;
+    if(total){
+        types = Allocator_alloc(al, total, sizeof *types, _Alignof(CcQualType));
+        if(!types) return CI_OOM_ERROR;
+    }
     uint32_t n = 0;
     for(uint32_t i = 0; i < type->param_count; i++)
         if(!ci_arg_is_ignored(target, type->params[i])) types[n++] = type->params[i];
     CcFunction* native_type = cc_intern_function(&ci->parser.type_cache, al, type->return_type, types, total, fixed, type->is_variadic, type->no_prototype);
-    if(types) Allocator_free(al, types, total * sizeof *types);
+    if(types) Allocator_free(al, types, total, sizeof *types, _Alignof(CcQualType));
     if(!native_type) return CI_OOM_ERROR;
     *out = native_type;
     return 0;
@@ -4864,7 +4867,7 @@ int
 ci_lower_call_arguments(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiCallDescriptor* d, uint32_t* storage_slot, uint32_t result, _Bool variadic, _Bool direct){
     NcCallPlan* plan = d->abi;
     uint32_t storage = *storage_slot;
-    uint32_t* slots = Allocator_alloc(ctx->a, (plan->count ? plan->count : 1) * sizeof *slots);
+    uint32_t* slots = Allocator_alloc(ctx->a, (plan->count ? plan->count : 1), sizeof *slots, _Alignof(uint32_t));
     if(!slots) return CI_OOM_ERROR;
     int err = 0;
     uint32_t last_effect = 0;
@@ -4935,7 +4938,7 @@ ci_lower_call_arguments(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiCallDes
         if(err) goto cleanup;
     }
     cleanup:
-    Allocator_free(ctx->a, slots, (plan->count ? plan->count : 1) * sizeof *slots);
+    Allocator_free(ctx->a, slots, (plan->count ? plan->count : 1), sizeof *slots, _Alignof(uint32_t));
     return err;
 }
 
@@ -5058,7 +5061,7 @@ ci_lower_inline_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CcFunc* f, u
         ctx->frame_alignment = body.frame_alignment;
     ci_bindings_cleanup(&body);
     if(labels.data)
-        Allocator_free(ctx->a, labels.data, AM_alloc_size(labels.cap));
+        Allocator_free(ctx->a, labels.data, AM_alloc_size(labels.cap), 1, _Alignof(AtomMapItem));
     ma_cleanup(CiBackpatchTarget)(&body.backpatches, ctx->a);
     ci_fold_cache_cleanup(&cache, ctx->a);
     ci_lower_deps_cleanup(&body.deps, ctx->a);
@@ -5128,7 +5131,7 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
             return err;
         }
     }
-    CiCallDescriptor* d = Allocator_zalloc(ctx->a, sizeof *d);
+    CiCallDescriptor* d = Allocator_zalloc(ctx->a, 1, sizeof *d, _Alignof(CiCallDescriptor));
     if(!d) return CI_OOM_ERROR;
     if(func) d->func = func;
     d->nargs = nargs;
@@ -5139,12 +5142,12 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     }
     d->call_type = ftype;
     if(ftype->is_variadic && nargs > ftype->param_count){
-        CcQualType* types = Allocator_alloc(ctx->a, nargs * sizeof *types);
+        CcQualType* types = Allocator_alloc(ctx->a, nargs, sizeof *types, _Alignof(CcQualType));
         if(!types) return CI_OOM_ERROR;
         for(uint32_t i = 0; i < nargs; i++)
             types[i] = i < ftype->param_count ? ftype->params[i] : e->values[i]->type;
         CcFunction* call_type = cc_intern_function(&p->type_cache, ctx->a, ftype->return_type, types, nargs, ftype->param_count, 1, 0);
-        Allocator_free(ctx->a, types, nargs * sizeof *types);
+        Allocator_free(ctx->a, types, nargs, sizeof *types, _Alignof(CcQualType));
         if(!call_type) return CI_OOM_ERROR;
         d->call_type = call_type;
     }
@@ -8293,7 +8296,7 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
     if(!f->parsed)
         return ci_ice(ci, f->loc, "lowering function '%s' before it was parsed", f->name->data);
     Allocator al = ci_allocator(ci);
-    CiFuncOps* ops = Allocator_zalloc(al, sizeof *ops);
+    CiFuncOps* ops = Allocator_zalloc(al, 1, sizeof *ops, _Alignof(CiFuncOps));
     if(!ops) return CI_OOM_ERROR;
     f->interp_lowering = 1;
     f->frame_size = 0;
@@ -8369,19 +8372,15 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
     ci_lower_deps_cleanup(&ctx.deps, al);
     ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, al);
     if(labels.data)
-        Allocator_free(al, labels.data, AM_alloc_size(labels.cap));
+        Allocator_free(al, labels.data, AM_alloc_size(labels.cap), 1, _Alignof(AtomMapItem));
     if(err){
         for(size_t i = 0; i < ops->code.count; i++){
             CiOp* o = &ops->code.data[i];
             if(o->kind == CI_OP_SWITCH && o->switch_.table)
-                Allocator_free(
-                    al,
-                    o->switch_.table,
-                    sizeof(CiSwitchTable) + o->switch_.table->count * sizeof(CcSwitchEntry)
-                );
+                Allocator_free_extra(al, o->switch_.table, o->switch_.table->count, sizeof *o->switch_.table->data, sizeof *o->switch_.table, _Alignof(CiSwitchTable));
         }
         ma_cleanup(CiOp)(&ops->code, al);
-        Allocator_free(al, ops, sizeof *ops);
+        Allocator_free(al, ops, 1, sizeof *ops, _Alignof(CiFuncOps));
         return err;
     }
     ops->frame_alignment = ctx.frame_alignment > 16 ? ctx.frame_alignment : 16;
@@ -8399,7 +8398,7 @@ ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Ma
     AtomMap(uintptr_t) old_labels = *labels;
     Allocator al = ci_allocator(ci);
     if(labels->cap){
-        void* data = Allocator_alloc(al, AM_alloc_size(labels->cap));
+        void* data = Allocator_alloc(al, AM_alloc_size(labels->cap), 1, _Alignof(AtomMapItem));
         if(!data) return CI_OOM_ERROR;
         old_labels.data = data;
         memcpy(old_labels.data, labels->data, AM_alloc_size(labels->cap));
@@ -8433,23 +8432,19 @@ ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Ma
         for(size_t i = old_count; i < ops->count; i++){
             CiOp* op = &ops->data[i];
             if(op->kind == CI_OP_SWITCH && op->switch_.table)
-                Allocator_free(
-                    al,
-                    op->switch_.table,
-                    sizeof(CiSwitchTable) + op->switch_.table->count * sizeof(CcSwitchEntry)
-                );
+                Allocator_free_extra(al, op->switch_.table, op->switch_.table->count, sizeof *op->switch_.table->data, sizeof *op->switch_.table, _Alignof(CiSwitchTable));
         }
         ops->count = old_count;
         *slot_size = old_size;
         if(labels->cap)
-            Allocator_free(al, labels->data, AM_alloc_size(labels->cap));
+            Allocator_free(al, labels->data, AM_alloc_size(labels->cap), 1, _Alignof(AtomMapItem));
         *labels = old_labels;
     }
     else {
         *frame_alignment = ctx.frame_alignment > 16? ctx.frame_alignment : 16;
         *lowered = nodes->count;
         if(old_labels.cap)
-            Allocator_free(al, old_labels.data, AM_alloc_size(old_labels.cap));
+            Allocator_free(al, old_labels.data, AM_alloc_size(old_labels.cap), 1, _Alignof(AtomMapItem));
     }
     return err;
 }
@@ -8462,19 +8457,13 @@ ci_resize_toplevel_slots(CiInterpreter* ci){
         alignment = ci->toplevel_alignment;
     if(ci->toplevel_slot_size > ci->toplevel_slots_cap || (ci->toplevel_slots && alignment > ci->toplevel_alloc_alignment)){
         uint32_t new_cap = ci->toplevel_slot_size > ci->toplevel_slots_cap? ci->toplevel_slot_size : ci->toplevel_slots_cap;
-        void* storage = Allocator_zalloc(ci_allocator(ci), (size_t)new_cap + alignment - 1);
-        if(!storage) return CI_OOM_ERROR;
-        void* slots = (void*)(((uintptr_t)storage + alignment - 1) & ~(uintptr_t)(alignment - 1));
+        void* slots = Allocator_zalloc(ci_allocator(ci), new_cap, 1, alignment);
+        if(!slots) return CI_OOM_ERROR;
         if(ci->toplevel_slots){
             memcpy(slots, ci->toplevel_slots, ci->toplevel_slots_cap);
-            Allocator_free(
-                ci_allocator(ci),
-                ci->toplevel_storage,
-                (size_t)ci->toplevel_slots_cap + ci->toplevel_alloc_alignment - 1
-            );
+            Allocator_free(ci_allocator(ci), ci->toplevel_slots, ci->toplevel_slots_cap, 1, ci->toplevel_alloc_alignment);
         }
         ci->toplevel_slots = slots;
-        ci->toplevel_storage = storage;
         ci->toplevel_slots_cap = new_cap;
         ci->toplevel_alloc_alignment = alignment;
     }
@@ -8527,11 +8516,7 @@ ci_lowered_expr_cleanup(CiLoweredExpr* code, Allocator al){
     for(size_t i = 0; i < code->ops.count; i++){
         CiOp* op = &code->ops.data[i];
         if(op->kind == CI_OP_SWITCH && op->switch_.table)
-            Allocator_free(
-                al,
-                op->switch_.table,
-                sizeof(CiSwitchTable) + op->switch_.table->count * sizeof(CcSwitchEntry)
-            );
+            Allocator_free_extra(al, op->switch_.table, op->switch_.table->count, sizeof *op->switch_.table->data, sizeof *op->switch_.table, _Alignof(CiSwitchTable));
     }
     ma_cleanup(CiOp)(&code->ops, al);
     *code = (CiLoweredExpr){0};
@@ -8570,7 +8555,7 @@ ci_lower_standalone_expr(CiInterpreter* ci, CcExpr* expr, CiLoweredExpr* code, C
     ci_fold_cache_cleanup(&fold_cache, al);
     ci_lower_deps_cleanup(&ctx.deps, al);
     ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, al);
-    if(labels.data) Allocator_free(al, labels.data, AM_alloc_size(labels.cap));
+    if(labels.data) Allocator_free(al, labels.data, AM_alloc_size(labels.cap), 1, _Alignof(AtomMapItem));
     if(err) ci_lowered_expr_cleanup(code, al);
     return err;
 }
@@ -8896,12 +8881,12 @@ ci_static_discard(CiInterpreter* ci, CcExpr* e, CiLowerCtx* _Nullable runtime_ct
     if(err) return err;
     Allocator al = ci_allocator(ci);
     unsigned char small[32];
-    unsigned char* bytes = size <= sizeof small ? small : Allocator_alloc(al, size);
+    unsigned char* bytes = size <= sizeof small ? small : Allocator_alloc(al, size, 1, _Alignof(unsigned char));
     if(!bytes) return CI_OOM_ERROR;
     CiStaticBuffer buffer = {.bytes = bytes, .size = size, .runtime_ctx = runtime_ctx};
     err = ci_static_write(ci, &buffer, e, 0, size);
     ma_cleanup(CiStaticReloc)(&buffer.relocs, al);
-    if(bytes != small) Allocator_free(al, bytes, size);
+    if(bytes != small) Allocator_free(al, bytes, size, 1, _Alignof(unsigned char));
     return err;
 }
 
@@ -9258,7 +9243,7 @@ ci_static_read_range(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e,
     }
     if(e->kind == CC_EXPR_INIT_LIST || e->kind == CC_EXPR_COMPOUND_LITERAL){
         Allocator al = ci_allocator(ci);
-        unsigned char* pending = Allocator_alloc(al, size);
+        unsigned char* pending = Allocator_alloc(al, size, 1, _Alignof(unsigned char));
         if(!pending) return CI_OOM_ERROR;
         memcpy(pending, mask, size);
         CcInitList* list = e->init_list;
@@ -9317,7 +9302,7 @@ ci_static_read_range(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e,
                 memset(pending+lo-start, 0, hi-lo);
             }
         }
-        Allocator_free(al, pending, size);
+        Allocator_free(al, pending, size, 1, _Alignof(unsigned char));
         return err;
     }
     if((e->kind == CC_EXPR_VALUE || e->kind == CC_EXPR_BLOB) && ccqt_is_fixed_sequence(e->type) && cc_expr_array_data(e)){
@@ -9343,11 +9328,11 @@ int
 ci_static_subobject(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* base, uint32_t start, uint32_t offset, uint32_t size){
     if(!size) return 0;
     Allocator al = ci_allocator(ci);
-    unsigned char* mask = Allocator_alloc(al, size);
+    unsigned char* mask = Allocator_alloc(al, size, 1, _Alignof(unsigned char));
     if(!mask) return CI_OOM_ERROR;
     memset(mask, 0xff, size);
     int err = ci_static_read_range(ci, data, base, start, offset, size, mask, 0);
-    Allocator_free(al, mask, size);
+    Allocator_free(al, mask, size, 1, _Alignof(unsigned char));
     return err;
 }
 static
@@ -9639,18 +9624,11 @@ ci_partial_init_template(CiInterpreter* ci, CiStaticBuffer* buffer, CcExpr* e, C
     CcInitList* single = NULL;
     CcInitList* runtime = NULL;
     unsigned char* probe_bytes = NULL;
-    size_t runtime_size = 0;
     int err = ci_collect_template_entries(ci, e, (CcFieldPath){0}, &entries);
     if(err) goto cleanup;
-    size_t entry_bytes;
-    if(mul_overflow(entries.count, sizeof(CcInitEntry), &entry_bytes)
-        || add_overflow(sizeof(CcInitList), entry_bytes, &runtime_size)){
-        err = CI_OOM_ERROR;
-        goto cleanup;
-    }
-    runtime = Allocator_zalloc(al, runtime_size);
-    single = Allocator_zalloc(al, sizeof(CcInitList) + sizeof(CcInitEntry));
-    probe_bytes = Allocator_zalloc(al, probe.size);
+    runtime = Allocator_zalloc_extra(al, entries.count, sizeof *runtime->entries, sizeof *runtime, _Alignof(CcInitList));
+    single = Allocator_zalloc_extra(al, 1, sizeof *single->entries, sizeof *single, _Alignof(CcInitList));
+    probe_bytes = Allocator_zalloc(al, probe.size, 1, _Alignof(unsigned char));
     if(!runtime || !single || !probe_bytes){ err = CI_OOM_ERROR; goto cleanup; }
     probe.bytes = probe_bytes;
     single->count = 1;
@@ -9697,19 +9675,21 @@ ci_partial_init_template(CiInterpreter* ci, CiStaticBuffer* buffer, CcExpr* e, C
     }
     if(constants < 4){ err = _cc_not_constant_error; goto cleanup; }
     // Shrink so the caller can free the residual using its count.
-    size_t final_size = sizeof(CcInitList) + runtime->count * sizeof(CcInitEntry);
-    CcInitList* result = Allocator_alloc(al, final_size);
-    if(!result){ err = CI_OOM_ERROR; goto cleanup; }
-    memcpy(result, runtime, final_size);
+    CcInitList* result = Allocator_alloc_extra(al, runtime->count, sizeof *result->entries, sizeof *result, _Alignof(CcInitList));
+    if(!result){
+        err = CI_OOM_ERROR;
+        goto cleanup;
+    }
+    memcpy(result, runtime, sizeof *result + runtime->count * sizeof *result->entries);
     runtime->count = 0; // Transfer ownership of the residual paths.
     *residual = result;
     cleanup:
     if(runtime){
         for(uint32_t i = 0; i < runtime->count; i++) cc_field_path_free(al, runtime->entries[i].path);
-        Allocator_free(al, runtime, runtime_size);
+        Allocator_free_extra(al, runtime, entries.count, sizeof *runtime->entries, sizeof *runtime, _Alignof(CcInitList));
     }
-    if(single) Allocator_free(al, single, sizeof(CcInitList) + sizeof(CcInitEntry));
-    if(probe_bytes) Allocator_free(al, probe_bytes, probe.size);
+    if(single) Allocator_free_extra(al, single, 1, sizeof *single->entries, sizeof *single, _Alignof(CcInitList));
+    if(probe_bytes) Allocator_free(al, probe_bytes, probe.size, 1, _Alignof(unsigned char));
     ma_cleanup(CiStaticReloc)(&probe.relocs, al);
     for(size_t i = 0; i < entries.count; i++) cc_field_path_free(al, entries.data[i].path);
     ma_cleanup(CcInitEntry)(&entries, al);
@@ -9723,7 +9703,7 @@ ci_try_lower_init_template(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowe
     // One constant-load and one copy replace the zero-fill and at least four stores.
     if(!size || ci_init_store_count(e) < 4) return 0;
     Allocator al = ci_allocator(ci);
-    unsigned char* bytes = Allocator_zalloc(al, size);
+    unsigned char* bytes = Allocator_zalloc(al, size, 1, _Alignof(unsigned char));
     if(!bytes) return CI_OOM_ERROR;
     CiStaticBuffer buffer = {.bytes = bytes, .size = size, .runtime_ctx = ctx};
     CcInitList* residual = NULL;
@@ -9759,21 +9739,21 @@ ci_try_lower_init_template(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowe
             if(err) goto cleanup;
         }
         size_t nrelocs = buffer.relocs.count;
-        size_t reloc_bytes, alloc_size;
-        if(mul_overflow(nrelocs, sizeof(CiStaticReloc), &reloc_bytes)
-            || add_overflow(sizeof(CiInitTemplate), reloc_bytes, &alloc_size)
-            || add_overflow(alloc_size, (size_t)size, &alloc_size)){
+        CiInitTemplate* source;
+        size_t alloc_size;
+        if(fma_overflow(nrelocs, sizeof *source->relocs, sizeof *source, &alloc_size)
+        || fma_overflow(size, sizeof *source->bytes, alloc_size, &alloc_size)){
             err = CI_OOM_ERROR;
             goto cleanup;
         }
         Allocator template_al = allocator_from_arena(&ci->bt.arena);
-        CiInitTemplate* source = Allocator_alloc(template_al, alloc_size);
+        source = Allocator_alloc(template_al, alloc_size, 1, _Alignof(CiInitTemplate));
         if(!source){ err = CI_OOM_ERROR; goto cleanup; }
         source->size = size;
         source->reloc_count = nrelocs;
         source->bytes = (unsigned char*)(source->relocs + nrelocs);
         source->linked = 0;
-        memcpy(source->relocs, buffer.relocs.data, reloc_bytes);
+        memcpy(source->relocs, buffer.relocs.data, nrelocs * sizeof *source->relocs);
         memcpy(source->bytes, bytes, size);
         err = PM_put(&ctx->deps.templates, ctx->a, source, (void*)1);
         if(err){ err = CI_OOM_ERROR; goto cleanup; }
@@ -9825,10 +9805,10 @@ ci_try_lower_init_template(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowe
     cleanup:
     if(residual){
         for(uint32_t i = 0; i < residual->count; i++) cc_field_path_free(al, residual->entries[i].path);
-        Allocator_free(al, residual, sizeof(CcInitList) + residual->count * sizeof(CcInitEntry));
+        Allocator_free_extra(al, residual, residual->count, sizeof *residual->entries, sizeof *residual, _Alignof(CcInitList));
     }
     ma_cleanup(CiStaticReloc)(&buffer.relocs, al);
-    Allocator_free(al, bytes, size);
+    Allocator_free(al, bytes, size, 1, _Alignof(unsigned char));
     return err;
 }
 
@@ -9840,7 +9820,7 @@ ci_build_static_data(CiInterpreter* ci, CiStaticData* data, CiLowerDeps* deps){
     CcVariable* var = data->var;
     int err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &data->size);
     if(err) return err;
-    unsigned char* bytes = Allocator_zalloc(al, data->size);
+    unsigned char* bytes = Allocator_zalloc(al, data->size, 1, _Alignof(unsigned char));
     if(!bytes) return CI_OOM_ERROR;
     CiStaticBuffer buffer = {.size = data->size, .bytes = bytes};
     CiLowerDeps local = {0};
@@ -9874,7 +9854,7 @@ ci_build_static_data(CiInterpreter* ci, CiStaticData* data, CiLowerDeps* deps){
     cleanup:
     ci_lower_deps_cleanup(&local, al);
     ma_cleanup(CiStaticReloc)(&buffer.relocs, al);
-    Allocator_free(al, buffer.bytes, buffer.size);
+    Allocator_free(al, buffer.bytes, buffer.size, 1, _Alignof(unsigned char));
     return err;
     DRP_PROFILE_END(profile);
 }
@@ -9898,7 +9878,7 @@ ci_try_preinit_global(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* hand
     if(err) goto cleanup;
     err = cc_sizeof_as_uint(p, var->type, var->loc, &buffer.size);
     if(err) goto cleanup;
-    unsigned char* bytes = Allocator_zalloc(al, buffer.size ? buffer.size : 1);
+    unsigned char* bytes = Allocator_zalloc(al, buffer.size ? buffer.size : 1, 1, _Alignof(unsigned char));
     if(!bytes){
         err = CI_OOM_ERROR;
         goto cleanup;
@@ -9908,7 +9888,7 @@ ci_try_preinit_global(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* hand
     cleanup:
     p->cpp.logger = logger;
     msb_destroy(&quiet.buff);
-    if(buffer.bytes) Allocator_free(al, buffer.bytes, buffer.size ? buffer.size : 1);
+    if(buffer.bytes) Allocator_free(al, buffer.bytes, buffer.size ? buffer.size : 1, 1, _Alignof(unsigned char));
     ma_cleanup(CiStaticReloc)(&buffer.relocs, al);
     if(err) return err == CI_OOM_ERROR ? err : 0;
     err = ci_deps_add_var(&ctx->deps, al, var, CI_VAR_DEP_USED);

@@ -13,6 +13,7 @@
 #include "cc_expr.h"
 #include "cc_type_check.h"
 #include "../Drp/hash_func.h"
+#include "../Drp/ckdint.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -54,10 +55,13 @@ warn_unused
 int
 cctc_table_grow(CcTypeTable* t, Allocator al){
     uint32_t old_cap = t->cap;
-    uint32_t new_cap = old_cap ? old_cap * 2 : 4;
-    size_t old_size = cctc_alloc_size(old_cap);
-    size_t new_size = cctc_alloc_size(new_cap);
-    void* data = Allocator_realloc(al, t->data, old_size, new_size);
+    uint32_t new_cap = 4, index_count;
+    if(old_cap && mul_overflow(old_cap, 2u, &new_cap)) return 1;
+    if(mul_overflow(new_cap, 2u, &index_count)) return 1;
+    size_t old_size, new_size;
+    if(mul_overflow((size_t)new_cap, cctc_alloc_size(1), &new_size)) return 1;
+    old_size = cctc_alloc_size(old_cap);
+    void* data = Allocator_realloc(al, t->data, old_size, new_size, 1, _Alignof(void*));
     if(!data) return 1;
     t->data = data;
     t->cap = new_cap;
@@ -131,7 +135,7 @@ cc_intern_aligned(CcTypeCache* cache, Allocator al, CcQualType underlying, uint3
         if(cctc_table_grow(t, al) != 0) return NULL;
         cctc_rebuild_aligned(t);
     }
-    CcAligned* p = Allocator_zalloc(al, sizeof *p);
+    CcAligned* p = Allocator_zalloc(al, 1, sizeof *p, _Alignof(CcAligned));
     if(!p) return NULL;
     p->kind = CC_ALIGNED;
     p->alignment = alignment;
@@ -191,7 +195,7 @@ cc_intern_pointer(CcTypeCache* cache, Allocator al, CcQualType pointee, _Bool re
         if(cctc_table_grow(t, al) != 0) return NULL;
         cctc_rebuild_pointers(t);
     }
-    CcPointer* p = Allocator_zalloc(al, sizeof *p);
+    CcPointer* p = Allocator_zalloc(al, 1, sizeof *p, _Alignof(CcPointer));
     if(!p) return NULL;
     p->kind = is_block ? CC_BLOCK_POINTER : CC_POINTER;
     p->restrict_ = restrict_;
@@ -234,7 +238,7 @@ cc_intern_slice(CcTypeCache* cache, Allocator al, CcQualType pointee, _Bool rest
         if(cctc_table_grow(t, al) != 0) return NULL;
         cctc_rebuild_pointers(t);
     }
-    CcSlice* s = Allocator_zalloc(al, sizeof *s);
+    CcSlice* s = Allocator_zalloc(al, 1, sizeof *s, _Alignof(CcSlice));
     if(!s) return NULL;
     s->kind = CC_SLICE;
     s->restrict_ = restrict_;
@@ -306,7 +310,7 @@ cc_intern_array(CcTypeCache* cache, Allocator al, CcQualType element, size_t len
         if(cctc_table_grow(t, al) != 0) return NULL;
         cctc_rebuild_arrays(t);
     }
-    CcArray* a = Allocator_zalloc(al, sizeof *a);
+    CcArray* a = Allocator_zalloc(al, 1, sizeof *a, _Alignof(CcArray));
     if(!a) return NULL;
     a->kind = CC_ARRAY;
     a->is_incomplete = is_incomplete;
@@ -376,7 +380,7 @@ cc_intern_vla(CcTypeCache* cache, Allocator al, const CcVla* source, CcQualType 
             idxes[idx] = i+1;
         }
     }
-    CcVla* vla = Allocator_alloc(al, sizeof *vla);
+    CcVla* vla = Allocator_alloc(al, 1, sizeof *vla, _Alignof(CcVla));
     if(!vla) return NULL;
     *vla = *source;
     vla->parameter_quals = 0;
@@ -438,7 +442,7 @@ cc_intern_vector(CcTypeCache* cache, Allocator al, CcQualType element, size_t le
         if(cctc_table_grow(t, al) != 0) return NULL;
         cctc_rebuild_vectors(t);
     }
-    CcVector* a = Allocator_zalloc(al, sizeof *a);
+    CcVector* a = Allocator_zalloc(al, 1, sizeof *a, _Alignof(CcVector));
     if(!a) return NULL;
     a->kind = CC_VECTOR;
     a->vector_size = vector_size;
@@ -518,8 +522,7 @@ cc_intern_function(CcTypeCache* cache, Allocator al, CcQualType return_type, con
         if(cctc_table_grow(t, al) != 0) return NULL;
         cctc_rebuild_functions(t);
     }
-    size_t sz = sizeof(CcFunction) + sizeof *params * param_count;
-    CcFunction* f = Allocator_zalloc(al, sz);
+    CcFunction* f = Allocator_zalloc_extra(al, param_count, sizeof *f->params, sizeof *f, _Alignof(CcFunction));
     if(!f) return NULL;
     f->kind = CC_FUNCTION;
     f->is_variadic = is_variadic;

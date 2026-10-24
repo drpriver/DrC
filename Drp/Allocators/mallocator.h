@@ -13,11 +13,4 @@
 #define MALLOCATORI {.type=ALLOCATOR_MALLOC}
 #endif
 
-#ifdef MALLOCATOR_UNSAFE_TRACK_STATS
-static struct {
-    size_t bytes;
-    size_t count;
-} malloc_usage;
-#endif
-
 #endif

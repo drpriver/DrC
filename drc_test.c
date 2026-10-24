@@ -225,13 +225,13 @@ TestFunction(test_snippets){
             if(output.length){
                 TestPrintf("%s:%d output: '%s'\n", __FILE__, c->line, output.text);
             }
-            if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1);
+            if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1, 1, 1);
             TEST_stats.failures++;
             continue;
         }
         test_expect_equals_sv(c->expected_output, CSV_to_SV(output), "expected output", "actual output", &TEST_stats, __FILE__, __func__, c->line);
-        if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1);
-        if(envp_size) Allocator_free(allocator_from_arena(&arena), envp, envp_size);
+        if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1, 1, 1);
+        if(envp_size) env_free_envp(&env, allocator_from_arena(&arena), envp, envp_size);
     }
     ArenaAllocator_free_all(&at.arena);
     ArenaAllocator_free_all(&arena);
@@ -507,13 +507,13 @@ TestFunction(test_samples){
             if(output.length){
                 TestPrintf("%s:%d output: '%s'\n", __FILE__, c->line, output.text);
             }
-            if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1);
+            if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1, 1, 1);
             TEST_stats.failures++;
             continue;
         }
         test_expect_equals_sv(c->expected_output, CSV_to_SV(output), "expected output", "actual output", &TEST_stats, __FILE__, __func__, c->line);
-        if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1);
-        if(envp_size) Allocator_free(allocator_from_arena(&arena), envp, envp_size);
+        if(output.text) Allocator_free(allocator_from_arena(&arena), output.text, output.length+1, 1, 1);
+        if(envp_size) env_free_envp(&env, allocator_from_arena(&arena), envp, envp_size);
     }
     ArenaAllocator_free_all(&at.arena);
     ArenaAllocator_free_all(&arena);

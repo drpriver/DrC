@@ -146,7 +146,7 @@ drp_profile_init_clock(void){
 static DRP_PROFILE_NOINLINE
 void
 drp_profile_attach(void){
-    DrpProfile* profile = Allocator_zalloc(MALLOCATOR, sizeof *profile);
+    DrpProfile* profile = Allocator_zalloc(MALLOCATOR, 1, sizeof *profile, _Alignof(DrpProfile));
     if(!profile) __builtin_trap();
     LOCK_T_lock(&drp_profile_lock);
     profile->id = drp_profile_thread_count++;
@@ -267,8 +267,8 @@ drp_profile_report(void){
     uint64_t now = drp_profile_counter();
     size_t capacity = (size_t)drp_profile_thread_count * (DRP_PROFILE_NODES - 1);
     const DrpProfileSite** sites;
-    size_t sz = (capacity ? capacity : 1) * sizeof *sites;
-    sites = Allocator_alloc(MALLOCATOR, sz);
+    size_t count = capacity ? capacity : 1;
+    sites = Allocator_alloc(MALLOCATOR, count, sizeof *sites, _Alignof(const DrpProfileSite*));
     if(!sites) __builtin_trap();
     MStringBuilder sb = {.allocator = MALLOCATOR};
     MStringBuilder *out = &sb;
@@ -329,7 +329,7 @@ drp_profile_report(void){
         (void)fe;
     }
     msb_destroy(&sb);
-    Allocator_free(MALLOCATOR, sites, sz);
+    Allocator_free(MALLOCATOR, sites, count, sizeof *sites, _Alignof(const DrpProfileSite*));
 }
 
 static

@@ -82,7 +82,7 @@ BT_raw_atomize(BlobTable* bt, const void* blob, size_t len){
     // Include padding and the atom header in the maximum object size.
     if(len > (size_t)PTRDIFF_MAX - sizeof(BlobAtom_) - 15) return NULL;
     size_t blen = (len + 0xf) & ~(size_t)0xf;
-    BlobAtom_* atom = ArenaAllocator_zalloc(&bt->arena, blen+sizeof *atom);
+    BlobAtom_* atom = ArenaAllocator_zalloc(&bt->arena, blen+sizeof *atom, 1, _Alignof(BlobAtom_));
     if(!atom) return NULL;
     atom->length = blen;
     memcpy(atom->data, blob, len);
@@ -101,7 +101,7 @@ BT_atomize(BlobTable* bt, const void* blob, size_t len){
     if(!atom) return NULL;
     int err = BT_store_atom(bt, atom);
     if(err){
-        ArenaAllocator_free(&bt->arena, atom, atom->length+sizeof *atom);
+        ArenaAllocator_free(&bt->arena, atom, atom->length+sizeof *atom, 1, _Alignof(BlobAtom_));
         return NULL;
     }
     return atom;
@@ -116,7 +116,7 @@ BT_grow_table(BlobTable* bt){
     size_t new_cap = old_cap?old_cap*2:64;
     size_t new_size = sizeof(uint32_t)*new_cap*2+new_cap*sizeof(BlobAtom);
     size_t old_size = sizeof(uint32_t)*old_cap*2+old_cap*sizeof(BlobAtom);
-    void* new_data = ArenaAllocator_realloc(&bt->arena, bt->data, old_size, new_size);
+    void* new_data = ArenaAllocator_realloc(&bt->arena, bt->data, old_size, new_size, 1, _Alignof(BlobAtom));
     if(!new_data) return 1;
     BlobAtom* atoms = new_data;
     uint32_t* idxes = (uint32_t*)(void*)(sizeof(BlobAtom)*new_cap+(char*)new_data);

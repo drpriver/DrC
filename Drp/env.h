@@ -5,6 +5,7 @@
 #include "atom_table.h"
 #include "Allocators/allocator.h"
 #include "cstring_view.h"
+#include "ckdint.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -100,7 +101,7 @@ _env_fold_key(Environment* env, Atom key){
     }
     return key;
     lower:;
-    char* tmp = Allocator_alloc(env->allocator, key->length);
+    char* tmp = Allocator_alloc(env->allocator, key->length, 1, 1);
     for(size_t i = 0; i < key->length; i++){
         char c = key->data[i];
         if(c >= 'A' && c <= 'Z')
@@ -109,7 +110,7 @@ _env_fold_key(Environment* env, Atom key){
             tmp[i] = c;
     }
     Atom k = AT_atomize(env->at, tmp, key->length);
-    Allocator_free(env->allocator, tmp, key->length);
+    Allocator_free(env->allocator, tmp, key->length, 1, 1);
     return k;
 }
 
@@ -120,10 +121,16 @@ env_setenv(Environment* env, Atom original_key, Atom value){
     if(!key) return 1;
     if(env->count == env->cap){
         uint32_t old_cap = env->cap;
-        uint32_t cap = old_cap?2*old_cap:32;
-        size_t old_sz = old_cap * sizeof(EnvKV) + 2*old_cap*sizeof(uint32_t);
-        size_t sz = cap * sizeof(EnvKV) + 2*cap*sizeof(uint32_t);
-        void* p = Allocator_realloc(env->allocator, env->data, old_sz, sz);
+        uint32_t cap = 32, index_count;
+        if(old_cap && mul_overflow(old_cap, 2u, &cap))
+            return 1;
+        if(mul_overflow(cap, 2u, &index_count))
+            return 1;
+        size_t sz;
+        if(mul_overflow((size_t)cap, sizeof(EnvKV) + 2*sizeof(uint32_t), &sz))
+            return 1;
+        size_t old_sz = (size_t)old_cap * (sizeof(EnvKV) + 2*sizeof(uint32_t));
+        void* p = Allocator_realloc(env->allocator, env->data, old_sz, sz, 1, _Alignof(EnvKV));
         if(!p) return 1;
         EnvKV* items = p;
         uint32_t* idxes = (uint32_t*)((char*)p+cap*sizeof *items);
@@ -166,8 +173,8 @@ env_setenv(Environment* env, Atom original_key, Atom value){
     };
     return 0;
 }
-static 
-Atom _Nullable 
+static
+Atom _Nullable
 env_getenv2(Environment* env, const char* key, size_t keylen){
     Atom k;
     if(!env->windows)
@@ -178,8 +185,8 @@ env_getenv2(Environment* env, const char* key, size_t keylen){
     return env_getenv(env, k);
 }
 
-static Atom 
-_Nullable 
+static Atom
+_Nullable
 env_getenv(Environment* env, Atom key){
     key = (Atom)_env_fold_key(env, key);
     uint32_t cap = env->cap;
@@ -229,23 +236,29 @@ _env_output_kv(Environment* env, const StringView2* _Null_unspecified override, 
 static
 char*_Null_unspecified*_Nullable
 env_to_posix(Environment* env, Allocator a, size_t* alloc_size, const StringView2* _Null_unspecified override, size_t override_count){
+    size_t total;
+    if(add_overflow((size_t)env->count, override_count, &total))
+        return NULL;
     size_t nkvs = 1; // +1 for NULL terminator
     size_t strsize = 0;
-    for(size_t i = 0; i < env->count+override_count; i++){
+    for(size_t i = 0; i < total; i++){
         StringView2 kv;
         if(!_env_output_kv(env, override, override_count, i, &kv)) continue;
-        nkvs++;
-        //                        '='                   '\0'
-        strsize += kv.key.length + 1 + kv.value.length + 1;
+        if(add_overflow(nkvs, (size_t)1, &nkvs)) return NULL;
+        if(add_overflow(strsize, kv.key.length, &strsize)) return NULL;
+        if(add_overflow(strsize, kv.value.length, &strsize)) return NULL;
+        if(add_overflow(strsize, (size_t)2, &strsize)) return NULL;
     }
-    size_t sz = nkvs * sizeof(char*) + strsize;
-    void* p = Allocator_alloc(a, sz);
+    size_t sz;
+    if(fma_overflow(nkvs, sizeof(char*), strsize, &sz))
+        return NULL;
+    void* p = Allocator_alloc(a, sz, 1, _Alignof(char*));
     if(!p) return NULL;
     *alloc_size = sz;
     char** envp = p;
     char* s = (char*)p+nkvs*sizeof(char*);
     size_t n = 0;
-    for(size_t i = 0; i < env->count+override_count; i++){
+    for(size_t i = 0; i < total; i++){
         StringView2 kv;
         if(!_env_output_kv(env, override, override_count, i, &kv)) continue;
         envp[n++] = s;
@@ -260,22 +273,27 @@ env_to_posix(Environment* env, Allocator a, size_t* alloc_size, const StringView
     return envp;
 }
 
-static 
+static
 char*_Nullable
 env_to_win32(Environment* env, Allocator a, size_t* alloc_size, const StringView2* _Null_unspecified override, size_t override_count){
+    size_t total;
+    if(add_overflow((size_t)env->count, override_count, &total))
+        return NULL;
     size_t strsize = 1; // double nul terminator
-    for(size_t i = 0; i < env->count+override_count; i++){
+    for(size_t i = 0; i < total; i++){
         StringView2 kv;
         if(!_env_output_kv(env, override, override_count, i, &kv)) continue;
         //                        '='                   '\0'
-        strsize += kv.key.length + 1 + kv.value.length + 1;
+        if(add_overflow(strsize, kv.key.length, &strsize)) return NULL;
+        if(add_overflow(strsize, kv.value.length, &strsize)) return NULL;
+        if(add_overflow(strsize, (size_t)2, &strsize)) return NULL;
     }
     if(strsize == 1) strsize = 2;
-    void* envp = Allocator_alloc(a, strsize);
+    void* envp = Allocator_alloc(a, strsize, 1, 1);
     if(!envp) return NULL;
     *alloc_size = strsize;
     char* s = envp;
-    for(size_t i = 0; i < env->count+override_count; i++){
+    for(size_t i = 0; i < total; i++){
         StringView2 kv;
         if(!_env_output_kv(env, override, override_count, i, &kv)) continue;
         memcpy(s, kv.key.text, kv.key.length);
@@ -297,6 +315,12 @@ env_to_envp(Environment* env, Allocator a, size_t* alloc_size, const StringView2
         return env_to_win32(env, a, alloc_size, overrides, override_count);
     else
         return env_to_posix(env, a, alloc_size, overrides, override_count);
+}
+
+static
+void
+env_free_envp(const Environment* env, Allocator a, const void*_Nullable envp, size_t alloc_size){
+    Allocator_free(a, envp, alloc_size, 1, env->windows ? 1 : _Alignof(char*));
 }
 
 #ifdef __clang__

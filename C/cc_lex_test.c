@@ -146,7 +146,7 @@ cc_lex_string_expect_error(StringView txt, StringView* err_out){
     int result = err ? 0 : 1;
     if(log_sb.cursor){
         StringView sv = msb_borrow_sv(&log_sb);
-        *err_out = (StringView){.length = sv.length, .text = (const char*)Allocator_dupe(MALLOCATOR, sv.text, sv.length)};
+        *err_out = (StringView){.length = sv.length, .text = (const char*)Allocator_dupe(MALLOCATOR, sv.text, sv.length, 1, 1)};
     }
     else
         *err_out = (StringView){0};
@@ -385,7 +385,7 @@ TestFunction(test_cc_lex_integers){
                 TestPrintf("%s:%d: %s failed\n", __FILE__, error_cases[i].line, error_cases[i].name);
             }
             if(err_msg.length)
-                Allocator_free(MALLOCATOR, err_msg.text, err_msg.length);
+                Allocator_free(MALLOCATOR, err_msg.text, err_msg.length, 1, 1);
         }
     }
     TESTEND();
@@ -575,7 +575,7 @@ TestFunction(test_cc_lex_chars){
                 TestPrintf("%s:%d: %s failed\n", __FILE__, error_cases[i].line, error_cases[i].name);
             }
             if(err_msg.length)
-                Allocator_free(MALLOCATOR, err_msg.text, err_msg.length);
+                Allocator_free(MALLOCATOR, err_msg.text, err_msg.length, 1, 1);
         }
     }
     TESTEND();

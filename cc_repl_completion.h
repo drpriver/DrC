@@ -7,7 +7,9 @@
 #include "C/cc_parser.h"
 #include "Drp/get_input.h"
 #include "Drp/string_distances.h"
-#include <stdlib.h> // malloc, free, qsort
+#include "Drp/Allocators/allocator.h"
+#include "Drp/Allocators/mallocator.h"
+#include "Drp/merge_sort.h"
 
 #ifndef MARRAY_STRING_VIEW
 #define MARRAY_STRING_VIEW
@@ -151,7 +153,7 @@ repl_tab_complete(GetInputCtx* ctx, size_t orig_cursor, size_t orig_len, int n_t
             max_candidates += AM_items(&parser->global.enums).count;
         }
 
-        struct CompletionPair* pairs = malloc(max_candidates * sizeof *pairs);
+        struct CompletionPair* pairs = Allocator_alloc(MALLOCATOR, max_candidates, sizeof *pairs, _Alignof(struct CompletionPair));
         if(!pairs) return 0;
         size_t n = 0;
 
@@ -193,7 +195,7 @@ repl_tab_complete(GetInputCtx* ctx, size_t orig_cursor, size_t orig_len, int n_t
             int e = ma_push(StringView)(&rctx->ordered, MALLOCATOR, pairs[i].name);
             if(e) break;
         }
-        free(pairs);
+        Allocator_free(MALLOCATOR, pairs, max_candidates, sizeof *pairs, _Alignof(struct CompletionPair));
     }
 
     if(n_tabs <= 0 || !rctx->ordered.count){

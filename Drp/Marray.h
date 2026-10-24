@@ -37,6 +37,7 @@
 #include <assert.h> // assert
 #include <stdint.h>
 #include "bit_util.h" //
+#include "ckdint.h"
 #include "Allocators/allocator.h" // Allocator
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -75,6 +76,7 @@ marray_resize_to_some_weird_number(size_t x){
     }
     else {
         int clz = clz_64(x);
+        if(!clz) return 0;
         result = 1ull << (64 - clz);
     }
     return result;
@@ -97,6 +99,7 @@ marray_resize_to_some_weird_number(size_t x){
     }
     else {
         int clz = clz_32(x);
+        if(!clz) return 0;
         result = 1u << (32 - clz);
     }
     return result;
@@ -375,7 +378,9 @@ MARRAY_LINKAGE
 warn_unused
 int
 ma_ensure_additional(MARRAY_T)(MARRAY* marray, Allocator a, size_t n_additional){
-    size_t required_capacity = marray->count + n_additional;
+    size_t required_capacity;
+    if(add_overflow(marray->count, n_additional, &required_capacity)) 
+        return 1;
     if(marray->capacity >= required_capacity)
         return 0;
     size_t new_capacity;
@@ -383,13 +388,13 @@ ma_ensure_additional(MARRAY_T)(MARRAY* marray, Allocator a, size_t n_additional)
         new_capacity = MARRAY_DEFAULT_CAPACITY;
     else {
         new_capacity = marray_resize_to_some_weird_number(marray->capacity);
+        if(!new_capacity) return 1;
         while(new_capacity < required_capacity) {
             new_capacity = marray_resize_to_some_weird_number(new_capacity);
+            if(!new_capacity) return 1;
         }
     }
-    size_t old_size = marray->capacity*sizeof(MARRAY_T);
-    size_t new_size = new_capacity*sizeof(MARRAY_T);
-    void* p = Allocator_realloc(a, marray->data, old_size, new_size);
+    void* p = Allocator_realloc(a, marray->data, marray->capacity, new_capacity, sizeof *marray->data, _Alignof(MARRAY_T));
     if(unlikely(!p))
         return 1;
     marray->data = p;
@@ -505,9 +510,7 @@ int
 ma_ensure_total(MARRAY_T)(MARRAY* marray, Allocator a, size_t total_capacity){
     if (total_capacity <= marray->capacity)
         return 0;
-    size_t old_size = marray->capacity * sizeof(MARRAY_T);
-    size_t new_size = total_capacity * sizeof(MARRAY_T);
-    void* p = Allocator_realloc(a, marray->data, old_size, new_size);
+    void* p = Allocator_realloc(a, marray->data, marray->capacity, total_capacity, sizeof *marray->data, _Alignof(MARRAY_T));
     if(unlikely(!p))
         return 1;
     marray->capacity = total_capacity;
@@ -518,7 +521,7 @@ ma_ensure_total(MARRAY_T)(MARRAY* marray, Allocator a, size_t total_capacity){
 MARRAY_LINKAGE
 void
 ma_cleanup(MARRAY_T)(MARRAY* marray, Allocator a){
-    Allocator_free(a, marray->data, marray->capacity*sizeof(MARRAY_T));
+    Allocator_free(a, marray->data, marray->capacity, sizeof *marray->data, _Alignof(MARRAY_T));
     marray->data = NULL;
     marray->count = 0;
     marray->capacity = 0;
@@ -534,7 +537,7 @@ ma_shrink_to_size(MARRAY_T)(MARRAY* marray, Allocator a){
         ma_cleanup(MARRAY_T)(marray, a);
         return 0;
     }
-    void* p = Allocator_realloc(a, marray->data, marray->capacity * sizeof *marray->data, marray->count * sizeof *marray->data);
+    void* p = Allocator_realloc(a, marray->data, marray->capacity, marray->count, sizeof *marray->data, _Alignof(MARRAY_T));
     if(!p) return 1;
     marray->data = p;
     marray->capacity = marray->count;

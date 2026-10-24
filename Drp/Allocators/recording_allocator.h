@@ -1,12 +1,21 @@
 //
 // Copyright © 2021-2023, David Priver <david@davidpriver.com>
 //
+/*
+ * An Allocator wrapper allocator that tracks all allocations
+ * and frees done through it so as to provide a free_all function
+ * for allocators that don't normally support it.
+ *
+ * This is currently super unoptimized, but that's ok.
+ */
 #ifndef RECORDING_ALLOCATOR_H
 #define RECORDING_ALLOCATOR_H
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
+#include <stdio.h>
+#include <stdarg.h>
 #include "allocator.h"
+#include "../ckdint.h"
 #include "../debugging.h"
 
 // This stuff is for debugging alloc/free errors.
@@ -16,7 +25,6 @@
 #endif
 
 #ifdef DEBUG_ALLOCATIONS
-#include <stdio.h>
 #define RA_LOGIT(fmt, ...) fprintf(stderr, "%s:%d:" fmt "\n", __func__, __LINE__, ##__VA_ARGS__)
 #else
 #define RA_LOGIT(...) (void)0
@@ -33,277 +41,322 @@
 #endif
 #endif
 
-/*
- * An Allocator wrapper allocator that tracks all allocations
- * and frees done through it so as to provide a free_all function
- * for allocators that don't normally support it.
- *
- * This is currently super unoptimized, but that's ok.
- */
 
-#ifndef _rec_realloc
-#ifndef __wasm__
-#ifdef USE_SDL_MALLOC
-#define _rec_realloc(ptr, orig_size, size) SDL_realloc(ptr, size)
-#else
-#define _rec_realloc(ptr, orig_size, size) realloc(ptr, size)
-#endif
-#else
-static void* _rec_realloc(void* ptr, size_t orig_size, size_t size);
-#endif
-#endif
-
-#ifdef USE_SDL_MALLOC
-#define _rec_malloc SDL_malloc
-#define _rec_calloc SDL_calloc
-#else
-#define _rec_malloc malloc
-#define _rec_calloc calloc
-#endif
-
-static inline
-void
-_rec_free(const void*_Nullable data){
-    #if defined(__clang__) || defined(__GNUC__)
-        #pragma GCC diagnostic push
-        #pragma GCC diagnostic ignored "-Wcast-qual"
-        #if !defined(__clang__)
-            #pragma GCC diagnostic ignored "-Wdiscarded-qualifiers"
+#ifndef __builtin_debugtrap
+    #if defined __clang__ || defined __DRC__
+        #define __builtin_debugtrap() __builtin_debugtrap()
+    #elif defined __has_builtin
+        #if __has_builtin(__builtin_debugtrap)
+            #define __builtin_debugtrap() __builtin_debugtrap()
         #endif
-    #elif defined(_MSC_VER)
-        #pragma warning(push)
-        #pragma warning(disable: 4090)
-    #else
     #endif
+    #if !defined __builtin_debugtrap && defined __GNUC__
+        #if defined __x86_64__ || defined __i386__
+            #define __builtin_debugtrap() __asm__ volatile("int3")
+        #elif defined __aarch64__
+            #define __builtin_debugtrap() __asm__ volatile("brk #0xf000")
+        #else
+            #define __builtin_debugtrap() __builtin_trap()
+        #endif
+    #endif
+    #if !defined __builtin_debugtrap && defined _MSC_VER
+        #define __builtin_debugtrap() __debugbreak()
+    #endif
+#endif
 
-    #ifdef USE_SDL_MALLOC
-        SDL_free((void*)data);
-    #else
-        free((void*)data);
-    #endif
-    #if defined(__clang__) || defined(__GNUC__)
-        #pragma GCC diagnostic pop
-    #elif defined(_MSC_VER)
-        #pragma warning(pop)
-    #endif
+#if defined __has_attribute
+#if __has_attribute(cold)
+__attribute__((cold))
+#endif
+#endif
+static inline
+_Noreturn
+void
+_rec_abort(const char * fmt, ...){
+    bt();
+    va_list va;
+    va_start(va, fmt);
+    vfprintf(stderr, fmt, va);
+    va_end(va);
+    __builtin_debugtrap();
+    abort();
 }
 
+typedef struct RaRecord RaRecord;
+struct RaRecord {
+    size_t count,
+           size,
+           align;
+    #ifdef HEAVY_RECORDING
+    BacktraceArray *_Null_unspecified backtrace;
+    #endif
+};
 
 typedef struct RecordingAllocator RecordingAllocator;
 struct RecordingAllocator{
-    // We need a dynamic array to record all of the allocations.
-    // We specialize it to be SOA
-    void*_Nullable*_Nonnull allocations;
-    size_t* allocation_sizes;
-    size_t count;
-    size_t capacity;
-#ifdef HEAVY_RECORDING
-    BacktraceArray*_Null_unspecified*_Null_unspecified backtraces;
-#endif
+    _Alignas(8) void *_Null_unspecified *_Null_unspecified allocations;
+    RaRecord *_Null_unspecified records;
+    size_t count,
+           capacity;
 };
 
 static inline
-void
+int
 recording_ensure_capacity(RecordingAllocator* r){
     if(r->count < r->capacity)
-        return;
-    if(!r->capacity){
-        enum {INITIAL_CAPACITY=32};
-        r->capacity = INITIAL_CAPACITY;
-        r->allocations = _rec_malloc(INITIAL_CAPACITY*sizeof(*r->allocations));
-        r->allocation_sizes = _rec_malloc(INITIAL_CAPACITY*sizeof(*r->allocation_sizes));
-        #ifdef HEAVY_RECORDING
-        r->backtraces = _rec_malloc(INITIAL_CAPACITY*sizeof(*r->backtraces));
-        #endif
-        return;
-    }
+        return 0;
+    size_t cap = 32;
     size_t old_cap = r->capacity;
-    size_t new_cap = old_cap * 2;
-    r->allocations = _rec_realloc(r->allocations, old_cap * sizeof(*r->allocations), new_cap*sizeof(*r->allocations));
-    r->allocation_sizes = _rec_realloc(r->allocation_sizes, old_cap*sizeof(*r->allocation_sizes), new_cap*sizeof(*r->allocation_sizes));
-    #ifdef HEAVY_RECORDING
-    r->backtraces = _rec_realloc(r->backtraces, old_cap*sizeof(*r->backtraces), new_cap*sizeof(*r->backtraces));
-    #endif
-    r->capacity = new_cap;
+    if(r->capacity && mul_overflow(r->capacity, 2, &cap))
+        return 1;
+    void *block = Allocator_realloc((Allocator){.type=ALLOCATOR_MALLOC}, r->allocations, old_cap, cap, sizeof(RaRecord)+sizeof(void*), _Alignof(RaRecord));
+    if(!block) return 1;
+    r->allocations = block;
+    r->records = (RaRecord*)(r->allocations+cap);
+    if(r->count)
+        memmove(r->records, r->allocations + old_cap, r->count * sizeof *r->records);
+    r->capacity = cap;
+    return 0;
 }
 
 MALLOC_FUNC
 static
 warn_unused
-void*_Nullable
-recording_alloc(RecordingAllocator* r, size_t size){
-    RA_LOGIT("Allocation for %zu requested.", size);
-    void* result = _rec_malloc(size);
-    RA_LOGIT("Allocation for %zu granted: %p", size, result);
-    if(!result)
+void *_Nullable
+recording_alloc(RecordingAllocator *r, size_t count, size_t size, size_t alignment){
+    RA_LOGIT("Allocation requested: [%zu count, %zu size, %zu alignment]", count, size, alignment);
+    void *result = Allocator_alloc((Allocator){.type = ALLOCATOR_MALLOC}, count, size, alignment);
+    if(!result || result == ALLOCATOR_SUCCESS_BUT_NO_DATA){
+        RA_LOGIT("Allocation returned no storage: %p, [%zu count, %zu size, %zu alignment]", result, count, size, alignment);
         return result;
-    recording_ensure_capacity(r);
-    size_t index = r->count++;
-    r->allocations[index] = result;
-    r->allocation_sizes[index] = size;
-#ifdef HEAVY_RECORDING
-    r->backtraces[index] = get_bt();
-#endif
+    }
+    int err = recording_ensure_capacity(r);
+    if(err){
+        RA_LOGIT("Allocation recording failed: %p, [%zu count, %zu size, %zu alignment]", result, count, size, alignment);
+        Allocator_free((Allocator){.type = ALLOCATOR_MALLOC}, result, count, size, alignment);
+        return NULL;
+    }
+    r->allocations[r->count] = result;
+    r->records[r->count++] = (RaRecord){
+        .count = count,
+        .size = size,
+        .align = alignment,
+        #ifdef HEAVY_RECORDING
+        .backtrace = get_bt(),
+        #endif
+    };
+    RA_LOGIT("Allocation succeeded: %p, [%zu count, %zu size, %zu alignment]", result, count, size, alignment);
     return result;
 }
 
 MALLOC_FUNC
 static
 warn_unused
-void*_Nullable
-recording_zalloc(RecordingAllocator* r, size_t size){
-    RA_LOGIT("ZAllocation for %zu requested.", size);
-    void* result = _rec_calloc(1, size);
-    RA_LOGIT("ZAllocation for %zu granted: %p", size, result);
-    if(!result)
+void *_Nullable
+recording_zalloc(RecordingAllocator *r, size_t count, size_t size, size_t alignment){
+    RA_LOGIT("Zeroed allocation requested: [%zu count, %zu size, %zu alignment]", count, size, alignment);
+    void *result = Allocator_zalloc((Allocator){.type = ALLOCATOR_MALLOC}, count, size, alignment);
+    if(!result || result == ALLOCATOR_SUCCESS_BUT_NO_DATA){
+        RA_LOGIT("Zeroed allocation returned no storage: %p, [%zu count, %zu size, %zu alignment]", result, count, size, alignment);
         return result;
-    recording_ensure_capacity(r);
-    size_t index = r->count++;
-    r->allocations[index] = result;
-    r->allocation_sizes[index] = size;
-#ifdef HEAVY_RECORDING
-    r->backtraces[index] = get_bt();
-#endif
+    }
+    int err = recording_ensure_capacity(r);
+    if(err){
+        RA_LOGIT("Zeroed allocation recording failed: %p, [%zu count, %zu size, %zu alignment]", result, count, size, alignment);
+        Allocator_free((Allocator){.type = ALLOCATOR_MALLOC}, result, count, size, alignment);
+        return NULL;
+    }
+    r->allocations[r->count] = result;
+    r->records[r->count++] = (RaRecord){
+        count,
+        size,
+        alignment,
+        #ifdef HEAVY_RECORDING
+        get_bt(),
+        #endif
+    };
+    RA_LOGIT("Zeroed allocation succeeded: %p, [%zu count, %zu size, %zu alignment]", result, count, size, alignment);
     return result;
 }
 
 static
 void
-recording_free(RecordingAllocator* r, const void*_Nullable data, size_t size){
-    if(!data){
-        RA_LOGIT("Free with no data: %p, %zu", data, size);
+recording_free(RecordingAllocator *r, const void *_Nullable data, size_t count, size_t size, size_t alignment){
+    if(!data || data == ALLOCATOR_SUCCESS_BUT_NO_DATA){
+        RA_LOGIT("Free with no data: %p, [%zu count, %zu size, %zu alignment]", data, count, size, alignment);
+        if(count && size){
+            _rec_abort(
+                "recording_free: empty pointer with nonzero count and element size\n"
+                "  pointer=%p (%s) [%zu count, %zu size, %zu alignment]\n"
+                "  expected count=0 or element_size=0\n",
+                data, data ? "ALLOCATOR_SUCCESS_BUT_NO_DATA" : "NULL",
+                count, size, alignment
+            );
+        }
         return;
     }
-    RA_LOGIT("Free: %p, %zu", data, size);
+    RA_LOGIT("Free: %p, [%zu count, %zu size, %zu alignment]", data, count, size, alignment);
     // inefficient, but whatever
-    size_t count = r->count;
-    for(size_t i = count; i--;){
-        if(data == r->allocations[i]){
-            RA_LOGIT("old ptr, size: %p, %zu", r->allocations[i], r->allocation_sizes[i]);
-            if(size != r->allocation_sizes[i]){
-                bt();
-                assert(!(_Bool)"Freeing with the wrong size");
+    for(size_t i = r->count; i--;){
+        void *allocation = r->allocations[i];
+        if(data == allocation){
+            RaRecord* rec = &r->records[i];
+            RA_LOGIT(
+                "Recorded allocation: %p, [%zu count, %zu size, %zu alignment]",
+                data,
+                rec->count, rec->size, rec->align
+            );
+            if(count != rec->count || size != rec->size || alignment != rec->align){
+                #ifdef HEAVY_RECORDING
+                fprintf(stderr, "Recorded allocation backtrace:\n");
+                dump_bt(rec->backtrace);
+                #endif
+                _rec_abort(
+                    "recording_free: allocation argument mismatch\n"
+                    "  pointer=%p slot=%zu\n"
+                    "  supplied: [%zu count, %zu size, %zu alignment]\n"
+                    "  recorded: [%zu count, %zu size, %zu alignment]\n",
+                    data, i,
+                    count, size, alignment,
+                    rec->count, rec->size, rec->align
+                );
             }
-            _rec_free(data);
-            r->allocations[i] = NULL;
-            r->allocation_sizes[i] = 0;
+            Allocator_free((Allocator){.type = ALLOCATOR_MALLOC}, data, count, size, alignment);
             #ifdef HEAVY_RECORDING
-                _rec_free(r->backtraces[i]);
-                r->backtraces[i] = 0;
+            free(rec->backtrace);
             #endif
-            RA_LOGIT("Free succeeded: %p, %zu", data, size);
-            while(r->count && r->allocation_sizes[r->count-1] == 0)
+            r->allocations[i] = NULL;
+            *rec = (RaRecord){0};
+            RA_LOGIT("Free succeeded: %p, [%zu count, %zu size, %zu alignment]", data, count, size, alignment);
+            while(r->count && r->allocations[r->count-1] == NULL)
                 r->count--;
             return;
         }
     }
-    assert(!(_Bool)"Freeing pointer not tracked by this allocator.");
+    _rec_abort(
+        "recording_free: pointer not tracked by this recorder\n"
+        "  pointer=%p [%zu count, %zu size, %zu alignment]\n"
+        "  searched %zu slots, %zu capacity\n",
+        data,
+        count, size, alignment,
+        r->count, r->capacity
+    );
 }
 
-// The money function, the reason we did this in the first
-// place.
 static
 void
 recording_free_all(RecordingAllocator* r){
     RA_LOGIT("Freeing all");
     for(size_t i = 0; i < r->count; i++){
-        if(!r->allocations[i])
-            continue;
-        _rec_free(r->allocations[i]);
-#ifdef HEAVY_RECORDING
-        _rec_free(r->backtraces[i]);
-#endif
+        void *allocation = r->allocations[i];
+        if(!allocation) continue;
+        RaRecord *rec = &r->records[i];
+        RA_LOGIT("Freeing recorded allocation: %p, [%zu count, %zu size, %zu alignment]", allocation, rec->count, rec->size, rec->align);
+        #ifdef HEAVY_RECORDING
+        free(rec->backtrace);
+        #endif
+        Allocator_free((Allocator){.type = ALLOCATOR_MALLOC}, allocation, rec->count, rec->size, rec->align);
     }
     r->count = 0;
 }
 
 static inline
-void*_Nullable
-recording_realloc(RecordingAllocator* r, void*_Nullable data, size_t orig_size, size_t new_size){
-    RA_LOGIT("realloc request: old ptr: %p, orig_size: %zu, new_size: %zu", data, orig_size, new_size);
-    if(!data)
-        goto Lrealloc;
-    size_t count = r->count;
-    for(size_t i = count; i--;){
-        assert(i < count);
-        if(data == r->allocations[i]){
-            assert(orig_size == r->allocation_sizes[i]);
-            r->allocations[i] = NULL;
-            r->allocation_sizes[i] = 0;
+void *_Nullable
+recording_realloc(RecordingAllocator* r, void*_Nullable data, size_t orig_count, size_t count, size_t size, size_t alignment){
+    RA_LOGIT("Realloc requested: %p, [%zu original count, %zu count, %zu size, %zu alignment]", data, orig_count, count, size, alignment);
+    _Bool empty = !data || data == ALLOCATOR_SUCCESS_BUT_NO_DATA;
+    if(!size) return empty ? ALLOCATOR_SUCCESS_BUT_NO_DATA : NULL;
+    if(empty != (orig_count == 0)) return NULL;
+    size_t orig_size, new_size;
+    if(mul_overflow(orig_count, size, &orig_size)
+    || mul_overflow(count, size, &new_size))
+        return NULL;
+    if(!orig_count) return recording_alloc(r, count, size, alignment);
+    if(!count){
+        recording_free(r, data, orig_count, size, alignment);
+        return ALLOCATOR_SUCCESS_BUT_NO_DATA;
+    }
+    for(size_t i = r->count; i--;){
+        void *allocation = r->allocations[i];
+        if(data == allocation){
+            RaRecord *rec = &r->records[i];
+            RA_LOGIT("Recorded allocation: %p, [%zu count, %zu size, %zu alignment]", allocation, rec->count, rec->size, rec->align);
+            if(orig_count != rec->count || size != rec->size || alignment != rec->align){
+                #ifdef HEAVY_RECORDING
+                fprintf(stderr, "Recorded allocation backtrace:\n");
+                dump_bt(rec->backtrace);
+                #endif
+                _rec_abort(
+                    "recording_realloc: allocation argument mismatch\n"
+                    "  pointer=%p slot=%zu new_count=%zu\n"
+                    "  supplied: [%zu count, %zu size, %zu alignment]\n"
+                    "  recorded: [%zu count, %zu size, %zu alignment]\n",
+                    data, i, count,
+                    orig_count, size, alignment,
+                    rec->count, rec->size, rec->align);
+            }
+            void *result = Allocator_realloc((Allocator){.type = ALLOCATOR_MALLOC}, data, orig_count, count, size, alignment);
+            if(!result){
+                RA_LOGIT("Realloc failed: %p, [%zu original count, %zu count, %zu size, %zu alignment]", data, orig_count, count, size, alignment);
+                return NULL;
+            }
+            RA_LOGIT("Realloc succeeded: %p, [%zu count, %zu size, %zu alignment]", result, count, size, alignment);
             #ifdef HEAVY_RECORDING
-                _rec_free(r->backtraces[i]);
-                r->backtraces[i] = 0;
+                free(rec->backtrace);
             #endif
-            while(r->count && r->allocation_sizes[r->count-1] == 0)
-                r->count--;
-            goto Lrealloc;
+            r->allocations[i] = result;
+            *rec = (RaRecord){
+                .count = count,
+                .size = size,
+                .align = alignment,
+                #ifdef HEAVY_RECORDING
+                .backtrace = get_bt()
+                #endif
+            };
+            return result;
         }
     }
-    assert(!(_Bool)"Reallocing an unknown pointer");
-
-    Lrealloc:;
-    RA_LOGIT("Falling back to actual realloc");
-    void* result = _rec_realloc(data, orig_size, new_size);
-    recording_ensure_capacity(r);
-    size_t index = r->count++;
-    r->allocations[index] = result;
-    r->allocation_sizes[index] = new_size;
-#ifdef HEAVY_RECORDING
-    r->backtraces[index] = get_bt();
-#endif
-    RA_LOGIT("Realloced %p, size %zu into %p, size %zu", data, orig_size, result, new_size);
-    return result;
+    _rec_abort(
+        "recording_realloc: pointer not tracked by this recorder\n"
+        "  pointer=%p original_count=%zu new_count=%zu element_size=%zu alignment=%zu\n"
+        "  searched %zu slots, %zu capacity\n",
+        data, orig_count, count, size, alignment, r->count, r->capacity);
 }
 
 static
 void
-recording_cleanup(RecordingAllocator* r){
+recording_cleanup(RecordingAllocator *r){
     RA_LOGIT("Cleaning up the recorder itself");
-    _rec_free(r->allocation_sizes);
-    _rec_free(r->allocations);
-#ifdef HEAVY_RECORDING
-    _rec_free(r->backtraces);
-#endif
-    memset(r, 0, sizeof(*r));
+    Allocator_free((Allocator){.type=ALLOCATOR_MALLOC}, r->allocations, r->capacity, sizeof(RaRecord)+sizeof(void*), _Alignof(RaRecord));
+    memset(r, 0, sizeof *r);
 }
-
-#ifdef USE_RECORDED_ALLOCATOR
-static inline
-void
-shallow_free_recorded_mallocator(Allocator a){
-    assert(a.type == ALLOCATOR_RECORDED);
-    RecordingAllocator* r = a._data;
-    recording_cleanup(r);
-    _rec_free(r);
-}
-
-static inline
-Allocator
-new_recorded_mallocator(void){
-    RecordingAllocator* ra = _rec_calloc(1, sizeof(*ra));
-    return (Allocator){
-        ._data = ra,
-        .type = ALLOCATOR_RECORDED,
-    };
-}
-#endif
 
 static inline
 void
-recording_assert_all_freed(RecordingAllocator* r){
-    int leaked = 0;
+recording_assert_all_freed(RecordingAllocator *r){
+    size_t leaked = 0;
     for(size_t i = 0; i < r->count; i++){
+        void* allocation = r->allocations[i];
+        if(!allocation) continue;
+        RaRecord* rec = &r->records[i];
+        fprintf(
+            stderr,
+            "recording_assert_all_freed: leaked allocation\n"
+            "  pointer=%p slot=%zu [%zu count, %zu size, %zu alignment]\n",
+             allocation, i,
+             rec->count, rec->size, rec->align
+        );
     #ifdef HEAVY_RECORDING
-        if(r->allocation_sizes[i]){
-            // fprintf(stderr, "%zu) leak: %zu bytes\n", i, r->allocation_sizes[i]);
-            dump_bt(r->backtraces[i]);
-            leaked++;
-        }
-    #else
-        assert(r->allocation_sizes[i] == 0);
+        dump_bt(rec->backtrace);
     #endif
+        leaked++;
     }
-    assert(leaked == 0);
+    if(leaked)
+        _rec_abort(
+            "recording_assert_all_freed: %zu live allocations remain\n"
+            "  %zu slots %zu capacity\n",
+            leaked, r->count, r->capacity
+        );
 }
 
 #ifdef __clang__

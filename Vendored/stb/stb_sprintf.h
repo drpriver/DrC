@@ -62,23 +62,27 @@ in 16K.
 
 API:
 ====
-int stbsp_sprintf( char * buf, char const * fmt, ... )
-int stbsp_snprintf( char * buf, int count, char const * fmt, ... )
+ptrdiff_t stbsp_sprintf( char * buf, char const * fmt, ... )
+ptrdiff_t stbsp_snprintf( char * buf, size_t count, char const * fmt, ... )
   Convert an arg list into a buffer.  stbsp_snprintf always returns
   a zero-terminated string (unlike regular snprintf).
 
-int stbsp_vsprintf( char * buf, char const * fmt, va_list va )
-int stbsp_vsnprintf( char * buf, int count, char const * fmt, va_list va )
+ptrdiff_t stbsp_vsprintf( char * buf, char const * fmt, va_list va )
+ptrdiff_t stbsp_vsnprintf( char * buf, size_t count, char const * fmt, va_list va )
   Convert a va_list arg list into a buffer.  stbsp_vsnprintf always returns
   a zero-terminated string (unlike regular snprintf).
 
-int stbsp_vsprintfcb( STBSP_SPRINTFCB * callback, void * user, char * buf, char const * fmt, va_list va )
-    typedef char * STBSP_SPRINTFCB( char const * buf, void * user, int len );
+ptrdiff_t stbsp_vsprintfcb( STBSP_SPRINTFCB * callback, void * user, char * buf, char const * fmt, va_list va )
+    typedef char * STBSP_SPRINTFCB( char const * buf, void * user, size_t len );
   Convert into a buffer, calling back every STB_SPRINTF_MIN chars.
   Your callback can then copy the chars out, print them or whatever.
   This function is actually the workhorse for everything else.
   The buffer you pass in must hold at least STB_SPRINTF_MIN characters.
     // you return the next buffer to use or 0 to stop converting
+
+  Results are byte counts, or -1 for invalid Unicode, an unrepresentable
+  result, or a field width/numeric precision above 1048576. String precision
+  (including %.*s and %.*ls) is not subject to this padding limit.
 
 void stbsp_set_separators( char comma, char period )
   Set the comma and period characters to use.
@@ -211,22 +215,26 @@ process locale. Invalid Unicode returns -1.
 
 #include <stdarg.h> // for va_arg(), va_list()
 #include <stddef.h> // size_t, ptrdiff_t
+#include <stdint.h> // PTRDIFF_MAX, SIZE_MAX
+#include <limits.h> // INT_MAX
+
+#define STBSP__MAX_PADDING (1024 * 1024)
 
 #ifndef STB_SPRINTF_MIN
 #define STB_SPRINTF_MIN 512 // how many characters per callback
 #endif
-typedef char *STBSP_SPRINTFCB(const char *buf, void *user, int len);
+typedef char *STBSP_SPRINTFCB(const char *buf, void *user, size_t len);
 
 #ifndef STB_SPRINTF_DECORATE
 #define STB_SPRINTF_DECORATE(name) stbsp_##name // define this before including if you want to change the names
 #endif
 
-STBSP__PUBLICDEC int STB_SPRINTF_DECORATE(vsprintf)(char *buf, char const *fmt, va_list va);
-STBSP__PUBLICDEC int STB_SPRINTF_DECORATE(vsnprintf)(char *buf, int count, char const *fmt, va_list va);
-STBSP__PUBLICDEC int STB_SPRINTF_DECORATE(sprintf)(char *buf, char const *fmt, ...) STBSP__ATTRIBUTE_FORMAT(2,3);
-STBSP__PUBLICDEC int STB_SPRINTF_DECORATE(snprintf)(char *buf, int count, char const *fmt, ...) STBSP__ATTRIBUTE_FORMAT(3,4);
+STBSP__PUBLICDEC ptrdiff_t STB_SPRINTF_DECORATE(vsprintf)(char *buf, char const *fmt, va_list va);
+STBSP__PUBLICDEC ptrdiff_t STB_SPRINTF_DECORATE(vsnprintf)(char *buf, size_t count, char const *fmt, va_list va);
+STBSP__PUBLICDEC ptrdiff_t STB_SPRINTF_DECORATE(sprintf)(char *buf, char const *fmt, ...) STBSP__ATTRIBUTE_FORMAT(2,3);
+STBSP__PUBLICDEC ptrdiff_t STB_SPRINTF_DECORATE(snprintf)(char *buf, size_t count, char const *fmt, ...) STBSP__ATTRIBUTE_FORMAT(3,4);
 
-STBSP__PUBLICDEC int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback, void *user, char *buf, char const *fmt, va_list va);
+STBSP__PUBLICDEC ptrdiff_t STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback, void *user, char *buf, char const *fmt, va_list va);
 STBSP__PUBLICDEC void STB_SPRINTF_DECORATE(set_separators)(char comma, char period);
 
 #endif // STB_SPRINTF_H_INCLUDE
@@ -279,7 +287,7 @@ STBSP__PUBLICDEC void STB_SPRINTF_DECORATE(set_separators)(char comma, char peri
 
 #ifndef STB_SPRINTF_NOFLOAT
 // internal float utility functions
-static stbsp__int32 stbsp__real_to_str(char const **start, stbsp__uint32 *len, char *out, stbsp__int32 *decimal_pos, double value, stbsp__uint32 frac_digits);
+static stbsp__int32 stbsp__real_to_str(char const **start, size_t *len, char *out, stbsp__int32 *decimal_pos, double value, stbsp__uint32 frac_digits);
 static stbsp__int32 stbsp__real_to_parts(stbsp__int64 *bits, stbsp__int32 *expo, double value);
 #define STBSP__SPECIAL 0x7000
 #endif
@@ -337,7 +345,7 @@ static void stbsp__lead_sign(stbsp__uint32 fl, char *sign)
    }
 }
 
-static STBSP__ASAN stbsp__uint32 stbsp__strlen_limited(char const *s, stbsp__uint32 limit)
+static STBSP__ASAN size_t stbsp__strlen_limited(char const *s, size_t limit)
 {
    char const * sn = s;
 
@@ -347,7 +355,7 @@ static STBSP__ASAN stbsp__uint32 stbsp__strlen_limited(char const *s, stbsp__uin
          break;
 
       if (!limit || *sn == 0)
-         return (stbsp__uint32)(sn - s);
+         return (size_t)(sn - s);
 
       ++sn;
       --limit;
@@ -374,7 +382,7 @@ static STBSP__ASAN stbsp__uint32 stbsp__strlen_limited(char const *s, stbsp__uin
       --limit;
    }
 
-   return (stbsp__uint32)(sn - s);
+   return (size_t)(sn - s);
 }
 
 static int stbsp__utf8(char out[4], stbsp__uint32 c)
@@ -417,13 +425,13 @@ static int stbsp__wide_char(char out[4], const wchar_t **s)
    return stbsp__utf8(out, c);
 }
 
-STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback, void *user, char *buf, char const *fmt, va_list va)
+STBSP__PUBLICDEF ptrdiff_t STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback, void *user, char *buf, char const *fmt, va_list va)
 {
    static char hex[] = "0123456789abcdefxp";
    static char hexu[] = "0123456789ABCDEFXP";
    char *bf;
    char const *f;
-   int tlen = 0;
+   size_t tlen = 0;
    int failed = 0;
 
    bf = buf;
@@ -435,8 +443,12 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
       // macros for the callback buffer stuff
       #define stbsp__chk_cb_bufL(bytes)                        \
          {                                                     \
-            int len = (int)(bf - buf);                         \
+            size_t len = (size_t)(bf - buf);                   \
             if ((len + (bytes)) >= STB_SPRINTF_MIN) {          \
+               if (len > (size_t)PTRDIFF_MAX - tlen) {         \
+                  failed = 1;                                 \
+                  goto done;                                  \
+               }                                              \
                tlen += len;                                    \
                if (0 == (bf = buf = callback(buf, user, len))) \
                   goto done;                                   \
@@ -456,7 +468,7 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
          cl = v;                                        \
          if (callback) {                                \
             int lg = STB_SPRINTF_MIN - (int)(bf - buf); \
-            if (cl > lg)                                \
+            if ((size_t)cl > (size_t)lg)                 \
                cl = lg;                                 \
          }
 
@@ -575,14 +587,21 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
       // get the field width
       if (f[0] == '*') {
          fw = va_arg(va, int);
+         if (fw > STBSP__MAX_PADDING || fw < -STBSP__MAX_PADDING) {
+            failed = 1;
+            goto endfmt;
+         }
          if (fw < 0) {
             fl |= STBSP__LEFTJUST;
-            // INT_MIN has no positive int counterpart; saturate the width.
-            fw = (fw == (-2147483647 - 1)) ? 2147483647 : -fw;
+            fw = -fw;
          }
          ++f;
       } else {
          while ((f[0] >= '0') && (f[0] <= '9')) {
+            if (fw > (STBSP__MAX_PADDING - (f[0] - '0')) / 10) {
+               failed = 1;
+               goto endfmt;
+            }
             fw = fw * 10 + f[0] - '0';
             f++;
          }
@@ -598,6 +617,10 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
          } else {
             pr = 0;
             while ((f[0] >= '0') && (f[0] <= '9')) {
+               if (pr > (INT_MAX - (f[0] - '0')) / 10) {
+                  failed = 1;
+                  goto endfmt;
+               }
                pr = pr * 10 + f[0] - '0';
                f++;
             }
@@ -658,22 +681,33 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
       default: break;
       }
 
+      // String precision bounds input; it does not request generated padding.
+      if (f[0] != 's' && pr > STBSP__MAX_PADDING) {
+         failed = 1;
+         goto endfmt;
+      }
+
       if ((fl & STBSP__WIDE) && (f[0] == 's' || f[0] == 'c')) {
          const wchar_t *ws = NULL, *scan;
          char encoded[4];
-         int length = 0, bytes = 0, remaining, i;
+         size_t length = 0, remaining;
+         int bytes = 0, i;
          if (f[0] == 's') {
             ws = va_arg(va, const wchar_t *);
             if (ws == NULL) ws = L"null";
             scan = ws;
-            while ((pr < 0 || length < pr) && *scan) {
+            while ((pr < 0 || length < (size_t)pr) && *scan) {
                bytes = stbsp__wide_char(encoded, &scan);
                if (bytes < 0) {
                   failed = 1;
                   goto endfmt;
                }
-               if (pr >= 0 && bytes > pr - length) break;
-               length += bytes;
+               if (pr >= 0 && (size_t)bytes > (size_t)pr - length) break;
+               if ((size_t)bytes > (size_t)PTRDIFF_MAX - length) {
+                  failed = 1;
+                  goto endfmt;
+               }
+               length += (size_t)bytes;
             }
          } else {
             // wint_t undergoes default argument promotion on 16-bit wchar ABIs.
@@ -688,8 +722,7 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
             }
             length = bytes;
          }
-         if (fw < length) fw = length;
-         fw -= length;
+         fw = (size_t)fw > length ? fw - (int)length : 0;
          if (!(fl & STBSP__LEFTJUST)) {
             while (fw > 0) {
                stbsp__chk_cb_buf(1);
@@ -700,7 +733,7 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
          remaining = length;
          while (remaining) {
             if (ws) bytes = stbsp__wide_char(encoded, &ws);
-            if (bytes <= 0 || bytes > remaining) {
+            if (bytes <= 0 || (size_t)bytes > remaining) {
                failed = 1;
                goto endfmt;
             }
@@ -727,7 +760,8 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
          char tail[8];
          char *s;
          char const *h;
-         stbsp__uint32 l, n, cs;
+         size_t l, n;
+         stbsp__uint32 cs;
          stbsp__uint64 n64;
 #ifndef STB_SPRINTF_NOFLOAT
          double fv;
@@ -741,8 +775,7 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
          if (s == 0)
             s = (char *)"null";
          // get the length, limited to desired precision
-         // always limit to ~0u chars since our counts are 32b
-         l = stbsp__strlen_limited(s, (pr >= 0) ? (stbsp__uint32)pr : ~0u);
+         l = stbsp__strlen_limited(s, (pr >= 0) ? (size_t)pr : (size_t)PTRDIFF_MAX);
          lead[0] = 0;
          tail[0] = 0;
          pr = 0;
@@ -846,7 +879,7 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
          if (n > 13)
             n = 13;
          if (pr > (stbsp__int32)n)
-            tz = pr - n;
+            tz = pr - (stbsp__int32)n;
          pr = 0;
          while (n--) {
             *s++ = h[(n64 >> 60) & 15];
@@ -908,14 +941,14 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
          // should we use %e
          if ((dp <= -4) || (dp > (stbsp__int32)n)) {
             if (pr > (stbsp__int32)l)
-               pr = l - 1;
+               pr = (stbsp__int32)l - 1;
             else if (pr)
                --pr; // when using %e, there is one digit before the decimal
             goto doexpfromg;
          }
          // this is the insane action to get the pr to match %g semantics for %f
          if (dp > 0) {
-            pr = (dp < (stbsp__int32)l) ? l - dp : 0;
+            pr = (dp < (stbsp__int32)l) ? (stbsp__int32)l - dp : 0;
          } else {
             pr = -dp + ((pr > (stbsp__int32)l) ? (stbsp__int32) l : pr);
          }
@@ -958,7 +991,7 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
          for (n = 1; n < l; n++)
             *s++ = sn[n];
          // trailing zeros
-         tz = pr - (l - 1);
+         tz = pr - ((stbsp__int32)l - 1);
          pr = 0;
          // dump expo
          tail[1] = h[0xe];
@@ -1033,7 +1066,7 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
             n = -dp;
             if ((stbsp__int32)n > pr)
                n = pr;
-            i = n;
+            i = (stbsp__int32)n;
             while (i) {
                if ((((stbsp__uintptr)s) & 3) == 0)
                   break;
@@ -1051,12 +1084,12 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
             }
             if ((stbsp__int32)(l + n) > pr)
                l = pr - n;
-            i = l;
+            i = (stbsp__int32)l;
             while (i) {
                *s++ = *sn++;
                --i;
             }
-            tz = pr - (n + l);
+            tz = pr - (stbsp__int32)(n + l);
             cs = 1 + (3 << 24); // how many tens did we write (for commas below)
          } else {
             cs = (fl & STBSP__TRIPLET_COMMA) ? ((600 - (stbsp__uint32)dp) % 3) : 0;
@@ -1127,7 +1160,7 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
                   *s++ = sn[n];
                   ++n;
                }
-               tz = pr - (l - dp);
+               tz = pr - ((stbsp__int32)l - dp);
             }
          }
          pr = 0;
@@ -1249,7 +1282,7 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
             }
          };
          // get the tens and the comma pos
-         cs = (stbsp__uint32)((num + STBSP__NUMSZ) - s) + ((((l >> 4) & 15)) << 24);
+         cs = (stbsp__uint32)((num + STBSP__NUMSZ) - s) + (((((stbsp__uint32)l >> 4) & 15)) << 24);
          // get the length that we copied
          l = (stbsp__uint32)((num + STBSP__NUMSZ) - s);
          // Precision may already have supplied the alternate octal zero.
@@ -1360,19 +1393,16 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
             *--s = '0';
             l = 1;
          }
-         cs = l + (3 << 24);
+         cs = (stbsp__uint32)l + (3 << 24);
          if (pr < 0)
             pr = 0;
 
       scopy:
          // get fw=leading/trailing space, pr=leading zeros
-         if (pr < (stbsp__int32)l)
-            pr = l;
-         n = pr + lead[0] + tail[0] + tz;
-         if (fw < (stbsp__int32)n)
-            fw = n;
-         fw -= n;
-         pr -= l;
+         n = pr > 0 && (size_t)pr > l ? (size_t)pr : l;
+         pr = (stbsp__int32)(n - l);
+         n += lead[0] + tail[0] + tz;
+         fw = (size_t)fw > n ? fw - (stbsp__int32)n : 0;
 
          // handle right justify and leading zeros
          if ((fl & STBSP__LEFTJUST) == 0) {
@@ -1473,7 +1503,7 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
          // copy the string
          n = l;
          while (n) {
-            stbsp__int32 i;
+            size_t i;
             stbsp__cb_buf_clamp(i, n);
             n -= i;
             #ifdef __GNUC__
@@ -1581,7 +1611,12 @@ endfmt:
       stbsp__flush_cb();
 
 done:
-   return failed ? -1 : tlen + (bf ? (int)(bf - buf) : 0);
+   if (failed) return -1;
+   {
+      size_t remaining = bf ? (size_t)(bf - buf) : 0;
+      if (remaining > (size_t)PTRDIFF_MAX - tlen) return -1;
+      return (ptrdiff_t)(tlen + remaining);
+   }
 }
 
 // cleanup
@@ -1607,9 +1642,9 @@ done:
 // ============================================================================
 //   wrapper functions
 
-STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(sprintf)(char *buf, char const *fmt, ...)
+STBSP__PUBLICDEF ptrdiff_t STB_SPRINTF_DECORATE(sprintf)(char *buf, char const *fmt, ...)
 {
-   int result;
+   ptrdiff_t result;
    va_list va;
    va_start(va, fmt);
    result = STB_SPRINTF_DECORATE(vsprintfcb)(0, 0, buf, fmt, va);
@@ -1619,12 +1654,12 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(sprintf)(char *buf, char const *fmt, .
 
 typedef struct stbsp__context {
    char *buf;
-   int count;
-   int length;
+   size_t count;
+   size_t length;
    char tmp[STB_SPRINTF_MIN];
 } stbsp__context;
 
-static char *stbsp__clamp_callback(const char *buf, void *user, int len)
+static char *stbsp__clamp_callback(const char *buf, void *user, size_t len)
 {
    stbsp__context *c = (stbsp__context *)user;
    c->length += len;
@@ -1652,7 +1687,7 @@ static char *stbsp__clamp_callback(const char *buf, void *user, int len)
    return (c->count >= STB_SPRINTF_MIN) ? c->buf : c->tmp; // go direct into buffer if you can
 }
 
-static char * stbsp__count_clamp_callback( const char * buf, void * user, int len )
+static char * stbsp__count_clamp_callback( const char * buf, void * user, size_t len )
 {
    stbsp__context * c = (stbsp__context*)user;
    (void) sizeof(buf);
@@ -1661,10 +1696,10 @@ static char * stbsp__count_clamp_callback( const char * buf, void * user, int le
    return c->tmp; // go direct into buffer if you can
 }
 
-STBSP__PUBLICDEF int STB_SPRINTF_DECORATE( vsnprintf )( char * buf, int count, char const * fmt, va_list va )
+STBSP__PUBLICDEF ptrdiff_t STB_SPRINTF_DECORATE( vsnprintf )( char * buf, size_t count, char const * fmt, va_list va )
 {
    stbsp__context c;
-   int result;
+   ptrdiff_t result;
 
    if ( count == 0 )
    {
@@ -1674,7 +1709,7 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE( vsnprintf )( char * buf, int count, c
    }
    else
    {
-      int l;
+      size_t l;
 
       c.buf = buf;
       c.count = count;
@@ -1683,18 +1718,18 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE( vsnprintf )( char * buf, int count, c
       result = STB_SPRINTF_DECORATE( vsprintfcb )( stbsp__clamp_callback, &c, stbsp__clamp_callback(0,&c,0), fmt, va );
 
       // zero-terminate
-      l = (int)( c.buf - buf );
+      l = (size_t)( c.buf - buf );
       if ( l >= count ) // should never be greater, only equal (or less) than count
          l = count - 1;
       buf[l] = 0;
    }
 
-   return result < 0 ? result : c.length;
+   return result < 0 ? result : (ptrdiff_t)c.length;
 }
 
-STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(snprintf)(char *buf, int count, char const *fmt, ...)
+STBSP__PUBLICDEF ptrdiff_t STB_SPRINTF_DECORATE(snprintf)(char *buf, size_t count, char const *fmt, ...)
 {
-   int result;
+   ptrdiff_t result;
    va_list va;
    va_start(va, fmt);
 
@@ -1704,7 +1739,7 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(snprintf)(char *buf, int count, char c
    return result;
 }
 
-STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintf)(char *buf, char const *fmt, va_list va)
+STBSP__PUBLICDEF ptrdiff_t STB_SPRINTF_DECORATE(vsprintf)(char *buf, char const *fmt, va_list va)
 {
    return STB_SPRINTF_DECORATE(vsprintfcb)(0, 0, buf, fmt, va);
 }
@@ -1948,7 +1983,7 @@ static void stbsp__raise_to_power10(double *ohi, double *olo, double d, stbsp__i
 //   decimal point in decimal_pos.  +/-INF and NAN are specified by special values
 //   returned in the decimal_pos parameter.
 // frac_digits is absolute normally, but if you want from first significant digits (got %g and %e), or in 0x80000000
-static stbsp__int32 stbsp__real_to_str(char const **start, stbsp__uint32 *len, char *out, stbsp__int32 *decimal_pos, double value, stbsp__uint32 frac_digits)
+static stbsp__int32 stbsp__real_to_str(char const **start, size_t *len, char *out, stbsp__int32 *decimal_pos, double value, stbsp__uint32 frac_digits)
 {
    double d;
    stbsp__int64 bits = 0;

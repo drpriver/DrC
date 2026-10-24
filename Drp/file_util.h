@@ -156,7 +156,7 @@ read_bin_file_handle(FileUtilHandle fd, Allocator a, ByteBuffer* outbuff){
     enum {CHUNK_SIZE = 65536};
     size_t capacity = CHUNK_SIZE;
     size_t length = 0;
-    char* buffer = Allocator_alloc(a, capacity);
+    char* buffer = Allocator_alloc(a, capacity, 1, 1);
     if(!buffer)
         return (FileError){.errored=FILE_RESULT_ALLOC_FAILURE};
     FileError result = {0};
@@ -167,7 +167,7 @@ read_bin_file_handle(FileUtilHandle fd, Allocator a, ByteBuffer* outbuff){
                 goto errored;
             }
             size_t new_capacity = capacity * 2;
-            char* new_buffer = Allocator_realloc(a, buffer, capacity, new_capacity);
+            char* new_buffer = Allocator_realloc(a, buffer, capacity, new_capacity, 1, 1);
             if(!new_buffer){
                 result.errored = FILE_RESULT_ALLOC_FAILURE;
                 goto errored;
@@ -208,12 +208,12 @@ read_bin_file_handle(FileUtilHandle fd, Allocator a, ByteBuffer* outbuff){
         #endif
     }
     if(!length){
-        Allocator_free(a, buffer, capacity);
+        Allocator_free(a, buffer, capacity, 1, 1);
         *outbuff = (ByteBuffer){0};
         return result;
     }
     if(length != capacity){
-        char* new_buffer = Allocator_realloc(a, buffer, capacity, length);
+        char* new_buffer = Allocator_realloc(a, buffer, capacity, length, 1, 1);
         if(!new_buffer){
             result.errored = FILE_RESULT_ALLOC_FAILURE;
             goto errored;
@@ -223,7 +223,7 @@ read_bin_file_handle(FileUtilHandle fd, Allocator a, ByteBuffer* outbuff){
     *outbuff = (ByteBuffer){length, buffer};
     return result;
 errored:
-    Allocator_free(a, buffer, capacity);
+    Allocator_free(a, buffer, capacity, 1, 1);
     return result;
 }
 #endif
@@ -265,7 +265,7 @@ read_file(const char* filepath, Allocator a, CStringView* outstr){
         fclose(fp);
         return size_e;
     }
-    char* text = Allocator_alloc(a, nbytes+1);
+    char* text = Allocator_alloc_extra(a, nbytes, sizeof *text, sizeof *text, 1);
     if(!text){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         goto finally;
@@ -274,7 +274,7 @@ read_file(const char* filepath, Allocator a, CStringView* outstr){
     if(fread_result != nbytes){
         result.errored = FILE_ERROR;
         result.native_error = errno;
-        Allocator_free(a, text, nbytes+1);
+        Allocator_free_extra(a, text, nbytes, sizeof *text, sizeof *text, 1);
         goto finally;
     }
     text[nbytes] = '\0';
@@ -298,7 +298,7 @@ read_bin_file(const char* filepath, Allocator a, ByteBuffer* outbuff){
         result = size_e;
         goto finally;
     }
-    void* data = Allocator_alloc(a, nbytes);
+    void* data = Allocator_alloc(a, nbytes, 1, 1);
     if(!data){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         goto finally;
@@ -306,7 +306,7 @@ read_bin_file(const char* filepath, Allocator a, ByteBuffer* outbuff){
     assert(data);
     size_t fread_result = fread(data, 1, nbytes, fp);
     if(fread_result != nbytes){
-        Allocator_free(a, data, nbytes);
+        Allocator_free(a, data, nbytes, 1, 1);
         result.errored = FILE_ERROR;
         result.native_error = errno;
         goto finally;
@@ -326,7 +326,7 @@ read_file_handle(FILE* fp, Allocator a, CStringView* outstr){
     enum {CHUNK_SIZE = 65536};
     size_t capacity = CHUNK_SIZE;
     size_t length = 0;
-    char* buffer = Allocator_alloc(a, capacity);
+    char* buffer = Allocator_alloc(a, capacity, 1, 1);
     if(!buffer)
         return (FileError){.errored=FILE_RESULT_ALLOC_FAILURE};
     for(;;){
@@ -336,7 +336,7 @@ read_file_handle(FILE* fp, Allocator a, CStringView* outstr){
                 goto fail;
             }
             size_t new_capacity = capacity * 2;
-            char* new_buffer = Allocator_realloc(a, buffer, capacity, new_capacity);
+            char* new_buffer = Allocator_realloc(a, buffer, capacity, new_capacity, 1, 1);
             if(!new_buffer){
                 result.errored = FILE_RESULT_ALLOC_FAILURE;
                 goto fail;
@@ -352,7 +352,7 @@ read_file_handle(FILE* fp, Allocator a, CStringView* outstr){
         }
         if(feof(fp)) break;
     }
-    char* new_buffer = Allocator_realloc(a, buffer, capacity, length+1);
+    char* new_buffer = Allocator_realloc(a, buffer, capacity, length+1, 1, 1);
     if(!new_buffer){
         result = (FileError){.errored=FILE_RESULT_ALLOC_FAILURE};
         goto fail;
@@ -361,7 +361,7 @@ read_file_handle(FILE* fp, Allocator a, CStringView* outstr){
     *outstr = (CStringView){length, new_buffer};
     return result;
     fail:
-    Allocator_free(a, buffer, capacity);
+    Allocator_free(a, buffer, capacity, 1, 1);
     return result;
 }
 
@@ -431,14 +431,14 @@ read_file(const char* filepath, Allocator a, CStringView* outstr){
         result = size_e;
         goto finally;
     }
-    char* text = Allocator_alloc(a, nbytes+1);
+    char* text = Allocator_alloc_extra(a, nbytes, sizeof *text, sizeof *text, 1);
     if(!text){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         goto finally;
     }
     ssize_t read_result = read(fd, text, nbytes);
     if((size_t)read_result != nbytes){
-        Allocator_free(a, text, nbytes+1);
+        Allocator_free_extra(a, text, nbytes, sizeof *text, sizeof *text, 1);
         result.errored = FILE_ERROR;
         result.native_error = errno;
         goto finally;
@@ -470,7 +470,7 @@ read_bin_file(const char* filepath, Allocator a, ByteBuffer* outbuff){
         result = size_e;
         goto finally;
     }
-    void* data = Allocator_alloc(a, nbytes);
+    void* data = Allocator_alloc(a, nbytes, 1, 1);
     if(!data){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         goto finally;
@@ -478,7 +478,7 @@ read_bin_file(const char* filepath, Allocator a, ByteBuffer* outbuff){
     assert(data);
     ssize_t read_result = read(fd, data, nbytes);
     if(read_result != (ssize_t)nbytes){
-        Allocator_free(a, data, nbytes);
+        Allocator_free(a, data, nbytes, 1, 1);
         result.errored = FILE_ERROR;
         result.native_error = errno;
         goto finally;
@@ -499,7 +499,7 @@ read_file_handle(FileUtilHandle fd, Allocator a, CStringView* outstr){
     FileError size_e = file_size_from_handle(fd, &nbytes);
     if(!size_e.errored){
         // Regular file with known size
-        char* text = Allocator_alloc(a, nbytes+1);
+        char* text = Allocator_alloc_extra(a, nbytes, sizeof *text, sizeof *text, 1);
         if(!text){
             result.errored = FILE_RESULT_ALLOC_FAILURE;
             return result;
@@ -509,7 +509,7 @@ read_file_handle(FileUtilHandle fd, Allocator a, CStringView* outstr){
             ssize_t nread = read(fd, text + total_read, nbytes - total_read);
             if(nread < 0){
                 if(errno == EINTR) continue; // Retry on interrupt
-                Allocator_free(a, text, nbytes+1);
+                Allocator_free_extra(a, text, nbytes, sizeof *text, sizeof *text, 1);
                 result.errored = FILE_ERROR;
                 result.native_error = errno;
                 return result;
@@ -518,9 +518,9 @@ read_file_handle(FileUtilHandle fd, Allocator a, CStringView* outstr){
             total_read += nread;
         }
         if(total_read != nbytes){
-            char* new_text = Allocator_realloc(a, text, nbytes+1, total_read+1);
+            char* new_text = Allocator_realloc_extra(a, text, nbytes, total_read, sizeof *text, sizeof *text, 1);
             if(!new_text){
-                Allocator_free(a, text, nbytes+1);
+                Allocator_free_extra(a, text, nbytes, sizeof *text, sizeof *text, 1);
                 return (FileError){.errored=FILE_RESULT_ALLOC_FAILURE};
             }
             text = new_text;
@@ -532,7 +532,7 @@ read_file_handle(FileUtilHandle fd, Allocator a, CStringView* outstr){
     enum {CHUNK_SIZE = 65536};
     size_t capacity = CHUNK_SIZE;
     size_t length = 0;
-    char* buffer = Allocator_alloc(a, capacity);
+    char* buffer = Allocator_alloc(a, capacity, 1, 1);
     if(!buffer){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         return result;
@@ -540,9 +540,9 @@ read_file_handle(FileUtilHandle fd, Allocator a, CStringView* outstr){
     for(;;){
         if(length + CHUNK_SIZE > capacity){
             size_t new_capacity = capacity * 2;
-            char* new_buffer = Allocator_realloc(a, buffer, capacity, new_capacity);
+            char* new_buffer = Allocator_realloc(a, buffer, capacity, new_capacity, 1, 1);
             if(!new_buffer){
-                Allocator_free(a, buffer, capacity);
+                Allocator_free(a, buffer, capacity, 1, 1);
                 result.errored = FILE_RESULT_ALLOC_FAILURE;
                 return result;
             }
@@ -552,7 +552,7 @@ read_file_handle(FileUtilHandle fd, Allocator a, CStringView* outstr){
         ssize_t nread = read(fd, buffer + length, CHUNK_SIZE);
         if(nread < 0){
             if(errno == EINTR) continue; // Retry on interrupt
-            Allocator_free(a, buffer, capacity);
+            Allocator_free(a, buffer, capacity, 1, 1);
             result.errored = FILE_ERROR;
             result.native_error = errno;
             return result;
@@ -561,9 +561,9 @@ read_file_handle(FileUtilHandle fd, Allocator a, CStringView* outstr){
         length += nread;
     }
     // shrink to fit
-    char* new_buffer = Allocator_realloc(a, buffer, capacity, length+1);
+    char* new_buffer = Allocator_realloc(a, buffer, capacity, length+1, 1, 1);
     if(!new_buffer){
-        Allocator_free(a, buffer, capacity);
+        Allocator_free(a, buffer, capacity, 1, 1);
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         return result;
     }
@@ -659,14 +659,14 @@ read_file(const char* filepath, Allocator a, CStringView* outstr){
         goto finally;
     }
     size_t nbytes = size.QuadPart;
-    char* text = Allocator_alloc(a, nbytes+1);
+    char* text = Allocator_alloc_extra(a, nbytes, sizeof *text, sizeof *text, 1);
     if(!text){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         goto finally;
     }
     result = file_util_read_exact(handle, text, nbytes);
     if(result.errored){
-        Allocator_free(a, text, nbytes+1);
+        Allocator_free_extra(a, text, nbytes, sizeof *text, sizeof *text, 1);
         goto finally;
     }
     text[nbytes] = '\0';
@@ -702,14 +702,14 @@ read_file_w(const wchar_t* filepath, Allocator a, CStringView* outstr){
         goto finally;
     }
     size_t nbytes = size.QuadPart;
-    char* text = Allocator_alloc(a, nbytes+1);
+    char* text = Allocator_alloc_extra(a, nbytes, sizeof *text, sizeof *text, 1);
     if(!text){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         goto finally;
     }
     result = file_util_read_exact(handle, text, nbytes);
     if(result.errored){
-        Allocator_free(a, text, nbytes+1);
+        Allocator_free_extra(a, text, nbytes, sizeof *text, sizeof *text, 1);
         goto finally;
     }
     text[nbytes] = '\0';
@@ -745,14 +745,14 @@ read_bin_file(const char* filepath, Allocator a, ByteBuffer* outbuff){
         goto finally;
     }
     size_t nbytes = size.QuadPart;
-    void* data = Allocator_alloc(a, nbytes);
+    void* data = Allocator_alloc(a, nbytes, 1, 1);
     if(!data){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         goto finally;
     }
     result = file_util_read_exact(handle, data, nbytes);
     if(result.errored){
-        Allocator_free(a, data, nbytes);
+        Allocator_free(a, data, nbytes, 1, 1);
         goto finally;
     }
     *outbuff = (ByteBuffer){nbytes, data};
@@ -787,14 +787,14 @@ read_bin_file_w(const wchar_t* filepath, Allocator a, ByteBuffer* outbuff){
         goto finally;
     }
     size_t nbytes = size.QuadPart;
-    void* data = Allocator_alloc(a, nbytes);
+    void* data = Allocator_alloc(a, nbytes, 1, 1);
     if(!data){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         goto finally;
     }
     result = file_util_read_exact(handle, data, nbytes);
     if(result.errored){
-        Allocator_free(a, data, nbytes);
+        Allocator_free(a, data, nbytes, 1, 1);
         goto finally;
     }
     *outbuff = (ByteBuffer){nbytes, data};
@@ -813,7 +813,7 @@ read_file_handle(FileUtilHandle handle, Allocator a, CStringView* outstr){
     if(size_success){
         // Regular file with known size
         size_t nbytes = size.QuadPart;
-        char* text = Allocator_alloc(a, nbytes+1);
+        char* text = Allocator_alloc_extra(a, nbytes, sizeof *text, sizeof *text, 1);
         if(!text){
             result.errored = FILE_RESULT_ALLOC_FAILURE;
             return result;
@@ -825,7 +825,7 @@ read_file_handle(FileUtilHandle handle, Allocator a, CStringView* outstr){
             DWORD nread;
             BOOL read_success = ReadFile(handle, text + total_read, (DWORD)to_read, &nread, NULL);
             if(!read_success){
-                Allocator_free(a, text, nbytes+1);
+                Allocator_free_extra(a, text, nbytes, sizeof *text, sizeof *text, 1);
                 result.errored = FILE_ERROR;
                 result.native_error = GetLastError();
                 return result;
@@ -834,9 +834,9 @@ read_file_handle(FileUtilHandle handle, Allocator a, CStringView* outstr){
             total_read += nread;
         }
         if(total_read != nbytes){
-            char* new_text = Allocator_realloc(a, text, nbytes+1, total_read+1);
+            char* new_text = Allocator_realloc_extra(a, text, nbytes, total_read, sizeof *text, sizeof *text, 1);
             if(!new_text){
-                Allocator_free(a, text, nbytes+1);
+                Allocator_free_extra(a, text, nbytes, sizeof *text, sizeof *text, 1);
                 return (FileError){.errored=FILE_RESULT_ALLOC_FAILURE};
             }
             text = new_text;
@@ -848,7 +848,7 @@ read_file_handle(FileUtilHandle handle, Allocator a, CStringView* outstr){
     enum {CHUNK_SIZE = 65536}; // 64KB chunks
     size_t capacity = CHUNK_SIZE;
     size_t length = 0;
-    char* buffer = Allocator_alloc(a, capacity);
+    char* buffer = Allocator_alloc(a, capacity, 1, 1);
     if(!buffer){
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         return result;
@@ -856,9 +856,9 @@ read_file_handle(FileUtilHandle handle, Allocator a, CStringView* outstr){
     for(;;){
         if(length + CHUNK_SIZE > capacity){
             size_t new_capacity = capacity * 2;
-            char* new_buffer = Allocator_realloc(a, buffer, capacity, new_capacity);
+            char* new_buffer = Allocator_realloc(a, buffer, capacity, new_capacity, 1, 1);
             if(!new_buffer){
-                Allocator_free(a, buffer, capacity);
+                Allocator_free(a, buffer, capacity, 1, 1);
                 result.errored = FILE_RESULT_ALLOC_FAILURE;
                 return result;
             }
@@ -872,7 +872,7 @@ read_file_handle(FileUtilHandle handle, Allocator a, CStringView* outstr){
             // end-of-stream for a pipe is ERROR_BROKEN_PIPE,
             // which is not actually an error.
             if(e == ERROR_BROKEN_PIPE) break;
-            Allocator_free(a, buffer, capacity);
+            Allocator_free(a, buffer, capacity, 1, 1);
             result.errored = FILE_ERROR;
             result.native_error = e;
             return result;
@@ -881,9 +881,9 @@ read_file_handle(FileUtilHandle handle, Allocator a, CStringView* outstr){
         length += nread;
     }
     // shrink to fit
-    char* new_buffer = Allocator_realloc(a, buffer, capacity, length+1);
+    char* new_buffer = Allocator_realloc(a, buffer, capacity, length+1, 1, 1);
     if(!new_buffer){
-        Allocator_free(a, buffer, capacity);
+        Allocator_free(a, buffer, capacity, 1, 1);
         result.errored = FILE_RESULT_ALLOC_FAILURE;
         return result;
     }

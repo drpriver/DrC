@@ -461,7 +461,7 @@ int main(int argc, char** argv, char** envp){
         filename = SV("(stdin)");
         fc_write_path(fc, filename.text, filename.length);
         err = fc_cache_file(fc, CSV_to_SV(txt));
-        Allocator_free(MALLOCATOR, txt.text, txt.length+1);
+        Allocator_free(MALLOCATOR, txt.text, txt.length+1, 1, 1);
         if(err) goto stringify_error;
     }
     err = cpp_cli_defines(&cc_interp.parser.cpp);

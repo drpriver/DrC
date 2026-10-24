@@ -45,11 +45,11 @@ static inline
 void
 ci_lower_deps_cleanup(CiLowerDeps* deps, Allocator al){
     if(deps->vars.cap)
-        Allocator_free(al, deps->vars.data, PM_alloc_size(deps->vars.cap));
+        Allocator_free(al, deps->vars.data, PM_alloc_size(deps->vars.cap), 1, _Alignof(PointerMapItem));
     if(deps->funcs.cap)
-        Allocator_free(al, deps->funcs.data, PM_alloc_size(deps->funcs.cap));
+        Allocator_free(al, deps->funcs.data, PM_alloc_size(deps->funcs.cap), 1, _Alignof(PointerMapItem));
     if(deps->templates.cap)
-        Allocator_free(al, deps->templates.data, PM_alloc_size(deps->templates.cap));
+        Allocator_free(al, deps->templates.data, PM_alloc_size(deps->templates.cap), 1, _Alignof(PointerMapItem));
     *deps = (CiLowerDeps){0};
 }
 

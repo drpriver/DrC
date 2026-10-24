@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include "ckdint.h"
 
 #ifndef DRJSON_NO_STDIO
 #include <stdio.h>
@@ -187,29 +188,27 @@ struct DrJsonContext {
 
 static inline
 void*_Nullable
-drj_alloc(const DrJsonContext* ctx, size_t size){
-    return Allocator_alloc(ctx->allocator, size);
+drj_alloc(const DrJsonContext* ctx, size_t count, size_t size, size_t alignment){
+    return Allocator_alloc(ctx->allocator, count, size, alignment);
 }
 
 static inline
 void
-drj_free(const DrJsonContext* ctx, const void*_Nullable p, size_t size){
-    Allocator_free(ctx->allocator, p, size);
+drj_free(const DrJsonContext* ctx, const void*_Nullable p, size_t count, size_t size, size_t alignment){
+    Allocator_free(ctx->allocator, p, count, size, alignment);
 }
 
 static inline
 void*_Nullable
-drj_realloc(const DrJsonContext* ctx, void*_Nullable p, size_t old_size, size_t new_size){
-    if(!old_size || !p) return drj_alloc(ctx, new_size);
-    if(!new_size) { drj_free(ctx, p, old_size); return NULL;}
-    return Allocator_realloc(ctx->allocator, p, old_size, new_size);
+drj_realloc(const DrJsonContext* ctx, void*_Nullable p, size_t old_count, size_t count, size_t size, size_t alignment){
+    return Allocator_realloc(ctx->allocator, p, old_count, count, size, alignment);
 }
 
 
 DRJSON_API
 DrJsonContext*_Nullable
 drjson_create_ctx(Allocator allocator, AtomTable* atom_table){
-    DrJsonContext* ctx = Allocator_zalloc(allocator, sizeof *ctx);
+    DrJsonContext* ctx = Allocator_zalloc(allocator, 1, sizeof *ctx, _Alignof(DrJsonContext));
     if(!ctx) return NULL;
     ctx->allocator = allocator;
     ctx->atom_table = atom_table;
@@ -264,7 +263,7 @@ alloc_obj(DrJsonContext* ctx){
     }
     if(ctx->objects.capacity <= ctx->objects.count){
         size_t new_cap = ctx->objects.capacity? ctx->objects.capacity*2:8;
-        DrJsonObject* p = drj_realloc(ctx, ctx->objects.data, sizeof(DrJsonObject)*ctx->objects.capacity, sizeof(DrJsonObject)*new_cap);
+        DrJsonObject* p = drj_realloc(ctx, ctx->objects.data, ctx->objects.capacity, new_cap, sizeof *ctx->objects.data, _Alignof(DrJsonObject));
         if(!p)
             return -1;
         ctx->objects.data = p;
@@ -297,7 +296,7 @@ alloc_array(DrJsonContext* ctx){
     }
     if(ctx->arrays.capacity <= ctx->arrays.count){
         size_t new_cap = ctx->arrays.capacity? ctx->arrays.capacity*2:8;
-        DrJsonArray* p = ctx->arrays.data? drj_realloc(ctx, ctx->arrays.data, sizeof(DrJsonArray)*ctx->arrays.capacity, sizeof(DrJsonArray)*new_cap) : drj_alloc(ctx, sizeof(DrJsonArray)*new_cap);
+        DrJsonArray* p = drj_realloc(ctx, ctx->arrays.data, ctx->arrays.capacity, new_cap, sizeof *ctx->arrays.data, _Alignof(DrJsonArray));
         if(!p)
             return -1;
         ctx->arrays.data = p;
@@ -434,7 +433,7 @@ drj_make_atom_val(DrJsonParseContext* ctx, const char* str, size_t len){
     const char* back = memchr(str, '\\', len);
     Atom atom;
     if(back){
-        char* tmp = Allocator_alloc(ctx->ctx->allocator, len);
+        char* tmp = Allocator_alloc(ctx->ctx->allocator, len, 1, 1);
         char* o = tmp;
         const char* p = str;
         const char* end = str + len;
@@ -492,7 +491,7 @@ drj_make_atom_val(DrJsonParseContext* ctx, const char* str, size_t len){
             }
         }
         atom = AT_atomize(ctx->ctx->atom_table, tmp, o-tmp);
-        Allocator_free(ctx->ctx->allocator, tmp, len);
+        Allocator_free(ctx->ctx->allocator, tmp, len, 1, 1);
         if(!atom) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "failed to make atom");
         return (DrJsonValue){.string={.kind = DRJSON_STRING,.needs_escape=1}, .atom=atom};
     }
@@ -952,7 +951,7 @@ drjson_array_push_item(const DrJsonContext* ctx, DrJsonValue a, DrJsonValue item
         enum {ARRAY_MAX = 0x1fffffff};
         size_t new_cap = old_cap?old_cap*2:4;
         if(new_cap > ARRAY_MAX) return 1;
-        DrJsonValue* new_items = drj_realloc(ctx, array->array_items, old_cap*sizeof(*new_items), new_cap*sizeof(*new_items));
+        DrJsonValue* new_items = drj_realloc(ctx, array->array_items, old_cap, new_cap, sizeof *array->array_items, _Alignof(DrJsonValue));
         if(!new_items) return 1;
         array->array_items = new_items;
         array->capacity = (uint32_t)new_cap;
@@ -974,7 +973,7 @@ drjson_array_insert_item(const DrJsonContext* ctx, DrJsonValue a, size_t idx, Dr
         enum {ARRAY_MAX = 0x1fffffff};
         size_t new_cap = old_cap?old_cap*2:4;
         if(new_cap > ARRAY_MAX) return 1;
-        DrJsonValue* new_items = drj_realloc(ctx, array->array_items, old_cap*sizeof(*new_items), new_cap*sizeof(*new_items));
+        DrJsonValue* new_items = drj_realloc(ctx, array->array_items, old_cap, new_cap, sizeof *array->array_items, _Alignof(DrJsonValue));
         if(!new_items) return 1;
         array->array_items = new_items;
         array->capacity = (uint32_t)new_cap;
@@ -1055,7 +1054,7 @@ drjson_object_set_item_internal(DrJsonContext* ctx, DrJsonValue o, Atom atom, Dr
         if(!object->capacity){
             size_t new_cap = 4;
             size_t size = drjson_size_for_object_of_length(new_cap);
-            void* p = drj_alloc(ctx, size);
+            void* p = drj_alloc(ctx, size, 1, _Alignof(DrJsonObjectPair));
             if(!p) return 1;
             drj_memset(drj_obj_get_idxes(p, new_cap), 0xff, 2*new_cap*sizeof(DrJsonHashIndex));
             object->object_items = p;
@@ -1065,7 +1064,7 @@ drjson_object_set_item_internal(DrJsonContext* ctx, DrJsonValue o, Atom atom, Dr
             size_t old_cap = object->capacity;
             size_t new_cap = old_cap * 2;
             if(new_cap > OBJECT_MAX) return 1;
-            void* p = drj_realloc(ctx, object->object_items, drjson_size_for_object_of_length(old_cap), drjson_size_for_object_of_length(new_cap));
+            void* p = drj_realloc(ctx, object->object_items, drjson_size_for_object_of_length(old_cap), drjson_size_for_object_of_length(new_cap), 1, _Alignof(DrJsonObjectPair));
             if(!p) return 1;
             DrJsonHashIndex* idxes; DrJsonObjectPair* pairs;
             drj_get_obj_ptrs(p, new_cap, &idxes, &pairs);
@@ -2200,7 +2199,7 @@ drjson_escape_string2(Allocator allocator, const char* restrict unescaped, size_
     // be escaped are rare).
     // We fix that up if we actually hit them.
     size_t allocated_size = length * 2;
-    char* s = Allocator_alloc(allocator, allocated_size);
+    char* s = Allocator_alloc(allocator, allocated_size, 1, 1);
     if(!s) return 1;
     if(i) drj_memcpy(s, unescaped, i);
     size_t cursor = i;
@@ -2224,9 +2223,9 @@ drjson_escape_string2(Allocator allocator, const char* restrict unescaped, size_
                 // These are rare, so only reserve more space when we actually hit them.
                 {
                     size_t realloc_size = allocated_size+4;
-                    char* news = Allocator_realloc(allocator, s, allocated_size, realloc_size);
+                    char* news = Allocator_realloc(allocator, s, allocated_size, realloc_size, 1, 1);
                     if(!news){
-                        Allocator_free(allocator, s, allocated_size);
+                        Allocator_free(allocator, s, allocated_size, 1, 1);
                         return 1;
                     }
                     allocated_size = realloc_size;
@@ -2275,9 +2274,9 @@ drjson_escape_string2(Allocator allocator, const char* restrict unescaped, size_
         }
     }
     // shrink to the size we actually used
-    char* news = Allocator_realloc(allocator, s, allocated_size, cursor);
+    char* news = Allocator_realloc(allocator, s, allocated_size, cursor, 1, 1);
     if(!news){
-        Allocator_free(allocator, s, allocated_size);
+        Allocator_free(allocator, s, allocated_size, 1, 1);
         return 1;
     }
     *outstring = news;
@@ -2311,7 +2310,7 @@ drjson_escape_string(DrJsonContext* ctx, const char* restrict unescaped, size_t 
         // We could do that.
         err = drj_atomize_str(&ctx->atoms, ctx->allocator, tmp, (uint32_t)tmp_length, copy, outatom);
     }
-    drj_free(ctx, tmp, tmp_length);
+    drj_free(ctx, tmp, tmp_length, 1, 1);
     return err;
 }
 #endif
@@ -2359,32 +2358,32 @@ drjson_ctx_free_all(DrJsonContext* ctx){
         DrJsonObject* odata = ctx->objects.data;
         DrJsonObject* o = &odata[i];
         if(o->capacity)
-            drj_free(ctx, o->object_items, drjson_size_for_object_of_length(o->capacity));
+            drj_free(ctx, o->object_items, drjson_size_for_object_of_length(o->capacity), 1, _Alignof(DrJsonObjectPair));
     }
     // Then the objects array
     if(ctx->objects.data)
-        drj_free(ctx, ctx->objects.data, ctx->objects.capacity*sizeof (DrJsonObject));
+        drj_free(ctx, ctx->objects.data, ctx->objects.capacity, sizeof *ctx->objects.data, _Alignof(DrJsonObject));
     // Free interned objects
     if(ctx->interned_objects.capacity)
-        drj_free(ctx, ctx->interned_objects.data, ctx->interned_objects.capacity*sizeof(uint32_t)*4);
+        drj_free(ctx, ctx->interned_objects.data, ctx->interned_objects.capacity * sizeof ctx->interned_objects.data->idx * 4, 1, _Alignof(DrjHashIdx));
 
     // Free each array
     for(size_t i = 0; i < ctx->arrays.count; i++){
         DrJsonArray* adata = ctx->arrays.data;
         DrJsonArray* a = &adata[i];
         if(a->capacity)
-            drj_free(ctx, a->array_items,a->capacity*sizeof *a->array_items);
+            drj_free(ctx, a->array_items, a->capacity, sizeof *a->array_items, _Alignof(DrJsonValue));
     }
     // Free arrays array
     if(ctx->arrays.data)
-        drj_free(ctx, ctx->arrays.data, ctx->arrays.capacity*sizeof(DrJsonArray));
+        drj_free(ctx, ctx->arrays.data, ctx->arrays.capacity, sizeof *ctx->arrays.data, _Alignof(DrJsonArray));
 
     // Free interned arrays
     if(ctx->interned_arrays.capacity)
-        drj_free(ctx, ctx->interned_arrays.data, ctx->interned_arrays.capacity*sizeof(uint32_t)*4);
+        drj_free(ctx, ctx->interned_arrays.data, ctx->interned_arrays.capacity * sizeof ctx->interned_arrays.data->idx * 4, 1, _Alignof(DrjHashIdx));
 
     #ifndef DRJ_DONT_FREE_CTX
-        drj_free(ctx, ctx, sizeof *ctx);
+        drj_free(ctx, ctx, 1, sizeof *ctx, _Alignof(DrJsonContext));
     #endif
 }
 
@@ -2563,7 +2562,7 @@ drj_free_obj(DrJsonContext* ctx, DrJsonObject* o){
         }
     }
     if(o->capacity){
-        drj_free(ctx, o->object_items, drjson_size_for_object_of_length(o->capacity));
+        drj_free(ctx, o->object_items, drjson_size_for_object_of_length(o->capacity), 1, _Alignof(DrJsonObjectPair));
         o->object_items = NULL;
         o->capacity = 0;
     }
@@ -2620,7 +2619,7 @@ drj_free_array(DrJsonContext* ctx, DrJsonArray* a){
         }
     }
     if(a->capacity){
-        drj_free(ctx, a->array_items, a->capacity*sizeof *a->array_items);
+        drj_free(ctx, a->array_items, a->capacity, sizeof *a->array_items, _Alignof(DrJsonValue));
         a->array_items = NULL;
         a->capacity = 0;
     }
@@ -2688,7 +2687,7 @@ drj_dupe_array_ronly(DrJsonContext* ctx, DrJsonValue src_val){
     DrJsonArray* src = &ctx->arrays.data[src_val.array_idx];
     DrJsonArray* dst = &ctx->arrays.data[new_idx];
     uint32_t cap = src->count;
-    DrJsonValue* items = drj_alloc(ctx, cap * sizeof *items);
+    DrJsonValue* items = drj_alloc(ctx, cap, sizeof *items, _Alignof(DrJsonValue));
     if(!items) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "oom when duping array");
     *dst = (DrJsonArray){
         .count = cap,
@@ -2717,10 +2716,16 @@ drj_intern_array(DrJsonContext* ctx, DrJsonValue val, _Bool consume){
     // assume we're going to insert for purpose of checking capacity.
     if(ctx->interned_arrays.count == ctx->interned_arrays.capacity){
         size_t old_cap = ctx->interned_arrays.capacity;
-        size_t new_cap = old_cap?old_cap*2:16;
+        uint32_t new_cap = 16, index_count;
+        if(old_cap > UINT32_MAX
+        || (old_cap && mul_overflow((uint32_t)old_cap, 2u, &new_cap))
+        || mul_overflow(new_cap, 2u, &index_count))
+            return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Interned array capacity overflow");
         size_t old_size = sizeof(DrjHashIdx)*old_cap + sizeof(uint32_t)*2*old_cap;
-        size_t new_size = sizeof(DrjHashIdx)*new_cap + sizeof(uint32_t)*2*new_cap;
-        void* data = drj_realloc(ctx, ctx->interned_arrays.data, old_size, new_size);
+        size_t new_size;
+        if(mul_overflow((size_t)new_cap, sizeof(DrjHashIdx) + 2*sizeof(uint32_t), &new_size))
+            return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Interned array allocation size overflow");
+        void* data = drj_realloc(ctx, ctx->interned_arrays.data, old_size, new_size, 1, _Alignof(DrjHashIdx));
         if(!data) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocate while interning array");
         DrjHashIdx* hi = data;
         uint32_t* idxes = (uint32_t*)((char*)data+sizeof(DrjHashIdx)*new_cap);
@@ -2789,7 +2794,7 @@ drj_dupe_object_ronly(DrJsonContext* ctx, DrJsonValue src_val){
     DrJsonObject* src = &ctx->objects.data[src_val.object_idx];
     DrJsonObject* dst = &ctx->objects.data[new_idx];
     uint32_t cap = src->count;
-    void* items = drj_alloc(ctx, drjson_size_for_object_of_length(cap));
+    void* items = drj_alloc(ctx, drjson_size_for_object_of_length(cap), 1, _Alignof(DrJsonObjectPair));
     if(!items) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "oom when duping object");
     *dst = (DrJsonObject){
         .count = cap,
@@ -2831,10 +2836,16 @@ drj_intern_object(DrJsonContext* ctx, DrJsonValue val, _Bool consume){
     // assume we're going to insert for purpose of checking capacity.
     if(ctx->interned_objects.count == ctx->interned_objects.capacity){
         size_t old_cap = ctx->interned_objects.capacity;
-        size_t new_cap = old_cap?old_cap*2:16;
+        uint32_t new_cap = 16, index_count;
+        if(old_cap > UINT32_MAX 
+        || (old_cap && mul_overflow((uint32_t)old_cap, 2u, &new_cap)) 
+        || mul_overflow(new_cap, 2u, &index_count))
+            return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Interned object capacity overflow");
         size_t old_size = sizeof(DrjHashIdx)*old_cap + sizeof(uint32_t)*2*old_cap;
-        size_t new_size = sizeof(DrjHashIdx)*new_cap + sizeof(uint32_t)*2*new_cap;
-        void* data = drj_realloc(ctx, ctx->interned_objects.data, old_size, new_size);
+        size_t new_size;
+        if(mul_overflow((size_t)new_cap, sizeof(DrjHashIdx) + 2*sizeof(uint32_t), &new_size))
+            return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Interned object allocation size overflow");
+        void* data = drj_realloc(ctx, ctx->interned_objects.data, old_size, new_size, 1, _Alignof(DrjHashIdx));
         if(!data) return drjson_make_error(DRJSON_ERROR_ALLOC_FAILURE, "Failed to allocate while interning object");
         DrjHashIdx* hi = data;
         uint32_t* idxes = (uint32_t*)((char*)data+sizeof(DrjHashIdx)*new_cap);

@@ -235,7 +235,12 @@ cpp_expand_string_expect_error(StringView txt, StringView* err_out){
     int result = err ? 0 : 1; // 0 = success (error was expected), 1 = failure (no error)
     if(log_sb.cursor){
         StringView sv = msb_borrow_sv(&log_sb);
-        *err_out = (StringView){.length = sv.length, .text = (const char*)Allocator_dupe(MALLOCATOR, sv.text, sv.length)};
+        char* copy = Allocator_dupe(MALLOCATOR, sv.text, sv.length, 1, 1);
+        if(copy) *err_out = (StringView){.length = sv.length, .text = copy};
+        else {
+            *err_out = (StringView){0};
+            result = 1;
+        }
     }
     else
         *err_out = (StringView){0};
@@ -288,7 +293,12 @@ cpp_expand_string_expect_message(StringView txt, StringView* err_out){
     int result = err;
     if(log_sb.cursor){
         StringView sv = msb_borrow_sv(&log_sb);
-        *err_out = (StringView){.length = sv.length, .text = (const char*)Allocator_dupe(MALLOCATOR, sv.text, sv.length)};
+        char* copy = Allocator_dupe(MALLOCATOR, sv.text, sv.length, 1, 1);
+        if(copy) *err_out = (StringView){.length = sv.length, .text = copy};
+        else {
+            *err_out = (StringView){0};
+            result = 1;
+        }
     }
     else
         *err_out = (StringView){0};
@@ -497,7 +507,7 @@ TestFunction(test_func_macros){
         if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s%s:%d:%s %s failed\n", _test_color_gray, __FILE__, line, _test_color_reset, test_cases[i].name);
         }
-        Allocator_free(MALLOCATOR, result.text, result.length);
+        Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
     }
     TESTEND();
 }
@@ -530,7 +540,7 @@ TestFunction(test_func_macros_extensions){
         if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s%s:%d:%s %s failed\n", _test_color_gray, __FILE__, line, _test_color_reset, test_cases[i].name);
         }
-        Allocator_free(MALLOCATOR, result.text, result.length);
+        Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
     }
     TESTEND();
 }
@@ -569,7 +579,7 @@ TestFunction(test_obj_macros){
         if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
         }
-        Allocator_free(MALLOCATOR, result.text, result.length);
+        Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
     }
     TESTEND();
 }
@@ -595,7 +605,7 @@ TestFunction(test_for_each){
     TestAssertFalse(err);
     TestExpectEqualsSv(SV("\n\n\n\n\n\n\n\n\n\na*a b*b c*c 1*1 2*2 3*3"), result);
 
-    Allocator_free(MALLOCATOR, result.text, result.length);
+    Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
     TESTEND();
 }
 
@@ -620,7 +630,7 @@ TestFunction(test_for_each_empty){
     // 10 newlines from #defines, then just "x" (FOR_EACH with no varargs expands to nothing)
     TestExpectEqualsSv(SV("\n\n\n\n\n\n\n\n\n\nx"), result);
 
-    Allocator_free(MALLOCATOR, result.text, result.length);
+    Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
     TESTEND();
 }
 
@@ -836,7 +846,7 @@ TestFunction(test_c23){
         if(!test_expect_equals_sv(expected, result, "expected", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
         }
-        Allocator_free(MALLOCATOR, result.text, result.length);
+        Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
     }
     TESTEND();
 }
@@ -953,7 +963,7 @@ TestFunction(test_torture){
         if(!test_expect_equals_sv(out, result, "out", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
         }
-        Allocator_free(MALLOCATOR, result.text, result.length);
+        Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
         result = (StringView){0};
     }
 
@@ -1234,7 +1244,7 @@ TestFunction(test_builtin_macros){
         if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
         }
-        if(result.length) Allocator_free(MALLOCATOR, result.text, result.length);
+        if(result.length) Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
     }
     TESTEND();
 }
@@ -1253,7 +1263,7 @@ TestFunction(test_va_opt_error_propagation){
         TestExpectFalse(int, err);
         test_expect_equals_sv(SV("(test):3:6: error: Too many arguments to function-like macro B()\n"),
                               message, "expected", "message", &TEST_stats, __FILE__, __func__, __LINE__);
-        if(message.text) Allocator_free(MALLOCATOR, message.text, message.length);
+        if(message.text) Allocator_free(MALLOCATOR, message.text, message.length, 1, 1);
     }
     TESTEND();
 }
@@ -1326,7 +1336,7 @@ TestFunction(test_error_locations){
         if(!test_expect_equals_sv(test_cases[i].exp, err_msg, "exp", "err_msg", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
         }
-        if(err_msg.text) Allocator_free(MALLOCATOR, err_msg.text, err_msg.length);
+        if(err_msg.text) Allocator_free(MALLOCATOR, err_msg.text, err_msg.length, 1, 1);
     }
     TESTEND();
 }
@@ -1474,7 +1484,7 @@ TestFunction(test_messages){
         if(!test_expect_equals_sv(test_cases[i].exp, err_msg, "exp", "msg", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
         }
-        if(err_msg.text) Allocator_free(MALLOCATOR, err_msg.text, err_msg.length);
+        if(err_msg.text) Allocator_free(MALLOCATOR, err_msg.text, err_msg.length, 1, 1);
     }
     TESTEND();
 }
@@ -1843,7 +1853,7 @@ TestFunction(test_condition){
         if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
         }
-        Allocator_free(MALLOCATOR, result.text, result.length);
+        Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
     }
     TESTEND();
 }
@@ -2113,7 +2123,7 @@ TestFunction(test_erroneous_condition){
         if(!test_expect_equals_sv(test_cases[i].exp, err_msg, "exp", "err_msg", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
         }
-        if(err_msg.text) Allocator_free(MALLOCATOR, err_msg.text, err_msg.length);
+        if(err_msg.text) Allocator_free(MALLOCATOR, err_msg.text, err_msg.length, 1, 1);
     }
     TESTEND();
 }
@@ -2490,7 +2500,7 @@ TestFunction(test_if_eval){
         if(!test_expect_equals_sv(exp, result, "exp", "result", &TEST_stats, __FILE__, __func__, line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, line, test_cases[i].name);
         }
-        Allocator_free(MALLOCATOR, result.text, result.length);
+        Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
     }
     TESTEND();
 }
@@ -2629,7 +2639,7 @@ TestFunction(test_include){
         if(!test_expect_equals_sv(test_cases[i].expected, result, "expected", "result", &TEST_stats, __FILE__, __func__, test_cases[i].line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, test_cases[i].line, test_cases[i].name);
         }
-        Allocator_free(MALLOCATOR, result.text, result.length);
+        Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
     }
     TESTEND();
 }
@@ -2697,7 +2707,7 @@ TestFunction(test_include_eof){
                 msb_write_char(&compact, result.text[j]);
         TestExpectEqualsSv(cases[i].expected, msb_borrow_sv(&compact));
         msb_destroy(&compact);
-        if(result.text) Allocator_free(MALLOCATOR, result.text, result.length);
+        if(result.text) Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
     }
     TESTEND();
 }
@@ -2754,7 +2764,7 @@ TestFunction(test_embed){
         if(err) goto embed_case_cleanup;
         test_expect_equals_sv(cases[i].expected, result, "expected", "result", &TEST_stats, __FILE__, __func__, __LINE__);
         embed_case_cleanup:
-        if(result.text) Allocator_free(MALLOCATOR, result.text, result.length);
+        if(result.text) Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
     }
     static const StringView bad[] = {
         SVI("#embed \".\" gnu::base64()"),
@@ -2797,7 +2807,7 @@ TestFunction(test_embed){
         int err = cpp_expand_string_expect_error(bad[i], &log);
         TestExpectFalse(int, err);
         TestExpectTrue(size_t, log.length);
-        if(log.text) Allocator_free(MALLOCATOR, log.text, log.length);
+        if(log.text) Allocator_free(MALLOCATOR, log.text, log.length, 1, 1);
     }
     TESTEND();
 }
@@ -2837,7 +2847,7 @@ TestFunction(test_embed_file_queries){
         f->exists = f->is_file = f->size_cached = 1;
         f->data_size = 4 * 1024 * 1024;
         if(i == 8){
-            char* data = Allocator_alloc(a, f->data_size);
+            char* data = Allocator_alloc(a, f->data_size, 1, 1);
             memset(data, 1, f->data_size);
             f->data_cached = 1;
             f->data.buff = data;
@@ -2895,7 +2905,7 @@ TestFunction(test_embed_base64_size){
     for(size_t i = test_atomic_increment(&idx); i < 3; i = test_atomic_increment(&idx)){
         size_t size = 4*1024*1024-1+i;
         size_t encoded_size = (size+2)/3*4;
-        char* encoded = Allocator_alloc(MALLOCATOR, encoded_size);
+        char* encoded = Allocator_alloc(MALLOCATOR, encoded_size, 1, 1);
         TestExpectTrue(void*, encoded);
         if(!encoded) return TEST_stats;
         memset(encoded, 'A', encoded_size);
@@ -2908,7 +2918,7 @@ TestFunction(test_embed_base64_size){
         StringView result = {0};
         int err = cpp_expand_string(msb_borrow_sv(&source), &result, __FILE__, __func__, __LINE__);
         TestExpectFalse(int, err);
-        if(result.text) Allocator_free(MALLOCATOR, result.text, result.length);
+        if(result.text) Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
         if(size > 4*1024*1024){
             msb_reset(&source);
             msb_write_literal(&source, "#embed \".\" gnu::base64(\"");
@@ -2918,10 +2928,10 @@ TestFunction(test_embed_base64_size){
             err = cpp_expand_string_expect_error(msb_borrow_sv(&source), &log);
             TestExpectFalse(int, err);
             TestExpectTrue(size_t, log.length);
-            if(log.text) Allocator_free(MALLOCATOR, log.text, log.length);
+            if(log.text) Allocator_free(MALLOCATOR, log.text, log.length, 1, 1);
         }
         msb_destroy(&source);
-        Allocator_free(MALLOCATOR, encoded, encoded_size);
+        Allocator_free(MALLOCATOR, encoded, encoded_size, 1, 1);
     }
     TESTEND();
 }
@@ -2973,7 +2983,7 @@ TestFunction(test_framework_include){
         if(!test_expect_equals_sv(test_cases[i].expected, result, "expected", "result", &TEST_stats, __FILE__, __func__, test_cases[i].line)){
             TestPrintf("%s:%d: %s failed\n", __FILE__, test_cases[i].line, test_cases[i].name);
         }
-        Allocator_free(MALLOCATOR, result.text, result.length);
+        Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
     }
     TESTEND();
 }
@@ -3008,14 +3018,14 @@ TestFunction(test_literal_boundaries){
         int err = cpp_expand_with_files(cases[i].files, 2, NULL, 0, NULL, 0, &result, __FILE__, __func__, __LINE__);
         TestExpectFalse(int, err);
         if(!err) test_expect_equals_sv(cases[i].expected, result, "expected", "result", &TEST_stats, __FILE__, __func__, __LINE__);
-        if(result.text) Allocator_free(MALLOCATOR, result.text, result.length);
+        if(result.text) Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
     }
     // Stringification must preserve the spelling of string/character literals.
     StringView result = {0};
     int err = cpp_expand_string(SV("#define S(x) #x\nS(u\"\\x1234\" U'\\U0001f600')"), &result, __FILE__, __func__, __LINE__);
     TestExpectFalse(int, err);
     if(!err) test_expect_equals_sv(SV("\n\"u\\\"\\\\x1234\\\" U'\\\\U0001f600'\""), result, "expected", "result", &TEST_stats, __FILE__, __func__, __LINE__);
-    if(result.text) Allocator_free(MALLOCATOR, result.text, result.length);
+    if(result.text) Allocator_free(MALLOCATOR, result.text, result.length, 1, 1);
     TESTEND();
 }
 

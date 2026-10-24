@@ -4,6 +4,7 @@
 #ifndef BIDI_POINTER_MAP_H
 #define BIDI_POINTER_MAP_H 1
 #include <stdint.h>
+#include "ckdint.h"
 #include <string.h>
 #include "Allocators/allocator.h"
 #include "hash_func.h"
@@ -110,11 +111,13 @@ BPM_put(BidiPointerMap* pm, Allocator al, const void* key, const void* value_){
     #endif
     if(pm->count >= pm->cap){
         uint32_t old_cap = pm->cap;
-        uint32_t old_size = (uint32_t)BPM_alloc_size(old_cap);
-        uint32_t new_cap = old_cap?old_cap*2:4;
-        uint32_t new_size = (uint32_t)BPM_alloc_size(new_cap);
+        uint32_t new_cap = 4, index_count, old_size, new_size;
+        if(old_cap && mul_overflow(old_cap, 2u, &new_cap)) return 1;
+        if(mul_overflow(new_cap, 2u, &index_count)) return 1;
+        if(mul_overflow(new_cap, (uint32_t)BPM_alloc_size(1), &new_size)) return 1;
+        old_size = old_cap * (uint32_t)BPM_alloc_size(1);
         uint32_t count = pm->count;
-        void* data = Allocator_realloc(al, pm->data, old_size, new_size);
+        void* data = Allocator_realloc(al, pm->data, old_size, new_size, 1, _Alignof(BidiPointerMapItem));
         if(!data) return 1;
         void** items = data;
         uint32_t* key_idxes = BPM_key_idxes_(data, new_cap);

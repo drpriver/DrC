@@ -100,10 +100,7 @@ cc_field_path_make(Allocator al, const uint32_t*_Nullable components, uint32_t c
     for(uint32_t i = 0; i < count && !extended; i++)
         extended = components[i] > 1023;
     if(extended){
-        size_t size;
-        if(mul_overflow((size_t)count, sizeof(uint32_t), &size) || add_overflow(sizeof(CcFieldPathEx), size, &size))
-            return _cc_oom_error;
-        CcFieldPathEx* ex = Allocator_alloc(al, size);
+        CcFieldPathEx* ex = Allocator_alloc_extra(al, count, sizeof *ex->components, sizeof *ex, _Alignof(CcFieldPathEx));
         if(!ex)
             return _cc_oom_error;
         ex->n_components = count;
@@ -129,7 +126,7 @@ void
 cc_field_path_free(Allocator al, CcFieldPath path){
     if(path.is_extended){
         CcFieldPathEx* ex = cc_field_path_extended(path);
-        Allocator_free(al, ex, sizeof *ex + (size_t)ex->n_components * sizeof(uint32_t));
+        Allocator_free_extra(al, ex, (size_t)ex->n_components, sizeof *ex->components, sizeof *ex, _Alignof(CcFieldPathEx));
     }
 }
 
@@ -145,10 +142,7 @@ cc_field_path_concat(Allocator al, CcFieldPath prefix, CcFieldPath suffix, CcFie
         for(uint32_t i = 0; i < b; i++) small[a+i] = cc_field_path_component(suffix, i);
         return cc_field_path_make(al, small, count, out);
     }
-    size_t size;
-    if(mul_overflow((size_t)count, sizeof(uint32_t), &size) || add_overflow(sizeof(CcFieldPathEx), size, &size))
-        return 1;
-    CcFieldPathEx* ex = Allocator_alloc(al, size);
+    CcFieldPathEx* ex = Allocator_alloc_extra(al, count, sizeof *ex->components, sizeof *ex, _Alignof(CcFieldPathEx));
     if(!ex) return 1;
     ex->n_components = count;
     for(uint32_t i = 0; i < a; i++) ex->components[i] = cc_field_path_component(prefix, i);

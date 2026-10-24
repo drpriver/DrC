@@ -361,7 +361,7 @@ TestFunction(test_native_calls){
     Allocator al = MALLOCATOR;
     for(size_t i = test_atomic_increment(&idx); i < countof(cases); i = test_atomic_increment(&idx)){
         size_t signature_size = sizeof(CcFunction) + cases[i].count * sizeof(CcQualType);
-        CcFunction* signature = Allocator_zalloc(al, signature_size);
+        CcFunction* signature = Allocator_zalloc(al, signature_size, 1, _Alignof(CcFunction));
         TestAssert(signature != NULL);
         *signature = (CcFunction){
             .kind = CC_FUNCTION, .return_type = cases[i].result_type,
@@ -373,15 +373,15 @@ TestFunction(test_native_calls){
             signature->params[arg] = cases[i].args[arg].type;
         NcCallPlan* plan = NULL;
         int err = nc_plan_create(al, &cc_target_native, signature, &plan);
-        Allocator_free(al, signature, signature_size);
+        Allocator_free(al, signature, signature_size, 1, _Alignof(CcFunction));
         if(err)
             TestPrintf("%s:%d: %s: plan creation failed: %d\n", __FILE__, cases[i].line, cases[i].name, err);
         TestAssertEquals(int, err, 0);
         TestAssert(plan != NULL);
-        size_t allocation_size = nc_state_size(plan) + _Alignof(NcCallState) - 1;
-        void* allocation = Allocator_alloc(al, allocation_size);
-        TestAssert(allocation != NULL);
-        NcCallState* state = (void*)(((uintptr_t)allocation + _Alignof(NcCallState) - 1) & ~(uintptr_t)(_Alignof(NcCallState) - 1));
+        size_t allocation_size = nc_state_size(plan);
+        NcCallState* state = Allocator_alloc(al, allocation_size, 1, nc_state_alignment(plan));
+        TestAssert(state != NULL);
+        TestAssert((uintptr_t)state % nc_state_alignment(plan) == 0);
         NcTestResult result;
         memset(&result, 0xa5, sizeof result);
         nc_state_init(state, plan, &result);
@@ -403,7 +403,7 @@ TestFunction(test_native_calls){
                 TestPrintf("%s:%d: %s: incorrect memory after native call\n", __FILE__, cases[i].line, cases[i].name);
             TestExpect(_Bool, memory_equal, ==, 1);
         }
-        Allocator_free(al, allocation, allocation_size);
+        Allocator_free(al, state, allocation_size, 1, nc_state_alignment(plan));
         nc_plan_destroy(al, plan);
     }
     TESTEND();
@@ -869,7 +869,7 @@ TestFunction(test_native_closures){
         const NcTestClosureCase* tc = &cases[i];
         unsigned named = tc->variadic ? tc->fixed_count : tc->count;
         size_t signature_size = sizeof(CcFunction) + named * sizeof(CcQualType);
-        CcFunction* signature = Allocator_zalloc(al, signature_size);
+        CcFunction* signature = Allocator_zalloc(al, signature_size, 1, _Alignof(CcFunction));
         TestAssert(signature != NULL);
         *signature = (CcFunction){
             .kind = CC_FUNCTION,
@@ -881,8 +881,8 @@ TestFunction(test_native_closures){
         for(unsigned arg = 0; arg < named; arg++)
             signature->params[arg] = tc->args[arg].type;
         unsigned copies = tc->copies ? tc->copies : 1;
-        NcClosure** closures = Allocator_zalloc(al, copies * sizeof *closures);
-        NcTestClosureContext* contexts = Allocator_zalloc(al, copies * sizeof *contexts);
+        NcClosure** closures = Allocator_zalloc(al, copies, sizeof *closures, _Alignof(NcClosure*));
+        NcTestClosureContext* contexts = Allocator_zalloc(al, copies, sizeof *contexts, _Alignof(NcTestClosureContext));
         TestAssert(closures != NULL);
         TestAssert(contexts != NULL);
         for(unsigned j = 0; j < copies; j++){
@@ -896,7 +896,7 @@ TestFunction(test_native_closures){
             TestExpect(int, err, ==, tc->expected_error);
             TestExpect(_Bool, closures[j] != NULL, ==, err == 0);
         }
-        Allocator_free(al, signature, signature_size);
+        Allocator_free(al, signature, signature_size, 1, _Alignof(CcFunction));
         for(unsigned j = 0; j < copies; j++){
             if(!closures[j]) continue;
             if(!tc->expected_error){
@@ -922,8 +922,8 @@ TestFunction(test_native_closures){
             }
             nc_destroy_closure(al, closures[j]);
         }
-        Allocator_free(al, contexts, copies * sizeof *contexts);
-        Allocator_free(al, closures, copies * sizeof *closures);
+        Allocator_free(al, contexts, copies, sizeof *contexts, _Alignof(NcTestClosureContext));
+        Allocator_free(al, closures, copies, sizeof *closures, _Alignof(NcClosure*));
     }
     TESTEND();
 }

@@ -48,8 +48,7 @@ enum {
 static
 int
 nc_plan_create(Allocator al, const CcTargetConfig* tc, CcFunction* f, NcCallPlan* _Nullable* _Nonnull out){
-    size_t bytes = sizeof(NcCallPlan) + (size_t)f->param_count*sizeof(NcAbiArgument);
-    NcCallPlan* p = Allocator_zalloc(al, bytes);
+    NcCallPlan* p = Allocator_zalloc_extra(al, f->param_count, sizeof *p->args, sizeof *p, _Alignof(NcCallPlan));
     if(!p) return _cc_oom_error;
     p->target = tc->target;
     p->count = f->param_count;
@@ -76,21 +75,26 @@ nc_plan_create(Allocator al, const CcTargetConfig* tc, CcFunction* f, NcCallPlan
     *out = p;
     return 0;
 fail:
-    Allocator_free(al, p, bytes);
+    Allocator_free_extra(al, p, p->count, sizeof *p->args, sizeof *p, _Alignof(NcCallPlan));
     return err;
 }
 
 static
 void
 nc_plan_destroy(Allocator al, NcCallPlan* p){
-    Allocator_free(al, p, sizeof *p + (size_t)p->count * sizeof p->args[0]);
+    Allocator_free_extra(al, p, p->count, sizeof *p->args, sizeof *p, _Alignof(NcCallPlan));
+}
+
+static
+size_t
+nc_state_alignment(const NcCallPlan* p){
+    return p->stack_alignment > _Alignof(NcCallState) ? p->stack_alignment : _Alignof(NcCallState);
 }
 
 static
 size_t
 nc_state_size(const NcCallPlan* p){
-    size_t alignment = p->stack_alignment > 16? p->stack_alignment : 16;
-    return sizeof(NcCallState) + alignment - 1 + nc_stack_storage_size(p);
+    return _nc_align_up(sizeof (NcCallState){0}, nc_state_alignment(p)) + nc_stack_storage_size(p);
 }
 
 static
@@ -174,7 +178,7 @@ static
 void
 nc_state_init(NcCallState* s, const NcCallPlan* p, void* _Nullable result){
     memset(s, 0, nc_state_size(p));
-    void* storage = (void*)_nc_align_up((uintptr_t)s + sizeof *s, p->stack_alignment);
+    void* storage = (char*)s + _nc_align_up(sizeof *s, nc_state_alignment(p));
     nc_registers_init(s, p, storage, result);
 }
 
@@ -719,7 +723,7 @@ nc_create_closure(Allocator al, CcFunction* type, NcClosureCallback* cb, void*_N
     NcCallPlan* plan = NULL;
     int err = nc_plan_create(al, &cc_target_native, type, &plan);
     if(err) return err;
-    NcClosure* c = Allocator_zalloc(al, sizeof *c);
+    NcClosure* c = Allocator_zalloc(al, 1, sizeof *c, _Alignof(NcClosure));
     if(!c){
         nc_plan_destroy(al, plan);
         return NC_OOM_ERROR;
@@ -731,7 +735,7 @@ nc_create_closure(Allocator al, CcFunction* type, NcClosureCallback* cb, void*_N
     err = native_capture_allocate(c, &handle);
     if(err){
         nc_plan_destroy(al, plan);
-        Allocator_free(al, c, sizeof *c);
+        Allocator_free(al, c, 1, sizeof *c, _Alignof(NcClosure));
         return err == NC_MAP_ERROR_OOM? NC_OOM_ERROR : NC_RUNTIME_ERROR;
     }
     c->fn = (void (*_Nonnull)(void))handle.fn;
@@ -746,7 +750,7 @@ void
 nc_destroy_closure(Allocator al, NcClosure* c){
     native_capture_release((NcCaptureHandle){c->fn});
     nc_plan_destroy(al, c->plan);
-    Allocator_free(al, c, sizeof *c);
+    Allocator_free(al, c, 1, sizeof *c, _Alignof(NcClosure));
 }
 struct NcCaptureTable {
     NcCaptureTable* _Nullable next;
@@ -982,14 +986,14 @@ native_capture_allocate(NcClosure* closure, NcCaptureHandle* out){
     for(; table && table->used == NC_CAPTURE_SLOT_COUNT - 1; table = table->next){
     }
     if(!table){
-        table = Allocator_zalloc(MALLOCATOR, sizeof *table);
+        table = Allocator_zalloc(MALLOCATOR, 1, sizeof *table, _Alignof(NcCaptureTable));
         if(!table){
             err = NC_MAP_ERROR_OOM;
             goto unlock;
         }
         err = nc_capture_map_region(&table->code);
         if(err){
-            Allocator_free(MALLOCATOR, table, sizeof *table);
+            Allocator_free(MALLOCATOR, table, 1, sizeof *table, _Alignof(NcCaptureTable));
             goto unlock;
         }
         // Reserve the first trampoline so funcsan doesn't
@@ -1043,7 +1047,7 @@ native_capture_release(NcCaptureHandle handle){
         if(!table->used){
             *link = table->next;
             nc_capture_unmap_region(table->code);
-            Allocator_free(MALLOCATOR, table, sizeof *table);
+            Allocator_free(MALLOCATOR, table, 1, sizeof *table, _Alignof(NcCaptureTable));
         }
         err = NC_MAP_ERROR_OK;
         goto unlock;

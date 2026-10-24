@@ -39,17 +39,19 @@ static
 Logger*
 std_logger(void){
 #ifdef _WIN32
-    Logger* l = Allocator_zalloc(MALLOCATOR, sizeof *l + 2*sizeof(HANDLE));
+    HANDLE handles[] = {GetStdHandle(STD_OUTPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE)};
+    Logger* l = Allocator_zalloc_extra(MALLOCATOR, 1, sizeof *l, sizeof handles, _Alignof(Logger));
     if(!l) return l;
-    ((HANDLE*)(l+1))[0] = GetStdHandle(STD_OUTPUT_HANDLE);
-    ((HANDLE*)(l+1))[1] = GetStdHandle(STD_ERROR_HANDLE);
+    ((HANDLE*)(l+1))[0] = handles[0];
+    ((HANDLE*)(l+1))[1] = handles[1];
     l->buff.allocator = MALLOCATOR;
     l->sink = log_win32;
 #else
-    Logger* l = Allocator_zalloc(MALLOCATOR, sizeof *l + 2*sizeof(int));
+    int handles[] = {STDOUT_FILENO, STDERR_FILENO};
+    Logger* l = Allocator_zalloc_extra(MALLOCATOR, 1, sizeof *l, sizeof handles, _Alignof(Logger));
     if(!l) return l;
-    ((int*)(l+1))[0] = STDOUT_FILENO;
-    ((int*)(l+1))[1] = STDERR_FILENO;
+    ((int*)(l+1))[0] = handles[0];
+    ((int*)(l+1))[1] = handles[1];
     l->buff.allocator = MALLOCATOR;
     l->sink = log_posix;
 #endif

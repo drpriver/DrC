@@ -15,7 +15,7 @@
 
 typedef struct TestingAllocator TestingAllocator;
 struct TestingAllocator {
-    int64_t fail_at;
+    _Alignas(8) int64_t fail_at;
     int64_t nallocs;
     RecordingAllocator recorder;
     LOCK_T lock;
@@ -23,9 +23,10 @@ struct TestingAllocator {
 
 static
 void*_Nullable
-testing_alloc(TestingAllocator* ta, size_t size){
+testing_alloc(TestingAllocator* ta, size_t count, size_t size, size_t alignment){
     void* result = NULL;
     LOCK_T_lock(&ta->lock);
+    if(!count || !size) goto allocate;
     if(ta->fail_at < 0){
         if(++ta->nallocs >= -ta->fail_at)
             goto done;
@@ -34,7 +35,8 @@ testing_alloc(TestingAllocator* ta, size_t size){
         if(++ta->nallocs == ta->fail_at)
             goto done;
     }
-    result = recording_alloc(&ta->recorder, size);
+    allocate:
+    result = recording_alloc(&ta->recorder, count, size, alignment);
     done:
     LOCK_T_unlock(&ta->lock);
     return result;
@@ -42,9 +44,10 @@ testing_alloc(TestingAllocator* ta, size_t size){
 
 static
 void*_Nullable
-testing_zalloc(TestingAllocator* ta, size_t size){
+testing_zalloc(TestingAllocator* ta, size_t count, size_t size, size_t alignment){
     void* result = NULL;
     LOCK_T_lock(&ta->lock);
+    if(!count || !size) goto allocate;
     if(ta->fail_at < 0){
         if(++ta->nallocs >= -ta->fail_at)
             goto done;
@@ -53,7 +56,8 @@ testing_zalloc(TestingAllocator* ta, size_t size){
         if(++ta->nallocs == ta->fail_at)
             goto done;
     }
-    result = recording_zalloc(&ta->recorder, size);
+    allocate:
+    result = recording_zalloc(&ta->recorder, count, size, alignment);
     done:
     LOCK_T_unlock(&ta->lock);
     return result;
@@ -61,9 +65,9 @@ testing_zalloc(TestingAllocator* ta, size_t size){
 
 static
 void
-testing_free(TestingAllocator* ta, const void*_Nullable data, size_t size){
+testing_free(TestingAllocator* ta, const void*_Nullable data, size_t count, size_t size, size_t alignment){
     LOCK_T_lock(&ta->lock);
-    recording_free(&ta->recorder, data, size);
+    recording_free(&ta->recorder, data, count, size, alignment);
     LOCK_T_unlock(&ta->lock);
 }
 
@@ -76,10 +80,10 @@ testing_free_all(TestingAllocator* ta){
 }
 static inline
 void*_Nullable
-testing_realloc(TestingAllocator* ta, void*_Nullable data, size_t orig_size, size_t new_size){
+testing_realloc(TestingAllocator* ta, void*_Nullable data, size_t orig_count, size_t count, size_t size, size_t alignment){
     void* result = NULL;
     LOCK_T_lock(&ta->lock);
-    if(new_size > orig_size){
+    if(size && count > orig_count){
         if(ta->fail_at < 0){
             if(++ta->nallocs >= -ta->fail_at)
                 goto done;
@@ -89,7 +93,7 @@ testing_realloc(TestingAllocator* ta, void*_Nullable data, size_t orig_size, siz
                 goto done;
         }
     }
-    result = recording_realloc(&ta->recorder, data, orig_size, new_size);
+    result = recording_realloc(&ta->recorder, data, orig_count, count, size, alignment);
     done:
     LOCK_T_unlock(&ta->lock);
     return result;
@@ -103,9 +107,9 @@ testing_realloc(TestingAllocator* ta, void*_Nullable data, size_t orig_size, siz
 #endif
 
 TestingAllocator THE_TestingAllocator = {.fail_at=0};
-#define MALLOCATOR ((Allocator){.type=ALLOCATOR_TESTING, ._data=&THE_TestingAllocator})
-#define MALLOCATORI {.type=ALLOCATOR_TESTING, ._data=&THE_TestingAllocator}
-#define THE_TESTING_ALLOCATOR  ((Allocator){.type=ALLOCATOR_TESTING, ._data=&THE_TestingAllocator})
+#define MALLOCATOR Allocator_make(ALLOCATOR_TESTING, &THE_TestingAllocator)
+#define MALLOCATORI {.tagged_ptr = (const char*)&THE_TestingAllocator + ALLOCATOR_TESTING}
+#define THE_TESTING_ALLOCATOR Allocator_make(ALLOCATOR_TESTING, &THE_TestingAllocator)
 
 static inline
 void

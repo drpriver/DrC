@@ -13,6 +13,7 @@
 #ifndef CC_ANON_ATOM_MAP_H
 #define CC_ANON_ATOM_MAP_H 1
 #include <stdint.h>
+#include "../Drp/ckdint.h"
 #include "../Drp/Allocators/allocator.h"
 #include "../Drp/atom.h"
 #include "../Drp/hash_func.h"
@@ -78,11 +79,13 @@ CcAnonAM_put(CcAnonAtomMap* am, Allocator al, Atom key, const void*_Nonnull valu
     #endif
     if(am->count >= am->cap){
         uint32_t old_cap = am->cap;
-        uint32_t old_size = (uint32_t)AM_alloc_size(old_cap);
-        uint32_t new_cap = old_cap?old_cap*2:4;
-        uint32_t new_size = (uint32_t)AM_alloc_size(new_cap);
+        uint32_t new_cap = 4, index_count, old_size, new_size;
+        if(old_cap && mul_overflow(old_cap, 2u, &new_cap)) return 1;
+        if(mul_overflow(new_cap, 2u, &index_count)) return 1;
+        if(mul_overflow(new_cap, (uint32_t)AM_alloc_size(1), &new_size)) return 1;
+        old_size = old_cap * (uint32_t)AM_alloc_size(1);
         uint32_t count = am->count;
-        void* data = Allocator_realloc(al, am->data, old_size, new_size);
+        void* data = Allocator_realloc(al, am->data, old_size, new_size, 1, _Alignof(AtomMapItem));
         if(!data) return 1;
         AtomMapItem* items = data;
         uint32_t* idxes = (uint32_t*)(void*)(new_cap*sizeof(AtomMapItem)+(char*)(data));
@@ -171,7 +174,7 @@ int
 CcAnonAM_clone_into(CcAnonAtomMap* dst, Allocator al, const CcAnonAtomMap* src){
     if(dst == src) return 0;
     if(dst->cap < src->cap){
-        void* data = Allocator_realloc(al, dst->data, AM_alloc_size(dst->cap), AM_alloc_size(src->cap));
+        void* data = Allocator_realloc(al, dst->data, AM_alloc_size(dst->cap), AM_alloc_size(src->cap), 1, _Alignof(AtomMapItem));
         if(!data) return 1;
         dst->data = data;
         dst->cap = src->cap;

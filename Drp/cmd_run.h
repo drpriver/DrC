@@ -196,11 +196,10 @@ cmd_run(CmdBuilder* cmd, void*_Nullable envp, intptr_t*_Nullable proc_handle){
         #endif
     }
     else {
-        void* _argv = Allocator_zalloc(cmd->allocator, (cmd->args.count+1) * sizeof(char*));
-        if(!_argv) return 1;
-        char** argv = _argv;
+        char** argv = Allocator_zalloc_extra(cmd->allocator, cmd->args.count, sizeof *argv, sizeof *argv, _Alignof(const char*));
+        if(!argv) return 1;
         {
-            const char** pargv = _argv;
+            const char** pargv = (const char**)(void*)argv;
             for(size_t i = 0; i < cmd->args.count; i++)
                 pargv[i] = cmd->args.data[i].text;
         }
@@ -222,7 +221,7 @@ cmd_run(CmdBuilder* cmd, void*_Nullable envp, intptr_t*_Nullable proc_handle){
                 if(!e) e = posix_spawn(&pid, cmd->prog.data, &actions, attrs, argv, envp);
                 posix_spawn_file_actions_destroy(&actions);
             }
-            Allocator_free(cmd->allocator, _argv, (cmd->args.count+1)*sizeof(char*));
+            Allocator_free_extra(cmd->allocator, argv, cmd->args.count, sizeof *argv, sizeof *argv, _Alignof(const char*));
             if(e){
                 // fprintf(stderr, "posix_spawn: %s\n", strerror(e));
                 return e;
@@ -254,11 +253,10 @@ cmd_exec(CmdBuilder* cmd, void*_Nullable envp){
         if(err) return err;
     }
     else {
-        void* _argv = Allocator_zalloc(cmd->allocator, (cmd->args.count+1) * sizeof(char*));
-        if(!_argv) return 1;
-        char** argv = _argv;
+        char** argv = Allocator_zalloc_extra(cmd->allocator, cmd->args.count, sizeof *argv, sizeof *argv, _Alignof(const char*));
+        if(!argv) return 1;
         {
-            const char** pargv = _argv;
+            const char** pargv = (const char**)(void*)argv;
             for(size_t i = 0; i < cmd->args.count; i++)
                 pargv[i] = cmd->args.data[i].text;
         }
@@ -268,7 +266,7 @@ cmd_exec(CmdBuilder* cmd, void*_Nullable envp){
             saved_dir = open(".", O_RDONLY | O_CLOEXEC);
             if(saved_dir == -1 || chdir(cmd->wd.text)){
                 if(saved_dir != -1) close(saved_dir);
-                Allocator_free(cmd->allocator, _argv, (cmd->args.count+1)*sizeof(char*));
+                Allocator_free_extra(cmd->allocator, argv, cmd->args.count, sizeof *argv, sizeof *argv, _Alignof(const char*));
                 return -1;
             }
         }
@@ -280,7 +278,7 @@ cmd_exec(CmdBuilder* cmd, void*_Nullable envp){
             e = close(saved_dir);
             (void)e;
         }
-        Allocator_free(cmd->allocator, _argv, (cmd->args.count+1)*sizeof(char*));
+        Allocator_free_extra(cmd->allocator, argv, cmd->args.count, sizeof *argv, sizeof *argv, _Alignof(const char*));
         errno = saved_errno;
         return err;
         #else
@@ -357,15 +355,14 @@ cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* 
         #ifndef _WIN32
         int pipefd[2];
         if(pipe(pipefd) != 0) return 1;
-        void* _argv = Allocator_zalloc(cmd->allocator, (cmd->args.count+1) * sizeof(char*));
-        if(!_argv){
+        char** argv = Allocator_zalloc_extra(cmd->allocator, cmd->args.count, sizeof *argv, sizeof *argv, _Alignof(const char*));
+        if(!argv){
             close(pipefd[0]);
             close(pipefd[1]);
             return 1;
         }
-        char** argv = _argv;
         {
-            const char** pargv = _argv;
+            const char** pargv = (const char**)(void*)argv;
             for(size_t i = 0; i < cmd->args.count; i++)
                 pargv[i] = cmd->args.data[i].text;
         }
@@ -373,7 +370,7 @@ cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* 
         pid_t pid;
         int err = posix_spawn_file_actions_init(&actions);
         if(err){
-            Allocator_free(cmd->allocator, _argv, (cmd->args.count+1)*sizeof(char*));
+            Allocator_free_extra(cmd->allocator, argv, cmd->args.count, sizeof *argv, sizeof *argv, _Alignof(const char*));
             close(pipefd[0]);
             close(pipefd[1]);
             return err;
@@ -381,7 +378,7 @@ cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* 
         if(0){
             actions_fail:
             posix_spawn_file_actions_destroy(&actions);
-            Allocator_free(cmd->allocator, _argv, (cmd->args.count+1)*sizeof(char*));
+            Allocator_free_extra(cmd->allocator, argv, cmd->args.count, sizeof *argv, sizeof *argv, _Alignof(const char*));
             close(pipefd[0]);
             close(pipefd[1]);
             return err;
@@ -411,7 +408,7 @@ cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* 
         if(err) goto actions_fail;
         err = posix_spawn(&pid, msb_borrow_csv(&cmd->prog).text, &actions, NULL, argv, envp);
         posix_spawn_file_actions_destroy(&actions);
-        Allocator_free(cmd->allocator, _argv, (cmd->args.count+1)*sizeof(char*));
+        Allocator_free_extra(cmd->allocator, argv, cmd->args.count, sizeof *argv, sizeof *argv, _Alignof(const char*));
         close(pipefd[1]);
         if(err){
             close(pipefd[0]);

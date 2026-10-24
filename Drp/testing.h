@@ -51,9 +51,7 @@ static DbgDiffPrinter TEST_DIFF_PRINTER = {
 };
 
 #ifndef TestDebugBreak
-    #if defined __DRC__
-        #define TestDebugBreak() __builtin_debugtrap()
-    #elif defined __clang__
+    #if defined __clang__ || defined __DRC__ || defined __builtin_debugtrap
         #define TestDebugBreak() __builtin_debugtrap()
     #elif defined _MSC_VER
         #define TestDebugBreak() __debugbreak()

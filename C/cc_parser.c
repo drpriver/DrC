@@ -350,7 +350,7 @@ cc_alloc_scope(CcParser* p){
     CcScope* s = fl_pop(&p->scratch_scopes);
     if(s) cc_scope_clear(s);
     else {
-        s = Allocator_zalloc(cc_allocator(p), sizeof *s);
+        s = Allocator_zalloc(cc_allocator(p), 1, sizeof *s, _Alignof(CcScope));
         if(!s) return NULL;
     }
     s->parent = p->current;
@@ -674,7 +674,7 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
         CcQualType pointer;
         err = cc_pointer_of(p, ccqt_as_slice(target)->pointee, &pointer);
         if(err) return err;
-        CcInitList* il = Allocator_zalloc(cc_allocator(p), sizeof *il + 2 * sizeof(CcInitEntry));
+        CcInitList* il = Allocator_zalloc_extra(cc_allocator(p), 2, sizeof *il->entries, sizeof *il, _Alignof(CcInitList));
         if(!il) return CC_OOM_ERROR;
         CcExpr* count = cc_uint64_expr(p, e->loc, ccqt_basic(cc_target(p)->size_type), cc_expr_array_count(e) - 1);
         CcExpr* data = cc_make_expr(p, CC_EXPR_CAST, e->loc, pointer, 0);
@@ -683,7 +683,7 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
             if(count) cc_release_expr(p, count);
             if(data) _cc_release_expr(p, data, 0);
             if(slice) _cc_release_expr(p, slice, 0);
-            Allocator_free(cc_allocator(p), il, sizeof *il + 2 * sizeof(CcInitEntry));
+            Allocator_free_extra(cc_allocator(p), il, 2, sizeof *il->entries, sizeof *il, _Alignof(CcInitList));
             return CC_OOM_ERROR;
         }
         data->lhs = e;
@@ -1110,7 +1110,7 @@ cc_parse_lambda_body(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType typ
     CcFunction* ftype = ccqt_as_function(type);
     err = cc_check_function_definition_type(p, ftype, loc);
     if(err) return err;
-    CcFunc* func = Allocator_zalloc(cc_allocator(p), sizeof *func);
+    CcFunc* func = Allocator_zalloc(cc_allocator(p), 1, sizeof *func, _Alignof(CcFunc));
     if(!func){
         ma_cleanup(CcFuncParam)(&param_names->names, cc_allocator(p));
         return CC_OOM_ERROR;
@@ -1182,7 +1182,7 @@ cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull o
     int err;
     CcQualType type = cl->type;
     SrcLoc loc = cl->loc;
-    CcVariable* anon = Allocator_zalloc(cc_allocator(p), sizeof *anon);
+    CcVariable* anon = Allocator_zalloc(cc_allocator(p), 1, sizeof *anon, _Alignof(CcVariable));
     if(!anon) return CC_OOM_ERROR;
     *anon = (CcVariable){
         .name = nil_atom,
@@ -1262,11 +1262,11 @@ cc_wrap_to_desugared_compound_literal(CcParser* p, CcParseFlags flags, CcExpr* o
     SrcLoc loc = operand->loc;
     int err;
     if(flags.parsing_default_arg){
-        CcInitList* list = Allocator_zalloc(cc_allocator(p), sizeof *list+sizeof(CcInitEntry));
+        CcInitList* list = Allocator_zalloc_extra(cc_allocator(p), 1, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
         if(!list) return CC_OOM_ERROR;
         CcExpr* literal = cc_make_expr(p, CC_EXPR_COMPOUND_LITERAL, loc, type, 0);
         if(!literal){
-            Allocator_free(cc_allocator(p), list, sizeof *list+sizeof(CcInitEntry));
+            Allocator_free_extra(cc_allocator(p), list, 1, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
             return CC_OOM_ERROR;
         }
         list->loc = loc;
@@ -1278,7 +1278,7 @@ cc_wrap_to_desugared_compound_literal(CcParser* p, CcParseFlags flags, CcExpr* o
         *out = literal;
         return 0;
     }
-    CcVariable* anon = Allocator_zalloc(cc_allocator(p), sizeof *anon);
+    CcVariable* anon = Allocator_zalloc(cc_allocator(p), 1, sizeof *anon, _Alignof(CcVariable));
     if(!anon) return CC_OOM_ERROR;
     *anon = (CcVariable){
         .name = nil_atom,
@@ -1492,16 +1492,16 @@ cc_merge_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* ou
             int err;
             CcStruct* a = ccqt_as_struct(old);
             CcStruct* b = ccqt_as_struct(new_);
-            CcStruct* record = Allocator_alloc(cc_allocator(p), sizeof *record);
+            CcStruct* record = Allocator_alloc(cc_allocator(p), 1, sizeof *record, _Alignof(CcStruct));
             if(!record) return CC_OOM_ERROR;
             *record = *b;
             record->methods.capacity = record->methods.count;
             record->methods.data = NULL;
             if(b->methods.count){
-                record->methods.data = Allocator_dupe(cc_allocator(p), b->methods.data, b->methods.count * sizeof(CcField));
+                record->methods.data = Allocator_dupe(cc_allocator(p), b->methods.data, b->methods.count, sizeof *b->methods.data, _Alignof(CcField));
                 if(!record->methods.data) return CC_OOM_ERROR;
             }
-            record->fields = Allocator_alloc(cc_allocator(p), b->field_count * sizeof(CcField));
+            record->fields = Allocator_alloc(cc_allocator(p), b->field_count, sizeof *record->fields, _Alignof(CcField));
             if(b->field_count && !record->fields) return CC_OOM_ERROR;
             *out = (CcQualType){.bits = (uintptr_t)record | new_.quals};
             CcCompositePair pair = {.a=old, .b=new_, .composite=*out, .previous=pairs};
@@ -5281,11 +5281,11 @@ cc_pack_call_args(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType slice,
         int err = cc_implicit_cast(p, *arg, element, arg);
         if(err) return err;
     }
-    CcInitList* list = Allocator_zalloc(cc_allocator(p), sizeof *list + count * sizeof(CcInitEntry));
+    CcInitList* list = Allocator_zalloc_extra(cc_allocator(p), count, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
     if(!list) return CC_OOM_ERROR;
     CcExpr* literal = cc_make_expr(p, CC_EXPR_COMPOUND_LITERAL, loc, (CcQualType){.bits=(uintptr_t)array}, 0);
     if(!literal){
-        Allocator_free(cc_allocator(p), list, sizeof *list + count * sizeof(CcInitEntry));
+        Allocator_free_extra(cc_allocator(p), list, count, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
         return CC_OOM_ERROR;
     }
     list->loc = loc;
@@ -7161,7 +7161,7 @@ cc_eval_static_update(CcParser* p, CcExpr* e){
     }
     else err = cc_eval_expr(&(CcEvalCtx){.parser=p}, expr, &value);
     if(err) goto cleanup;
-    CcVariable* next = Allocator_zalloc(cc_allocator(p), sizeof *next);
+    CcVariable* next = Allocator_zalloc(cc_allocator(p), 1, sizeof *next, _Alignof(CcVariable));
     if(!next){
         err = CC_OOM_ERROR;
         goto cleanup;
@@ -8027,7 +8027,7 @@ cc_merge_printf_formats(CcParser* p, const CcPrintfFormat* _Nullable source,
             }
         }
         if(duplicate) continue;
-        CcPrintfFormat* copy = Allocator_alloc(cc_allocator(p), sizeof *copy);
+        CcPrintfFormat* copy = Allocator_alloc(cc_allocator(p), 1, sizeof *copy, _Alignof(CcPrintfFormat));
         if(!copy) return CC_OOM_ERROR;
         *copy = *source;
         copy->next = *destination;
@@ -8420,17 +8420,17 @@ cc_expect_punct_supp(CcParser* p, CcPunct punct, const char* supp){
 static
 CcExpr* _Nullable
 _cc_alloc_expr(CcParser* p, size_t nvalues){
-    size_t size = sizeof(CcExpr) + nvalues * sizeof(CcExpr*);
     #if CC_RECYCLE_EXPRS
-    if(nvalues < sizeof p->exprs / sizeof p->exprs[0]){
+    if(nvalues < countof(p->exprs)){
         CcExpr* n = fl_pop(&p->exprs[nvalues]);
         if(n){
-            memset(n, 0, size);
+            memset(n, 0, sizeof *n + nvalues * sizeof *n->values);
             return n;
         }
     }
     #endif
-    return Allocator_zalloc(cc_allocator(p), size);
+    CcExpr* e = Allocator_zalloc_extra(cc_allocator(p), nvalues, sizeof *e->values, sizeof *e, _Alignof(CcExpr));
+    return e;
 }
 static
 void
@@ -8441,8 +8441,7 @@ _cc_release_expr(CcParser* p, CcExpr* e, size_t nvalues){
         return;
     }
     #endif
-    size_t size = sizeof(CcExpr) + nvalues * sizeof(CcExpr*);
-    Allocator_free(cc_allocator(p), e, size);
+    Allocator_free_extra(cc_allocator(p), e, nvalues, sizeof *e->values, sizeof *e, _Alignof(CcExpr));
 }
 static
 size_t
@@ -8667,7 +8666,7 @@ cc_release_expr(CcParser* p, CcExpr* e){
                     if(e->init_list->entries[i].value)
                         cc_release_expr(p, e->init_list->entries[i].value);
                 }
-                Allocator_free(cc_allocator(p), e->init_list, sizeof(CcInitList) + e->init_list->count * sizeof(CcInitEntry));
+                Allocator_free_extra(cc_allocator(p), e->init_list, e->init_list->count, sizeof *e->init_list->entries, sizeof *e->init_list, _Alignof(CcInitList));
             }
             break;
         case CC_EXPR_STATEMENT_EXPRESSION:
@@ -8799,7 +8798,7 @@ cc_uint64_expr(CcParser* p, SrcLoc loc, CcQualType type, uint64_t v){
 static
 CcExpr*_Nullable
 cc_constexpr_string_slice_expr(CcParser* p, SrcLoc loc, Atom name, _Bool include_nul){
-    CcInitList* il = Allocator_zalloc(cc_allocator(p), sizeof *il + 2 * sizeof(CcInitEntry));
+    CcInitList* il = Allocator_zalloc_extra(cc_allocator(p), 2, sizeof *il->entries, sizeof *il, _Alignof(CcInitList));
     if(!il) return NULL;
     CcExpr *count = NULL, *data = NULL, *literal = NULL, *node = NULL;
     if(0){
@@ -8808,7 +8807,7 @@ cc_constexpr_string_slice_expr(CcParser* p, SrcLoc loc, Atom name, _Bool include
         if(data) cc_release_expr(p, data);
         if(literal) cc_release_expr(p, literal);
         if(count) cc_release_expr(p, count);
-        Allocator_free(cc_allocator(p), il, sizeof *il+2*sizeof(CcInitEntry));
+        Allocator_free_extra(cc_allocator(p), il, 2, sizeof *il->entries, sizeof *il, _Alignof(CcInitList));
         return NULL;
     }
     il->loc = loc;
@@ -8948,7 +8947,7 @@ static
 Marray(CcToken)*_Nullable
 cc_get_scratch(CcParser* p){
     Marray(CcToken)* toks = fl_pop(&p->scratch_tokens);
-    if(!toks) toks = Allocator_zalloc(cc_allocator(p), sizeof *toks);
+    if(!toks) toks = Allocator_zalloc(cc_allocator(p), 1, sizeof *toks, _Alignof(Marray(CcToken)));
     if(!toks) return toks;
     toks->count = 0;
     return toks;
@@ -10322,8 +10321,10 @@ cc_append_method(CcParser* p, CcStruct* s, CcFunc* func, SrcLoc loc){
     if(err) return err;
     if(found) return cc_error(p, loc, "duplicate member '%s'", func->name->data);
     if(s->methods.count == s->methods.capacity){
-        uint32_t capacity = s->methods.capacity ? s->methods.capacity * 2 : 4;
-        CcField* methods = Allocator_realloc(cc_allocator(p), s->methods.data, s->methods.capacity * sizeof *methods, capacity * sizeof *methods);
+        uint32_t capacity = 4;
+        if(s->methods.capacity && mul_overflow(s->methods.capacity, 2u, &capacity))
+            return CC_OOM_ERROR;
+        CcField* methods = Allocator_realloc(cc_allocator(p), s->methods.data, s->methods.capacity, capacity, sizeof *s->methods.data, _Alignof(CcField));
         if(!methods) return CC_OOM_ERROR;
         s->methods.data = methods;
         s->methods.capacity = capacity;
@@ -10470,12 +10471,12 @@ cc_parse_scalar_value(CcParser* p, CcParseFlags flags, CcQualType target, CcExpr
             if(err) return err;
         }
         if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rbrace){
-            CcInitList* list = Allocator_zalloc(cc_allocator(p), sizeof *list);
+            CcInitList* list = Allocator_zalloc(cc_allocator(p), 1, sizeof *list, _Alignof(CcInitList));
             if(!list) return CC_OOM_ERROR;
             list->loc = peek.loc;
             CcExpr* node = cc_make_expr(p, CC_EXPR_INIT_LIST, peek.loc, (CcQualType){.unqual = target.unqual}, 0);
             if(!node){
-                Allocator_free(cc_allocator(p), list, sizeof *list);
+                Allocator_free(cc_allocator(p), list, 1, sizeof *list, _Alignof(CcInitList));
                 return CC_OOM_ERROR;
             }
             node->init_list = list;
@@ -10622,11 +10623,11 @@ cc_parse_init_value(CcParser* p, CcParseFlags flags, CcQualType field_type, _Boo
                 if(!arr->is_incomplete && arr->length < ccqt_as_array(v->type)->length)
                     v->type = field_type;
                 if(!arr->is_incomplete){
-                    CcInitList* list = Allocator_zalloc(cc_allocator(p), sizeof(CcInitList) + sizeof(CcInitEntry));
+                    CcInitList* list = Allocator_zalloc_extra(cc_allocator(p), 1, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
                     if(!list) return CC_OOM_ERROR;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_INIT_LIST, v->loc, field_type, 0);
                     if(!node){
-                        Allocator_free(cc_allocator(p), list, sizeof(CcInitList) + sizeof(CcInitEntry));
+                        Allocator_free_extra(cc_allocator(p), list, 1, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
                         return CC_OOM_ERROR;
                     }
                     list->loc = v->loc;
@@ -11199,7 +11200,7 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
                 cc_next_token(p, &peek);
             err = cc_expect_punct(p, CC_rbrace);
             if(err) return err;
-            list = Allocator_zalloc(cc_allocator(p), sizeof(CcInitList) + sizeof(CcInitEntry));
+            list = Allocator_zalloc_extra(cc_allocator(p), 1, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
             if(!list) return CC_OOM_ERROR;
             list->loc = loc;
             list->count = 1;
@@ -11213,7 +11214,7 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
         if(err) return err;
         if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rbrace){
             cc_next_token(p, &peek);
-            list = Allocator_zalloc(cc_allocator(p), sizeof(CcInitList));
+            list = Allocator_zalloc(cc_allocator(p), 1, sizeof *list, _Alignof(CcInitList));
             if(!list) return CC_OOM_ERROR;
             list->loc = loc;
             list->count = 0;
@@ -11238,7 +11239,7 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
             }
             err = cc_expect_punct(p, CC_rbrace);
             if(err) return err;
-            list = Allocator_zalloc(cc_allocator(p), sizeof(CcInitList) + sizeof(CcInitEntry));
+            list = Allocator_zalloc_extra(cc_allocator(p), 1, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
             if(!list) return CC_OOM_ERROR;
             list->loc = loc;
             list->count = 1;
@@ -11252,6 +11253,7 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
         uint32_t max_index = 0;
         err = cc_parse_init(p, flags, target_type, 1, loc, &entries, &max_index, first_value, &path);
         ma_cleanup(uint32_t)(&path, cc_allocator(p));
+        if(!err && entries.count > UINT32_MAX) err = CC_OOM_ERROR;
         if(err){
             for(size_t i = 0; i < entries.count; i++){
                 cc_field_path_free(cc_allocator(p), entries.data[i].path);
@@ -11260,7 +11262,7 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
             ma_cleanup(CcInitEntry)(&entries, cc_allocator(p));
             return err;
         }
-        list = Allocator_zalloc(cc_allocator(p), sizeof(CcInitList) + entries.count * sizeof(CcInitEntry));
+        list = Allocator_zalloc_extra(cc_allocator(p), entries.count, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
         if(!list){
             for(size_t i = 0; i < entries.count; i++){
                 cc_field_path_free(cc_allocator(p), entries.data[i].path);
@@ -11318,7 +11320,7 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
         cc_field_path_free(cc_allocator(p), list->entries[i].path);
         if(list->entries[i].value) cc_release_expr(p, list->entries[i].value);
     }
-    Allocator_free(cc_allocator(p), list, sizeof *list + (size_t)list->count * sizeof(CcInitEntry));
+    Allocator_free_extra(cc_allocator(p), list, (size_t)list->count, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
     return err;
 }
 
@@ -11402,7 +11404,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                 redefining = u && !u->is_incomplete;
                 if(!u){
                     // Register incomplete tag before parsing body so self-references resolve.
-                    u = Allocator_zalloc(cc_allocator(p), sizeof *u);
+                    u = Allocator_zalloc(cc_allocator(p), 1, sizeof *u, _Alignof(CcUnion));
                     if(!u) return CC_OOM_ERROR;
                     *u = (CcUnion){.kind = CC_UNION, .name = name, .loc = loc, .is_incomplete = 1};
                     err = cc_scope_insert_union_tag(cc_allocator(p), cc_scope_declarations(p->current), name, u);
@@ -11420,7 +11422,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                 redefining = s && !s->is_incomplete;
                 if(!s){
                     // Register incomplete tag before parsing body so self-references resolve.
-                    s = Allocator_zalloc(cc_allocator(p), sizeof *s);
+                    s = Allocator_zalloc(cc_allocator(p), 1, sizeof *s, _Alignof(CcStruct));
                     if(!s) return CC_OOM_ERROR;
                     *s = (CcStruct){.kind = CC_STRUCT, .name = name, .loc = loc, .is_incomplete = 1};
                     err = cc_scope_insert_struct_tag(cc_allocator(p), cc_scope_declarations(p->current), name, s);
@@ -11437,13 +11439,13 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
             // Anonymous struct/union: allocate incomplete placeholder so _Self
             // inside the body can refer to it.
             if(is_union){
-                CcUnion* u = Allocator_zalloc(cc_allocator(p), sizeof *u);
+                CcUnion* u = Allocator_zalloc(cc_allocator(p), 1, sizeof *u, _Alignof(CcUnion));
                 if(!u) return CC_OOM_ERROR;
                 *u = (CcUnion){.kind = CC_UNION, .loc = loc, .is_incomplete = 1};
                 existing = u;
             }
             else {
-                CcStruct* s = Allocator_zalloc(cc_allocator(p), sizeof *s);
+                CcStruct* s = Allocator_zalloc(cc_allocator(p), 1, sizeof *s, _Alignof(CcStruct));
                 if(!s) return CC_OOM_ERROR;
                 *s = (CcStruct){.kind = CC_STRUCT, .loc = loc, .is_incomplete = 1};
                 existing = s;
@@ -11630,7 +11632,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                             }
                         }
                         else {
-                            func = Allocator_zalloc(cc_allocator(p), sizeof *func);
+                            func = Allocator_zalloc(cc_allocator(p), 1, sizeof *func, _Alignof(CcFunc));
                             if(!func){ err = CC_OOM_ERROR; goto struct_err; }
                             func->name = member_name;
                             func->loc = name_loc;
@@ -11844,7 +11846,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
         if(!is_union){
             CcStruct* s = (CcStruct*)existing;
             if(!s){
-                s = Allocator_zalloc(cc_allocator(p), sizeof *s);
+                s = Allocator_zalloc(cc_allocator(p), 1, sizeof *s, _Alignof(CcStruct));
                 if(!s) return CC_OOM_ERROR;
             }
             *s = (CcStruct){
@@ -11872,7 +11874,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
         else {
             CcUnion* u = (CcUnion*)existing;
             if(!u){
-                u = Allocator_zalloc(cc_allocator(p), sizeof *u);
+                u = Allocator_zalloc(cc_allocator(p), 1, sizeof *u, _Alignof(CcUnion));
                 if(!u) return CC_OOM_ERROR;
             }
             *u = (CcUnion){
@@ -11917,7 +11919,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
         CcStruct* s = cc_scope_lookup_struct_tag(tag_scope, name, standalone ? CC_SCOPE_NO_WALK : CC_SCOPE_WALK_CHAIN);
         if(!s){
             // Forward declaration — create incomplete struct
-            s = Allocator_zalloc(cc_allocator(p), sizeof *s);
+            s = Allocator_zalloc(cc_allocator(p), 1, sizeof *s, _Alignof(CcStruct));
             if(!s) return CC_OOM_ERROR;
             *s = (CcStruct){
                 .kind = CC_STRUCT,
@@ -11933,7 +11935,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
     else {
         CcUnion* u = cc_scope_lookup_union_tag(tag_scope, name, standalone ? CC_SCOPE_NO_WALK : CC_SCOPE_WALK_CHAIN);
         if(!u){
-            u = Allocator_zalloc(cc_allocator(p), sizeof *u);
+            u = Allocator_zalloc(cc_allocator(p), 1, sizeof *u, _Alignof(CcUnion));
             if(!u) return CC_OOM_ERROR;
             *u = (CcUnion){
                 .kind = CC_UNION,
@@ -12113,7 +12115,7 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool member, CcQualT
             }
         }
         if(!e){
-            e = Allocator_zalloc(cc_allocator(p), sizeof *e);
+            e = Allocator_zalloc(cc_allocator(p), 1, sizeof *e, _Alignof(CcEnum));
             if(!e) return CC_OOM_ERROR;
             *e = (CcEnum){
                 .kind = CC_ENUM,
@@ -12236,7 +12238,7 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool member, CcQualT
                 next_type = previous->type;
             }
             else {
-                enumerator = Allocator_zalloc(cc_allocator(p), sizeof *enumerator);
+                enumerator = Allocator_zalloc(cc_allocator(p), 1, sizeof *enumerator, _Alignof(CcEnumerator));
                 if(!enumerator){
                     err = CC_OOM_ERROR;
                     goto enum_err;
@@ -12331,7 +12333,7 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool member, CcQualT
     }
     if(!e){
         // A fixed underlying type completes the layout even without a body.
-        e = Allocator_zalloc(cc_allocator(p), sizeof *e);
+        e = Allocator_zalloc(cc_allocator(p), 1, sizeof *e, _Alignof(CcEnum));
         if(!e) return CC_OOM_ERROR;
         *e = (CcEnum){
             .kind = CC_ENUM,
@@ -12909,7 +12911,7 @@ CcStmtNode*_Nullable
 cc_stmt_node(CcParser* p, CcStmtKind k, SrcLoc loc, uint32_t count){
     if(p->current_func && k == CC_STMT_VLA)
         p->current_func->inline_blocked = 1;
-    CcStmtNode* n = Allocator_zalloc(cc_allocator(p), sizeof(CcStmtNode) + count * sizeof(CcStmtNode*));
+    CcStmtNode* n = Allocator_zalloc_extra(cc_allocator(p), count, sizeof *n->stmts, sizeof *n, _Alignof(CcStmtNode));
     if(!n) return NULL;
     n->kind = k;
     n->count = count;
@@ -12953,14 +12955,14 @@ cc_free_stmt_tree(CcParser* p, CcStmtNode*_Nullable n){
     for(uint32_t i = 0; i < n->count; i++)
         cc_free_stmt_tree(p, n->stmts[i]);
     pa_cleanup(&n->decls, cc_allocator(p));
-    Allocator_free(cc_allocator(p), n, sizeof(CcStmtNode) + n->count * sizeof(CcStmtNode*));
+    Allocator_free_extra(cc_allocator(p), n, n->count, sizeof *n->stmts, sizeof *n, _Alignof(CcStmtNode));
 }
 
 static
 CcStmtSink*_Nullable
 cc_push_stmt_sink(CcParser* p){
     CcStmtSink* sink = fl_pop(&p->scratch_stmt_sinks);
-    if(!sink) sink = Allocator_zalloc(cc_allocator(p), sizeof *sink);
+    if(!sink) sink = Allocator_zalloc(cc_allocator(p), 1, sizeof *sink, _Alignof(CcStmtSink));
     if(!sink) return NULL;
     sink->stmts.count = 0;
     sink->prev = p->stmt_sink;
@@ -13757,7 +13759,7 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
         case CC_KEYWORD:
             switch(tok.kw.kw){
                 case CC__Defer: {
-                    CcDefer* d = Allocator_zalloc(cc_allocator(p), sizeof *d);
+                    CcDefer* d = Allocator_zalloc(cc_allocator(p), 1, sizeof *d, _Alignof(CcDefer));
                     if(!d) return CC_OOM_ERROR;
                     CcStmtNode* node = cc_stmt_node(p, CC_STMT_DEFER, tok.loc, 1);
                     if(!node) return CC_OOM_ERROR;
@@ -14173,7 +14175,7 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
                     if(!node) return CC_OOM_ERROR;
                     node->label = label_tok.ident.ident;
                     if(p->defer_context.active){
-                        node->goto_.cleanup = Allocator_zalloc(cc_allocator(p), sizeof(CcCleanupRange));
+                        node->goto_.cleanup = Allocator_zalloc(cc_allocator(p), 1, sizeof *node->goto_.cleanup, _Alignof(CcCleanupRange));
                         if(!node->goto_.cleanup){
                             cc_free_stmt_tree(p, node);
                             return CC_OOM_ERROR;
@@ -14413,7 +14415,7 @@ cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
 static
 int
 cc_new_vla_bound(CcParser* p, SrcLoc loc, CcQualType type, CcVariable*_Nonnull*_Nonnull out){
-    CcVariable* var = Allocator_zalloc(cc_allocator(p), sizeof *var);
+    CcVariable* var = Allocator_zalloc(cc_allocator(p), 1, sizeof *var, _Alignof(CcVariable));
     if(!var) return CC_OOM_ERROR;
     *var = (CcVariable){
         .name=nil_atom,
@@ -14503,7 +14505,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
         }
         err = cc_parse_declarator_inner(p, flags, out_head, out_tail, out_name, out_name_loc, out_param_names);
         if(err) return err;
-        CcPointer* ptr = Allocator_zalloc(cc_scratch_allocator(p), sizeof *ptr);
+        CcPointer* ptr = Allocator_zalloc(cc_scratch_allocator(p), 1, sizeof *ptr, _Alignof(CcPointer));
         if(!ptr) return CC_OOM_ERROR;
         ptr->kind = ptr_kind;
         ptr->pointee = **out_tail;
@@ -14575,7 +14577,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                 if(err) return err;
                 err = cc_expect_punct(p, ']');
                 if(err) return err;
-                CcSlice* s = Allocator_zalloc(cc_scratch_allocator(p), sizeof *s);
+                CcSlice* s = Allocator_zalloc(cc_scratch_allocator(p), 1, sizeof *s, _Alignof(CcSlice));
                 if(!s) return CC_OOM_ERROR;
                 s->kind = CC_SLICE;
                 s->pointee = **out_tail;
@@ -14583,7 +14585,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                 *out_tail = &s->pointee;
                 continue;
             }
-            CcArray* arr = Allocator_zalloc(cc_scratch_allocator(p), sizeof *arr);
+            CcArray* arr = Allocator_zalloc(cc_scratch_allocator(p), 1, sizeof *arr, _Alignof(CcArray));
             if(!arr) return CC_OOM_ERROR;
             arr->kind = CC_ARRAY;
             arr->declarator_loc = tok.loc;
@@ -14639,7 +14641,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                     return cc_error(p, peek.loc, "static array parameter requires a bound");
                 if(!flags.parameter_type && !flags.generic_association)
                     return cc_error(p, peek.loc, "[*] requires function prototype scope");
-                CcVla* vla = Allocator_zalloc(cc_allocator(p), sizeof *vla);
+                CcVla* vla = Allocator_zalloc(cc_allocator(p), 1, sizeof *vla, _Alignof(CcVla));
                 if(!vla) return CC_OOM_ERROR;
                 vla->kind = CC_VLA;
                 vla->unspecified = 1;
@@ -14679,7 +14681,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                         return cc_error(p, tok.loc, "array dimension exceeds supported range");
                     }
                     if(constant_err != CC_NOT_CONSTANT_ERROR) return constant_err;
-                    CcVla* vla = Allocator_zalloc(cc_allocator(p), sizeof *vla);
+                    CcVla* vla = Allocator_zalloc(cc_allocator(p), 1, sizeof *vla, _Alignof(CcVla));
                     if(!vla) return CC_OOM_ERROR;
                     vla->kind = CC_VLA;
                     vla->parameter_quals = arr->parameter_quals;
@@ -14883,7 +14885,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                 if(err) goto param_err;
                 err = cc_adjust_parameter_type(p, param_head, &param_type);
                 if(err) goto param_err;
-                CcVariable* var = Allocator_zalloc(cc_allocator(p), sizeof *var);
+                CcVariable* var = Allocator_zalloc(cc_allocator(p), 1, sizeof *var, _Alignof(CcVariable));
                 if(!var){
                     err = CC_OOM_ERROR;
                     goto param_err;
@@ -14950,8 +14952,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
             }
             param_done:;
             {
-                size_t sz = sizeof(CcFunction) + sizeof(CcQualType) * param_types.count;
-                CcFunction* func = Allocator_zalloc(cc_scratch_allocator(p), sz);
+                CcFunction* func = Allocator_zalloc_extra(cc_scratch_allocator(p), param_types.count, sizeof *func->params, sizeof *func, _Alignof(CcFunction));
                 if(!func){
                     err = CC_OOM_ERROR;
                     goto param_err;
@@ -15191,7 +15192,7 @@ cc_intern_qualtype(CcParser* p, CcQualType t){
             CcQualType elem = cc_intern_qualtype(p, ccqt_qualified_array_element(t));
             if(!elem.bits) return CCQT_NONE;
             if(ccqt_kind(elem) == CC_VLA && !old->is_incomplete){
-                CcVla* vla = Allocator_zalloc(cc_allocator(p), sizeof *vla);
+                CcVla* vla = Allocator_zalloc(cc_allocator(p), 1, sizeof *vla, _Alignof(CcVla));
                 if(!vla) return CCQT_NONE;
                 vla->kind = CC_VLA;
                 vla->element = elem;
@@ -15209,18 +15210,17 @@ cc_intern_qualtype(CcParser* p, CcQualType t){
         }
         case CC_FUNCTION: {
             CcFunction* old = ccqt_as_function(t);
-            size_t size = old->param_count * sizeof(CcQualType);
-            CcQualType* params = size ? Allocator_alloc(cc_scratch_allocator(p), size) : NULL;
-            if(size && !params) return CCQT_NONE;
+            CcQualType* params = old->param_count ? Allocator_alloc(cc_scratch_allocator(p), old->param_count, sizeof *params, _Alignof(CcQualType)) : NULL;
+            if(old->param_count && !params) return CCQT_NONE;
             for(uint32_t i = 0; i < old->param_count; i++){
                 if(cc_adjust_parameter_type(p, old->params[i], &params[i])){
-                    if(params) Allocator_free(cc_scratch_allocator(p), params, size);
+                    if(params) Allocator_free(cc_scratch_allocator(p), params, old->param_count, sizeof *params, _Alignof(CcQualType));
                     return CCQT_NONE;
                 }
             }
             CcQualType ret = cc_intern_qualtype(p, old->return_type);
             CcFunction* func = ret.bits ? cc_intern_function(&p->type_cache, cc_allocator(p), ret, params, old->param_count, old->param_count, old->is_variadic, old->no_prototype) : NULL;
-            if(params) Allocator_free(cc_scratch_allocator(p), params, size);
+            if(params) Allocator_free(cc_scratch_allocator(p), params, old->param_count, sizeof *params, _Alignof(CcQualType));
             if(!func) return CCQT_NONE;
             return (CcQualType){.bits = (uintptr_t)func | quals};
         }
@@ -15433,7 +15433,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 if(err) return err;
             }
             else {
-                func = Allocator_zalloc(cc_allocator(p), sizeof *func);
+                func = Allocator_zalloc(cc_allocator(p), 1, sizeof *func, _Alignof(CcFunc));
                 if(!func) return CC_OOM_ERROR;
                 func->name = name;
                 err = cc_scope_insert_func(cc_allocator(p), cc_scope_declarations(p->current), name, func);
@@ -15524,7 +15524,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             && !declbase->spec.sp_typedef
             && (declbase->spec.sp_static || declbase->spec.sp_thread_local || declbase->spec.sp_constexpr))
                 return cc_type_error(p, name_loc, type, "VLA object requires automatic storage duration");
-            CcDefer* marker = Allocator_zalloc(cc_allocator(p), sizeof *marker);
+            CcDefer* marker = Allocator_zalloc(cc_allocator(p), 1, sizeof *marker, _Alignof(CcDefer));
             if(!marker) return CC_OOM_ERROR;
             marker->prev = p->defer_context.active;
             marker->vm_scope = 1;
@@ -15583,7 +15583,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                         return cc_error(p, tok.loc, "redefinition of '%.*s' as a different kind of symbol", name->length, name->data);
                 }
             }
-            var = Allocator_zalloc(cc_allocator(p), sizeof *var);
+            var = Allocator_zalloc(cc_allocator(p), 1, sizeof *var, _Alignof(CcVariable));
             if(!var) return CC_OOM_ERROR;
             *var = (CcVariable){
                 .name = name,
@@ -15772,7 +15772,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 if(err) return err;
             }
             else {
-                func = Allocator_zalloc(cc_allocator(p), sizeof *func);
+                func = Allocator_zalloc(cc_allocator(p), 1, sizeof *func, _Alignof(CcFunc));
                 if(!func) return CC_OOM_ERROR;
                 func->name = name;
                 func->loc = name_loc;
@@ -15854,7 +15854,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             if(var && ccqt_kind(type) == CC_VLA){
                 if(initializer && (initializer->kind != CC_EXPR_INIT_LIST || initializer->init_list->count))
                     return cc_error(p, name_loc, "VLA initializer must be {} or {0}");
-                CcVariable* mark = Allocator_zalloc(cc_allocator(p), sizeof *mark);
+                CcVariable* mark = Allocator_zalloc(cc_allocator(p), 1, sizeof *mark, _Alignof(CcVariable));
                 if(!mark) return CC_OOM_ERROR;
                 *mark = (CcVariable){
                     .name=nil_atom,
@@ -15981,13 +15981,13 @@ cc_register_extern_var(CcParser* p, StringView name, CcQualType type){
     Allocator al = cc_allocator(p);
     Atom a = AT_atomize(p->cpp.at, name.text, name.length);
     if(!a) return CC_OOM_ERROR;
-    CcVariable* var = Allocator_zalloc(al, sizeof *var);
+    CcVariable* var = Allocator_zalloc(al, 1, sizeof *var, _Alignof(CcVariable));
     if(!var) return CC_OOM_ERROR;
     var->name = a;
     var->type = type;
     var->extern_ = 1;
     int err = cc_scope_insert_var(al, &p->global, a, var);
-    if(err) Allocator_free(al, var, sizeof *var);
+    if(err) Allocator_free(al, var, 1, sizeof *var, _Alignof(CcVariable));
     return err;
 }
 
@@ -16134,14 +16134,14 @@ cc_define_builtin_types(CcParser* p){
             Atom rs_name = AT_atomize(p->cpp.at, "reg_save_area", sizeof "reg_save_area"-1);
             if(!gp_name || !fp_name || !oa_name || !rs_name) return CC_OOM_ERROR;
 
-            CcField* fields = Allocator_alloc(al, 4 * sizeof(CcField));
+            CcField* fields = Allocator_alloc(al, 4, sizeof *fields, _Alignof(CcField));
             if(!fields) return CC_OOM_ERROR;
             fields[0] = (CcField){.type = ccqt_basic(CCBT_unsigned), .name = gp_name};
             fields[1] = (CcField){.type = ccqt_basic(CCBT_unsigned), .name = fp_name};
             fields[2] = (CcField){.type = p->void_star, .name = oa_name};
             fields[3] = (CcField){.type = p->void_star, .name = rs_name};
 
-            CcStruct* s = Allocator_zalloc(al, sizeof *s);
+            CcStruct* s = Allocator_zalloc(al, 1, sizeof *s, _Alignof(CcStruct));
             if(!s) return CC_OOM_ERROR;
             *s = (CcStruct){
                 .kind = CC_STRUCT,
@@ -16175,7 +16175,7 @@ cc_define_builtin_types(CcParser* p){
             if(!stack_name || !gr_top_name || !vr_top_name || !gr_offs_name || !vr_offs_name)
                 return CC_OOM_ERROR;
 
-            CcField* fields = Allocator_alloc(al, 5 * sizeof *fields);
+            CcField* fields = Allocator_alloc(al, 5, sizeof *fields, _Alignof(CcField));
             if(!fields) return CC_OOM_ERROR;
             fields[0] = (CcField){.type = p->void_star, .name = stack_name};
             fields[1] = (CcField){.type = p->void_star, .name = gr_top_name};
@@ -16183,7 +16183,7 @@ cc_define_builtin_types(CcParser* p){
             fields[3] = (CcField){.type = ccqt_basic(CCBT_int), .name = gr_offs_name};
             fields[4] = (CcField){.type = ccqt_basic(CCBT_int), .name = vr_offs_name};
 
-            CcStruct* s = Allocator_zalloc(al, sizeof *s);
+            CcStruct* s = Allocator_zalloc(al, 1, sizeof *s, _Alignof(CcStruct));
             if(!s) return CC_OOM_ERROR;
             *s = (CcStruct){
                 .kind = CC_STRUCT,
@@ -16241,7 +16241,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("bitoffset"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, bitoffset)},
             {SVI("is_bitfield"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, is_bitfield)},
         };
-        CcField* fields = Allocator_zalloc(al, (sizeof fieldinfos / sizeof fieldinfos[0]) * sizeof *fields);
+        CcField* fields = Allocator_zalloc(al, (sizeof fieldinfos / sizeof fieldinfos[0]), sizeof *fields, _Alignof(CcField));
         if(!fields) return CC_OOM_ERROR;
         for(size_t i = 0; i < sizeof fieldinfos / sizeof fieldinfos[0]; i++){
             struct f* f = &fieldinfos[i];
@@ -16254,7 +16254,7 @@ cc_define_builtin_types(CcParser* p){
         }
         Atom name = AT_ATOMIZE(p->cpp.at, "__builtin_Field");
         if(!name) return CC_OOM_ERROR;
-        CcStruct* s = Allocator_zalloc(al, sizeof *s);
+        CcStruct* s = Allocator_zalloc(al, 1, sizeof *s, _Alignof(CcStruct));
         if(!s) return CC_OOM_ERROR;
         *s = (CcStruct){
             .kind = CC_STRUCT,
@@ -16278,7 +16278,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("offset"), ccqt_basic(cc_target(p)->size_type), offsetof(CiRtMethod, offset)},
             {SVI("address"), ccqt_basic(cc_target(p)->size_type), offsetof(CiRtMethod, address)},
         };
-        CcField* fields = Allocator_zalloc(al, (sizeof methodinfos / sizeof methodinfos[0]) * sizeof *fields);
+        CcField* fields = Allocator_zalloc(al, (sizeof methodinfos / sizeof methodinfos[0]), sizeof *fields, _Alignof(CcField));
         if(!fields) return CC_OOM_ERROR;
         for(size_t i = 0; i < sizeof methodinfos / sizeof methodinfos[0]; i++){
             struct f* f = &methodinfos[i];
@@ -16288,7 +16288,7 @@ cc_define_builtin_types(CcParser* p){
         }
         Atom name = AT_ATOMIZE(p->cpp.at, "__builtin_Method");
         if(!name) return CC_OOM_ERROR;
-        CcStruct* s = Allocator_zalloc(al, sizeof *s);
+        CcStruct* s = Allocator_zalloc(al, 1, sizeof *s, _Alignof(CcStruct));
         if(!s) return CC_OOM_ERROR;
         *s = (CcStruct){
             .kind = CC_STRUCT,
@@ -16311,7 +16311,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("value"), ccqt_basic(CCBT_unsigned_int128), offsetof(CiRtEnumerator, value)},
             {SVI("type"), ccqt_basic(CCBT__Type), offsetof(CiRtEnumerator, type)},
         };
-        CcField* fields = Allocator_zalloc(al, (sizeof enuminfos / sizeof enuminfos[0]) * sizeof *fields);
+        CcField* fields = Allocator_zalloc(al, countof(enuminfos), sizeof *fields, _Alignof(CcField));
         if(!fields) return CC_OOM_ERROR;
         for(size_t i = 0; i < sizeof enuminfos / sizeof enuminfos[0]; i++){
             struct f* f = &enuminfos[i];
@@ -16324,7 +16324,7 @@ cc_define_builtin_types(CcParser* p){
         }
         Atom name = AT_ATOMIZE(p->cpp.at, "__builtin_Enumerator");
         if(!name) return CC_OOM_ERROR;
-        CcStruct* s = Allocator_zalloc(al, sizeof *s);
+        CcStruct* s = Allocator_zalloc(al, 1, sizeof *s, _Alignof(CcStruct));
         if(!s) return CC_OOM_ERROR;
         *s = (CcStruct){
             .kind = CC_STRUCT,
@@ -16343,7 +16343,7 @@ cc_define_builtin_types(CcParser* p){
     {
         Atom name = AT_ATOMIZE(p->cpp.at, "__builtin_SrcLoc");
         if(!name) return CC_OOM_ERROR;
-        CcStruct* s = Allocator_zalloc(al, sizeof *s);
+        CcStruct* s = Allocator_zalloc(al, 1, sizeof *s, _Alignof(CcStruct));
         if(!s) return CC_OOM_ERROR;
         *s = (CcStruct){
             .kind = CC_STRUCT,
@@ -16367,7 +16367,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("address"), p->void_star, offsetof(CiRtModuleMember, address)},
             {SVI("srcloc"), p->builtin_src_loc, offsetof(CiRtModuleMember, loc)},
         };
-        CcField* fields = Allocator_zalloc(al, (sizeof memberinfos / sizeof memberinfos[0]) * sizeof *fields);
+        CcField* fields = Allocator_zalloc(al, countof(memberinfos), sizeof *fields, _Alignof(CcField));
         if(!fields) return CC_OOM_ERROR;
         for(size_t i = 0; i < sizeof memberinfos / sizeof memberinfos[0]; i++){
             struct f* f = &memberinfos[i];
@@ -16380,7 +16380,7 @@ cc_define_builtin_types(CcParser* p){
         }
         Atom name = AT_ATOMIZE(p->cpp.at, "__builtin_ModuleMember");
         if(!name) return CC_OOM_ERROR;
-        CcStruct* s = Allocator_zalloc(al, sizeof *s);
+        CcStruct* s = Allocator_zalloc(al, 1, sizeof *s, _Alignof(CcStruct));
         if(!s) return CC_OOM_ERROR;
         *s = (CcStruct){
             .kind = CC_STRUCT,
@@ -16404,7 +16404,7 @@ cc_define_builtin_types(CcParser* p){
     {
         Atom name = AT_ATOMIZE(p->cpp.at, "__builtin_Module");
         if(!name) return CC_OOM_ERROR;
-        CcStruct* s = Allocator_zalloc(al, sizeof *s);
+        CcStruct* s = Allocator_zalloc(al, 1, sizeof *s, _Alignof(CcStruct));
         if(!s) return CC_OOM_ERROR;
         *s = (CcStruct){
             .kind = CC_STRUCT,
@@ -16699,7 +16699,7 @@ cc_define_builtin_types(CcParser* p){
             struct b* b = &builtins[i];
             CcFunction* ftype = cc_intern_function(&p->type_cache, al, b->ret, b->params, b->nargs, b->nargs, b->variadic, 0);
             if(!ftype) return CC_OOM_ERROR;
-            CcFunc* func = Allocator_zalloc(al, sizeof *func);
+            CcFunc* func = Allocator_zalloc(al, 1, sizeof *func, _Alignof(CcFunc));
             if(!func) return CC_OOM_ERROR;
             Atom key = AT_atomize(p->cpp.at, b->name.text, b->name.length);
             if(!key) return CC_OOM_ERROR;
@@ -19302,7 +19302,7 @@ cc_clone_expr_inner(CcParser* p, CcExpr* e, unsigned depth, SrcLoc call_loc, _Bo
                 break;
             }
             CcInitList* source = e->init_list;
-            CcInitList* list = Allocator_zalloc(cc_allocator(p), sizeof *list + source->count*sizeof(CcInitEntry));
+            CcInitList* list = Allocator_zalloc_extra(cc_allocator(p), source->count, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
             if(!list){
                 err = CC_OOM_ERROR;
                 goto release_copy;
@@ -19428,12 +19428,12 @@ cc_eval_slice_value(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull out){
         }
     }
     CcExpr* length = cc_uint64_expr(p, e->loc, ccqt_basic(cc_target(p)->size_type), count);
-    CcInitList* list = Allocator_zalloc(cc_allocator(p), sizeof *list + 2 * sizeof(CcInitEntry));
+    CcInitList* list = Allocator_zalloc_extra(cc_allocator(p), 2, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
     CcExpr* value = cc_make_expr(p, CC_EXPR_INIT_LIST, e->loc, e->type, 0);
     if(!length || !list || !value){
         cc_release_expr(p, data);
         if(length) cc_release_expr(p, length);
-        if(list) Allocator_free(cc_allocator(p), list, sizeof *list + 2 * sizeof(CcInitEntry));
+        if(list) Allocator_free_extra(cc_allocator(p), list, 2, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
         if(value) _cc_release_expr(p, value, 0);
         return CC_OOM_ERROR;
     }
@@ -19599,16 +19599,11 @@ cc_eval_path_select(CcEvalCtx* ctx, CcExpr* base, CcFieldPath path, CcQualType t
         *handled = 1;
         return 0;
     }
-    size_t size;
-    if(mul_overflow((size_t)n, sizeof(CcInitEntry), &size) || add_overflow(sizeof(CcInitList), size, &size)){
-        if(replacement) cc_release_expr(p, replacement);
-        return CC_OOM_ERROR;
-    }
-    CcInitList* view = Allocator_zalloc(cc_allocator(p), size);
+    CcInitList* view = Allocator_zalloc_extra(cc_allocator(p), n, sizeof *view->entries, sizeof *view, _Alignof(CcInitList));
     CcExpr* value = cc_make_expr(p, CC_EXPR_INIT_LIST, base->loc, type, 0);
     if(!view || !value){
         if(replacement) cc_release_expr(p, replacement);
-        if(view) Allocator_free(cc_allocator(p), view, size);
+        if(view) Allocator_free_extra(cc_allocator(p), view, n, sizeof *view->entries, sizeof *view, _Alignof(CcInitList));
         if(value) _cc_release_expr(p, value, 0);
         return CC_OOM_ERROR;
     }
@@ -20657,7 +20652,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             }
             CcBasicTypeKind tk = ccqt_basic_kind(target);
             if(tk == CCBT__Any){
-                CcInitList* il = Allocator_zalloc(cc_allocator(p), sizeof(CcInitList) + 2 * sizeof(CcInitEntry));
+                CcInitList* il = Allocator_zalloc_extra(cc_allocator(p), 2, sizeof *il->entries, sizeof *il, _Alignof(CcInitList));
                 if(!il){
                     cc_release_expr(p, operand);
                     return CC_OOM_ERROR;
@@ -20667,7 +20662,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 if(!tag || !node){
                     if(tag) cc_release_expr(p, tag);
                     if(node) _cc_release_expr(p, node, 0);
-                    Allocator_free(cc_allocator(p), il, sizeof(CcInitList) + 2 * sizeof(CcInitEntry));
+                    Allocator_free_extra(cc_allocator(p), il, 2, sizeof *il->entries, sizeof *il, _Alignof(CcInitList));
                     cc_release_expr(p, operand);
                     return CC_OOM_ERROR;
                 }
@@ -20831,13 +20826,14 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         if(err) goto fini_introspection;
                     }
                     if(count > UINT32_MAX) INTRES(0);
-                    size_t bytes;
-                    if(mul_overflow((size_t)count, sizeof(CcQualType), &bytes)){
-                        err = CC_OOM_ERROR;
-                        goto fini_introspection;
+                    CcQualType *args = NULL;
+                    if(count){
+                        args = Allocator_alloc(cc_scratch_allocator(p), (size_t)count, sizeof *args, _Alignof(CcQualType));
+                        if(!args){
+                            err = CC_OOM_ERROR;
+                            goto fini_introspection;
+                        }
                     }
-                    CcQualType* args = bytes ? Allocator_alloc(cc_scratch_allocator(p), bytes) : NULL;
-                    if(bytes && !args){ err = CC_OOM_ERROR; goto fini_introspection; }
                     CcExpr index = {.kind=CC_EXPR_VALUE, .type=ccqt_basic(cc_target(p)->size_type)};
                     CcExpr* access = NULL;
                     if(!array && count){
@@ -20853,7 +20849,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     // The access node borrows both operands.
                     if(access) _cc_release_expr(p, access, 1);
                     _Bool v = !err && cc_is_callable_with(cc_target(p), qt, args, (uint32_t)count);
-                    if(args) Allocator_free(cc_scratch_allocator(p), args, bytes);
+                    if(args) Allocator_free(cc_scratch_allocator(p), args, (size_t)count, sizeof *args, _Alignof(CcQualType));
                     if(err) goto fini_introspection;
                     INTRES(v);
                 }
@@ -20974,7 +20970,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         if(!f) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     }
                     uint32_t nfields = method ? 4 : 6;
-                    CcInitList* il = Allocator_zalloc(cc_allocator(p), sizeof(CcInitList) + nfields * sizeof(CcInitEntry));
+                    CcInitList* il = Allocator_zalloc_extra(cc_allocator(p), nfields, sizeof *il->entries, sizeof *il, _Alignof(CcInitList));
                     if(!il) { err = CC_OOM_ERROR; goto fini_introspection; }
                     il->loc = e->loc;
                     il->count = nfields;
@@ -21048,7 +21044,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     if(idx < 0 || (uint64_t)idx >= enum_->enumerator_count) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     CcEnumerator* en = enum_->enumerators[idx];
                     uint32_t nfields = 3; // name, value bits, type
-                    CcInitList* il = Allocator_zalloc(cc_allocator(p), sizeof(CcInitList) + nfields * sizeof(CcInitEntry));
+                    CcInitList* il = Allocator_zalloc_extra(cc_allocator(p), nfields, sizeof *il->entries, sizeof *il, _Alignof(CcInitList));
                     if(!il) { err = CC_OOM_ERROR; goto fini_introspection; }
                     il->loc = e->loc;
                     il->count = nfields;
@@ -21136,7 +21132,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             CcExpr* node = cc_make_expr(p, CC_EXPR_INIT_LIST, e->loc, e->type, 0);
             if(!node) return CC_OOM_ERROR;
             CcInitList* source = e->init_list;
-            CcInitList* list = Allocator_zalloc(cc_allocator(p), sizeof *list + source->count * sizeof(CcInitEntry));
+            CcInitList* list = Allocator_zalloc_extra(cc_allocator(p), source->count, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
             if(!list){
                 _cc_release_expr(p, node, 0);
                 return CC_OOM_ERROR;

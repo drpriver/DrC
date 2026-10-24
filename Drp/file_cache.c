@@ -10,6 +10,7 @@
 #include "file_cache.h"
 #include "MStringBuilder.h"
 #include "MStringBuilder16.h"
+#include "ckdint.h"
 #include "msb_sprintf.h"
 #include "hash_func.h"
 #include "ByteBuffer.h"
@@ -27,7 +28,7 @@ static
 FileCache*_Nullable
 fc_create(Allocator a, unsigned flags){
     DRP_PROFILE_BEGIN(profile, "file_cache.create");
-    FileCache* fc = Allocator_zalloc(a, sizeof *fc);
+    FileCache* fc = Allocator_zalloc(a, 1, sizeof *fc, _Alignof(FileCache));
     if(!fc) return fc;
     fc->allocator = a;
     fc->path_builder.allocator = a;
@@ -122,7 +123,7 @@ fc_correct_path_spelling(FileCache* fc, CachedFile* f, OsFileHandle handle){
     #ifdef _WIN32
     DWORD capacity = GetFinalPathNameByHandleW(handle, NULL, 0, FILE_NAME_NORMALIZED);
     if(!capacity) return;
-    WCHAR* path = Allocator_alloc(fc->allocator, capacity * sizeof *path);
+    WCHAR* path = Allocator_alloc(fc->allocator, capacity, sizeof *path, _Alignof(WCHAR));
     if(!path) return;
     DWORD length = GetFinalPathNameByHandleW(handle, path, capacity, FILE_NAME_NORMALIZED);
     if(length && length < capacity){
@@ -131,7 +132,7 @@ fc_correct_path_spelling(FileCache* fc, CachedFile* f, OsFileHandle handle){
         if(!name.errored) fc_apply_path_spelling(fc, f, msb_borrow_sv(&name));
         msb_destroy(&name);
     }
-    Allocator_free(fc->allocator, path, (size_t)capacity * sizeof *path);
+    Allocator_free(fc->allocator, path, (size_t)capacity, sizeof *path, _Alignof(WCHAR));
     #elif defined F_GETPATH
     char path[MAXPATHLEN];
     if(fcntl(handle, F_GETPATH, path) == 0)
@@ -177,17 +178,24 @@ fc_create_entry(FileCache* fc){
     DRP_PROFILE_BEGIN(profile, "file_cache.create_entry");
     if(fc->map.count >= fc->map.cap){
         size_t old_cap = fc->map.cap;
-        size_t old_size = old_cap*2*sizeof(uint32_t)+old_cap*sizeof *fc->map.data;
-        size_t new_cap = old_cap?old_cap*2:32;
-        size_t new_size = new_cap*2*sizeof(uint32_t)+new_cap*sizeof *fc->map.data;
-        void *data = Allocator_realloc(fc->allocator, fc->map.data, old_size, new_size);
+        if(old_cap > UINT32_MAX)
+            return NULL;
+        uint32_t new_cap = 32, cap2;
+        if(old_cap && mul_overflow((uint32_t)old_cap, 2u, &new_cap))
+            return NULL;
+        if(mul_overflow(new_cap, 2u, &cap2))
+            return NULL;
+        size_t new_size;
+        if(mul_overflow((size_t)new_cap, 2*sizeof(uint32_t) + sizeof *fc->map.data, &new_size))
+            return NULL;
+        size_t old_size = old_cap * (2*sizeof(uint32_t) + sizeof *fc->map.data);
+        void *data = Allocator_realloc(fc->allocator, fc->map.data, old_size, new_size, 1, _Alignof(CachedFile));
         if(!data) return NULL;
         CachedFile* items = data;
         uint32_t *idxes = (uint32_t*)(void*)(items + new_cap);
         memset(idxes, 0, new_cap*2*sizeof *idxes);
         uint32_t count = (uint32_t)fc->map.count;
         uint32_t new_count = 0; // this will end up being count, but if we add deletion on resize this will be useful
-        uint32_t cap2 = (uint32_t)new_cap*2;
         for(uint32_t i = 0; i < count; i++){
             uint32_t hash = items[i].hash;
             uint32_t idx = fast_reduce32(hash, cap2);
@@ -364,7 +372,7 @@ fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
     f->data_size = (size_t)size.QuadPart;
     void* data;
     DRP_PROFILE_BEGIN(allocate_profile, "file_cache.allocate_contents");
-    data = Allocator_alloc(fc->allocator, f->data_size);
+    data = Allocator_alloc(fc->allocator, f->data_size, 1, 1);
     DRP_PROFILE_END(allocate_profile);
     if(!data){
         f->data_cached = 0;
@@ -381,12 +389,12 @@ fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
         read_ok = ReadFile(fh, (char*)data + nread, to_read, &n, NULL);
         DRP_PROFILE_END(read_profile);
         if(!read_ok){
-            Allocator_free(fc->allocator, data, f->data_size);
+            Allocator_free(fc->allocator, data, f->data_size, 1, 1);
             result = FC_ERROR_IO;
             goto finally;
         }
         if(n == 0){
-            Allocator_free(fc->allocator, data, f->data_size);
+            Allocator_free(fc->allocator, data, f->data_size, 1, 1);
             result = FC_ERROR_IO;
             goto finally;
         }
@@ -439,7 +447,7 @@ fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
     }
     void* data;
     DRP_PROFILE_BEGIN(allocate_profile, "file_cache.allocate_contents");
-    data = Allocator_alloc(fc->allocator, f->data_size);
+    data = Allocator_alloc(fc->allocator, f->data_size, 1, 1);
     DRP_PROFILE_END(allocate_profile);
     if(!data){
         f->data_cached = 0;
@@ -457,12 +465,12 @@ fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
         if(e < 0){
             if(errno == EINTR)
                 continue;
-            Allocator_free(fc->allocator, data, f->data_size);
+            Allocator_free(fc->allocator, data, f->data_size, 1, 1);
             result = FC_ERROR_IO;
             goto finally;
         }
         if(e == 0){
-            Allocator_free(fc->allocator, data, f->data_size);
+            Allocator_free(fc->allocator, data, f->data_size, 1, 1);
             result = FC_ERROR_IO;
             goto finally;
         }
@@ -627,7 +635,7 @@ fc_cache_file(FileCache* fc, StringView data){
     }
     void* p = NULL;
     if(data.length){
-        p = Allocator_dupe(fc->allocator, data.text, data.length);
+        p = Allocator_dupe(fc->allocator, data.text, data.length, 1, 1);
         if(!p){
             f->valid = 0;
             result = FC_ERROR_OOM;

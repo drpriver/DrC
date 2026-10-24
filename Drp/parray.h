@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <string.h>
 #include "Allocators/allocator.h"
+#include "ckdint.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #else
@@ -36,20 +37,20 @@ warn_unused
 int
 pa_ensure_additional(Parray* pa, Allocator a, uint32_t n_additional){
     if(!n_additional) return 0;
-    uint32_t required_capacity = pa->count + n_additional;
+    uint32_t required_capacity;
+    if(add_overflow(pa->count, n_additional, &required_capacity)) return 1;
     if(pa->capacity >= required_capacity)
         return 0;
     uint32_t new_capacity;
     if(required_capacity < 8)
         new_capacity = 8;
     else {
-        new_capacity = pa->capacity ? pa->capacity* 2:8;
-        while(new_capacity < required_capacity)
-            new_capacity *= 2;
+        new_capacity = pa->capacity ? pa->capacity : 8;
+        while(new_capacity < required_capacity){
+            if(mul_overflow(new_capacity, 2u, &new_capacity)) return 1;
+        }
     }
-    uint32_t old_size = pa->capacity*sizeof *pa->data;
-    uint32_t new_size = new_capacity*sizeof *pa->data;
-    void* p = Allocator_realloc(a, pa->data, old_size, new_size);
+    void* p = Allocator_realloc(a, pa->data, pa->capacity, new_capacity, sizeof *pa->data, _Alignof(void*));
     if(!p)
         return 1;
     pa->data = p;
@@ -103,7 +104,7 @@ pa_zextend(Parray* pa, Allocator a, uint32_t count){
 static
 void
 pa_cleanup(Parray* pa, Allocator a){
-    Allocator_free(a, pa->data, pa->capacity*sizeof *pa->data);
+    Allocator_free(a, pa->data, pa->capacity, sizeof *pa->data, _Alignof(void*));
     pa->data = NULL;
     pa->count = 0;
     pa->capacity = 0;
@@ -114,7 +115,7 @@ warn_unused
 int
 pa_shrink_to_size(Parray* pa, Allocator a){
     if(pa->count == pa->capacity) return 0;
-    void* p = Allocator_realloc(a, pa->data, pa->capacity * sizeof *pa->data, pa->count * sizeof *pa->data);
+    void* p = Allocator_realloc(a, pa->data, pa->capacity, pa->count, sizeof *pa->data, _Alignof(void*));
     if(!p) return 1;
     pa->data = p;
     pa->capacity = pa->count;

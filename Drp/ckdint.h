@@ -6,6 +6,16 @@
 // Compatibility header for overflow intrinsics
 //
 
+#ifndef force_inline
+#if defined __GNUC__ || defined __clang__ || defined __DRC__
+#define force_inline static inline __attribute__((always_inline))
+#elif defined _MSC_VER
+#define force_inline static inline __forceinline
+#else
+#define force_inline static inline
+#endif
+#endif
+
 #if defined __GNUC__ && !defined __wasm__
 #define add_overflow __builtin_add_overflow
 #define sub_overflow __builtin_sub_overflow
@@ -149,4 +159,45 @@ static inline _Bool mul_overflow_i64(int64_t a, int64_t b, int64_t *r) {
 
 #endif
 #endif
+
+force_inline
+_Bool
+fma_overflow_i(int a, int b, int c, int* result){
+    return mul_overflow(a, b, result) || add_overflow(*result, c, result);
+}
+force_inline
+_Bool
+fma_overflow_u(unsigned a, unsigned b, unsigned c, unsigned* result){
+    return mul_overflow(a, b, result) || add_overflow(*result, c, result);
+}
+force_inline
+_Bool
+fma_overflow_l(long a, long b, long c, long* result){
+    return mul_overflow(a, b, result) || add_overflow(*result, c, result);
+}
+force_inline
+_Bool
+fma_overflow_lu(unsigned long a, unsigned long b, unsigned long c, unsigned long* result){
+    return mul_overflow(a, b, result) || add_overflow(*result, c, result);
+}
+force_inline
+_Bool
+fma_overflow_ll(long long a, long long b, long long c, long long* result){
+    return mul_overflow(a, b, result) || add_overflow(*result, c, result);
+}
+force_inline
+_Bool
+fma_overflow_llu(unsigned long long a, unsigned long long b, unsigned long long c, unsigned long long* result){
+    return mul_overflow(a, b, result) || add_overflow(*result, c, result);
+}
+
+#define fma_overflow(a, b, c, r) _Generic((r), \
+    int *: fma_overflow_i,  \
+    unsigned *: fma_overflow_u, \
+    long *: fma_overflow_l, \
+    unsigned long *: fma_overflow_lu, \
+    long long *: fma_overflow_ll, \
+    unsigned long long *: fma_overflow_llu \
+)(a, b, c, r)
+
 #endif

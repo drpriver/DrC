@@ -132,7 +132,7 @@ int main(int argc, char** argv, char** envp){
         filename = "(stdin)";
         fc_write_path(fc, filename, strlen(filename));
         err = fc_cache_file(fc, CSV_to_SV(txt));
-        Allocator_free(MALLOCATOR, txt.text, txt.length+1);
+        Allocator_free(MALLOCATOR, txt.text, txt.length+1, 1, 1);
         if(err) return err;
     }
     err = cpp_cli_defines(&cpp);

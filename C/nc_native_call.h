@@ -231,6 +231,11 @@ nc_plan_destroy(Allocator al, NcCallPlan *p);
 //    The plan to release.
 //
 
+static size_t nc_state_alignment(const NcCallPlan* p);
+// nc_state_alignment()
+// --------------------
+// Alignment required by the state and its trailing stack arguments/copies.
+
 static
 size_t
 nc_state_size(const NcCallPlan *p);
@@ -242,7 +247,7 @@ nc_state_size(const NcCallPlan *p);
 // --------
 //   The required allocation size to invoke the call plan, including stack
 //   arguments and indirect argument copies after the state.
-//   Your allocation should be aligned to 16 bytes.
+//   Your allocation should have alignment nc_state_alignment(p).
 //
 // Arguments:
 // ----------

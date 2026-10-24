@@ -5,6 +5,7 @@
 #define ATOM_SET_H 1
 
 #include <stdint.h>
+#include "ckdint.h"
 #include "Allocators/allocator.h"
 #include "atom.h"
 #include "hash_func.h"
@@ -85,11 +86,13 @@ int
 AS_add(AtomSet* as, Allocator al, Atom atom){
     if(as->count >= as->cap){
         uint32_t old_cap = as->cap;
-        uint32_t old_size = (uint32_t)AS_alloc_size(old_cap);
-        uint32_t new_cap = old_cap?old_cap*2:4;
-        uint32_t new_size = (uint32_t)AS_alloc_size(new_cap);
+        uint32_t new_cap = 4, index_count, old_size, new_size;
+        if(old_cap && mul_overflow(old_cap, 2u, &new_cap)) return 1;
+        if(mul_overflow(new_cap, 2u, &index_count)) return 1;
+        if(mul_overflow(new_cap, (uint32_t)AS_alloc_size(1), &new_size)) return 1;
+        old_size = old_cap * (uint32_t)AS_alloc_size(1);
         uint32_t count = as->count;
-        void* data = Allocator_realloc(al, as->data, old_size, new_size);
+        void* data = Allocator_realloc(al, as->data, old_size, new_size, 1, _Alignof(Atom));
         if(!data) return 1;
         Atom* items = data;
         uint32_t* idxes = (uint32_t*)(void*)(new_cap*sizeof(Atom)+(char*)(data));

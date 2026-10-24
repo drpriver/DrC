@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <assert.h>
+#include "ckdint.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -57,12 +58,14 @@ typedef enum Base64Error{
     BASE64_WOULD_OVERFLOW = 2,
 } Base64Error;
 
-// The size needed to encode a data buffer into a string.
+// The size needed to encode a data buffer into a string. Returns 0 on overflow.
 static inline
 size_t
 base64_encode_size(size_t src_length){
-    size_t size_needed = src_length * 4;
-    size_needed = size_needed / 3 + !!(size_needed % 3);
+    size_t size_needed;
+    size_t remainder = src_length % 3;
+    if(fma_overflow(src_length / 3, (size_t)4, remainder ? remainder + 1 : 0, &size_needed))
+        return 0;
     return size_needed;
 }
 
@@ -70,8 +73,7 @@ base64_encode_size(size_t src_length){
 static inline
 size_t
 base64_decode_size(size_t src_length){
-    size_t size_needed = src_length * 3;
-    size_needed = size_needed / 4 + !!(size_needed % 4);
+    size_t size_needed = (src_length / 4) * 3 + src_length % 4;
     return size_needed;
 }
 
@@ -83,6 +85,9 @@ base64_decode_size(size_t src_length){
 static inline
 size_t
 base64_encode(char* restrict dst, size_t dst_length, const void* restrict src, size_t src_length){
+    size_t required = base64_encode_size(src_length);
+    if(!required || required > dst_length)
+        return 0;
     DRP_NONSTRING
     static const char  base64_encode_table0[256] =
         "AAAABBBBCC"
@@ -403,7 +408,7 @@ base64_decode(void* restrict dst, size_t dst_length, const uint8_t* restrict src
     if(!size_needed) return BASE64_NO_ERROR;
     // we allow a 1 byte under in case last few bits were just padding.
     // AUDITME: make sure the math actually works out. Tests are passing for now.
-    if(dst_length +1 < size_needed)
+    if(dst_length < size_needed - 1)
         return BASE64_WOULD_OVERFLOW;
     unsigned bad = 0;
     uint8_t* out = dst;

@@ -4,6 +4,7 @@
 #ifndef ATOM_MAP16_H
 #define ATOM_MAP16_H 1
 #include <stdint.h>
+#include "ckdint.h"
 #include "Allocators/allocator.h"
 #include "atom.h"
 #include "hash_func.h"
@@ -109,11 +110,13 @@ AM16_put(AtomMap16* am, Allocator al, Atom key, uint64_t payload[_Nonnull /*stat
     }
     if(am->count >= am->cap){
         uint32_t old_cap = am->cap;
-        uint32_t old_size = (uint32_t)AM16_alloc_size(old_cap);
-        uint32_t new_cap = old_cap?old_cap*2:4;
-        uint32_t new_size = (uint32_t)AM16_alloc_size(new_cap);
+        uint32_t new_cap = 4, index_count, old_size, new_size;
+        if(old_cap && mul_overflow(old_cap, 2u, &new_cap)) return 1;
+        if(mul_overflow(new_cap, 2u, &index_count)) return 1;
+        if(mul_overflow(new_cap, (uint32_t)AM16_alloc_size(1), &new_size)) return 1;
+        old_size = old_cap * (uint32_t)AM16_alloc_size(1);
         uint32_t count = am->count;
-        void* data = Allocator_realloc(al, am->data, old_size, new_size);
+        void* data = Allocator_realloc(al, am->data, old_size, new_size, 1, _Alignof(AtomMap16Item));
         if(!data) return 1;
         AtomMap16Item* items = data;
         uint32_t* idxes = (uint32_t*)(void*)(new_cap*(sizeof(AtomMap16Item))+(char*)(data));
@@ -237,7 +240,7 @@ int
 AM16_clone_into(AtomMap16* dst, Allocator al, const AtomMap16* src){
     if(dst == src) return 0;
     if(dst->cap < src->cap){
-        void* data = Allocator_realloc(al, dst->data, AM16_alloc_size(dst->cap), AM16_alloc_size(src->cap));
+        void* data = Allocator_realloc(al, dst->data, AM16_alloc_size(dst->cap), AM16_alloc_size(src->cap), 1, _Alignof(AtomMap16Item));
         if(!data) return 1;
         dst->data = data;
         dst->cap = src->cap;

@@ -122,8 +122,11 @@ cpp_define_macro(CppPreprocessor* cpp, StringView name, size_t ntoks, size_t npa
         *outmacro = macro;
         return macro->is_builtin?CPP_REDEFINING_BUILTIN_MACRO_ERROR:CPP_MACRO_ALREADY_EXISTS_ERROR;
     }
-    size_t size = sizeof *macro + sizeof(CppToken)*ntoks + sizeof(Atom)*nparams;
-    macro = Allocator_zalloc(cpp->allocator, size);
+    size_t size;
+    if(fma_overflow(ntoks, sizeof *cpp_cmacro_replacement(macro), sizeof *macro, &size)
+    || fma_overflow(nparams, sizeof *cpp_cmacro_params(macro), size, &size))
+        return CPP_OOM_ERROR;
+    macro = Allocator_zalloc(cpp->allocator, size, 1, _Alignof(CppMacro));
     if(!macro) return CPP_OOM_ERROR;
     macro->nreplace = ntoks;
     macro->nparams = nparams;
@@ -141,7 +144,7 @@ cpp_free_macro(CppPreprocessor* cpp, CppMacro * macro){
     }
     else
         size = sizeof *macro + sizeof(CppToken)*macro->nreplace + sizeof(Atom)*macro->nparams;
-    Allocator_free(cpp->allocator, macro, size);
+    Allocator_free(cpp->allocator, macro, size, 1, _Alignof(CppMacro));
 }
 
 static
@@ -4057,7 +4060,7 @@ cpp_expand_func_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_lo
     CppTokens *result = NULL;
 
     if(total_params){
-        expanded_args = Allocator_zalloc(cpp->allocator, sizeof(CppTokens*) * total_params);
+        expanded_args = Allocator_zalloc(cpp->allocator, total_params, sizeof *expanded_args, _Alignof(CppTokens*));
         if(!expanded_args){
             err = CPP_OOM_ERROR;
             goto finally;
@@ -4109,7 +4112,7 @@ finally:
         if(expanded_args && expanded_args[i])
             cpp_release_scratch(cpp, expanded_args[i]);
     if(expanded_args)
-        Allocator_free(cpp->allocator, expanded_args, sizeof(CppTokens*) * total_params);
+        Allocator_free(cpp->allocator, expanded_args, total_params, sizeof *expanded_args, _Alignof(CppTokens*));
     return err;
     DRP_PROFILE_END(profile);
 }
@@ -4118,7 +4121,7 @@ static
 CppTokens*_Nullable
 cpp_get_scratch(CppPreprocessor *cpp){
     CppTokens *scratch = fl_pop(&cpp->scratch_list);
-    if(!scratch) scratch = Allocator_zalloc(cpp->allocator, sizeof *scratch);
+    if(!scratch) scratch = Allocator_zalloc(cpp->allocator, 1, sizeof *scratch, _Alignof(CppTokens));
     if(!scratch) return NULL;
     scratch->count = 0;
     return scratch;
@@ -4144,7 +4147,7 @@ static
 Marray(size_t)*_Nullable
 cpp_get_scratch_idxes(CppPreprocessor *cpp){
     Marray(size_t) *scratch = fl_pop(&cpp->scratch_idxes);
-    if(!scratch) scratch = Allocator_zalloc(cpp->allocator, sizeof *scratch);
+    if(!scratch) scratch = Allocator_zalloc(cpp->allocator, 1, sizeof *scratch, _Alignof(Marray(size_t)));
     if(!scratch) return NULL;
     scratch->count = 0;
     return scratch;
@@ -6333,7 +6336,7 @@ cpp_builtin_set(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
     }
     else {
         // Allocate a new CppTokens
-        CppTokens* stored = Allocator_zalloc(cpp->allocator, sizeof(CppTokens));
+        CppTokens* stored = Allocator_zalloc(cpp->allocator, 1, sizeof *stored, _Alignof(CppTokens));
         if(!stored) return CPP_OOM_ERROR;
         if(val_count){
             int err = ma_extend(CppToken)(stored, cpp->allocator, val_toks, val_count);
@@ -6407,7 +6410,7 @@ cpp_builtin_append(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc
         if(err) return CPP_OOM_ERROR;
     }
     else {
-        CppTokens* stored = Allocator_zalloc(cpp->allocator, sizeof(CppTokens));
+        CppTokens* stored = Allocator_zalloc(cpp->allocator, 1, sizeof *stored, _Alignof(CppTokens));
         if(!stored) return CPP_OOM_ERROR;
         int err = ma_extend(CppToken)(stored, cpp->allocator, val_toks, val_count);
         if(err) return CPP_OOM_ERROR;
@@ -6913,7 +6916,7 @@ cpp_embed_base64(CppPreprocessor* cpp, SrcLoc loc, const CppToken* toks, size_t 
     ByteBuffer decoded = {0};
     if(!check_only && bytes->n_bytes){
         decoded.n_bytes = bytes->n_bytes;
-        void* buff = ArenaAllocator_alloc(&cpp->synth_arena, decoded.n_bytes);
+        void* buff = ArenaAllocator_alloc(&cpp->synth_arena, decoded.n_bytes, 1, _Alignof(unsigned char));
         if(!buff) return CPP_OOM_ERROR;
         decoded.buff = buff;
         bytes->buff = decoded.buff;
@@ -7405,7 +7408,7 @@ SrcLocExp*_Nullable
 cpp_srcloc_to_exp(CppPreprocessor* cpp, SrcLoc loc){
     if(loc.is_actually_a_pointer)
         return (SrcLocExp*)((uintptr_t)loc.pointer.bits << 1);
-    SrcLocExp* exp = ArenaAllocator_alloc(&cpp->synth_arena, sizeof *exp);
+    SrcLocExp* exp = ArenaAllocator_alloc(&cpp->synth_arena, 1, sizeof *exp, _Alignof(SrcLocExp));
     if(!exp) return NULL;
     *exp = (SrcLocExp){.file_id = loc.file_id, .column = loc.column, .line = loc.line};
     return exp;
@@ -7414,7 +7417,7 @@ cpp_srcloc_to_exp(CppPreprocessor* cpp, SrcLoc loc){
 static
 SrcLoc
 cpp_chain_loc(CppPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent){
-    SrcLocExp* exp = ArenaAllocator_alloc(&cpp->synth_arena, sizeof *exp);
+    SrcLocExp* exp = ArenaAllocator_alloc(&cpp->synth_arena, 1, sizeof *exp, _Alignof(SrcLocExp));
     if(!exp) return tok_loc;
     uint64_t file_id, column, line;
     if(tok_loc.is_actually_a_pointer){
@@ -8331,11 +8334,11 @@ cpp_register_pragma(CppPreprocessor* cpp, StringView name, CppPragmaFn* fn, void
     if(!a) return CPP_OOM_ERROR;
     CppPragma* prag = AM_get(&cpp->pragmas, a);
     if(!prag){
-        prag = Allocator_zalloc(cpp->allocator, sizeof *prag);
+        prag = Allocator_zalloc(cpp->allocator, 1, sizeof *prag, _Alignof(CppPragma));
         if(!prag) return CPP_OOM_ERROR;
         int err = AM_put(&cpp->pragmas, cpp->allocator, a, prag);
         if(err) {
-            Allocator_free(cpp->allocator, prag, sizeof *prag);
+            Allocator_free(cpp->allocator, prag, 1, sizeof *prag, _Alignof(CppPragma));
             return CPP_OOM_ERROR;
         }
     }

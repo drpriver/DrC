@@ -71,7 +71,6 @@ struct CiInterpreter {
     uint32_t toplevel_alignment,
              toplevel_alloc_alignment;
     void*_Null_unspecified toplevel_slots;
-    void* _Null_unspecified toplevel_storage;
     union {
         uint32_t flags;
         struct {
