@@ -231,6 +231,19 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "qualified array pointers slices and parameters retain runtime values", __LINE__,
+            SVI("typedef int A[2][3];\n"
+                "int f(const A a){return a[0][1]+a[1][2];}\n"
+                "A a={{1,2,3},{4,5,6}};\n"
+                "const int (*p)[3]=a; volatile int (*q)[3]=a;\n"
+                "int c=1; auto r=c?p:q; auto t=c?q:p;\n"
+                "const int s[:][3]=a; volatile int v[:][3]=a;\n"
+                "auto w=c?s:v; auto x=c?v:s;\n"
+                "return f(a)==8 && r[1][2]==6 && t[0][1]==2 &&\n"
+                "w[1][0]==4 && x[0][2]==3 && (p+1)-q==1 && p==q;\n"),
+            .exit_code = 1,
+        },
+        {
             // A typedef-qualified array must decay to a pointer to const elements.
             "generic selection preserves const array elements", __LINE__,
             SVI("typedef int A[2];\n"

@@ -7416,7 +7416,8 @@ static
 _Bool
 ci_foldable_variable(CcExpr* e){
     CcQualType type = e->type;
-    while(ccqt_is_fixed_sequence(type)) type = ccqt_array_element(type);
+    while(ccqt_is_fixed_sequence(type)) type = ccqt_qualified_array_element(type);
+    type = ccqt_unaligned(type);
     return e->var->initializer && (e->var->constexpr_ || type.is_const)
         && !type.is_volatile && !type.is_atomic;
 }

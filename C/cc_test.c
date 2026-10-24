@@ -4571,6 +4571,130 @@ TestFunction(test_parse_decls){
             .vars = { { SVI("y"), SVI("int") } },
         },
         {
+            "qualified array compatibility covers nested incomplete and VLA types", __LINE__,
+            SVI("typedef int Row[3]; typedef Row Matrix[2];\n"
+                "extern const Matrix m; extern const int m[2][3];\n"
+                "typedef int Open[]; extern const Open a; extern const int a[3];\n"
+                "_Static_assert(sizeof(a)==3*sizeof(int));\n"
+                "void f(int n){ typedef int V[n][3];\n"
+                "_Static_assert(_Generic((const V*)0, const int (*)[n][3]:1, default:0)); }\n"
+                "struct S {Row r;}; const struct S s;\n"
+                "_Static_assert(_Generic(&s.r, const int (*)[3]:1, default:0));\n"),
+        },
+        {
+            "qualified array typedef alignment survives decay and reflection", __LINE__,
+            SVI("typedef struct {int x[4];} E __attribute__((aligned(16))); typedef E A[2];\n"
+                "void f(const A a){ _Static_assert(alignof(*a)==16); }\n"
+                "_Static_assert(typeof(const A).element_type.alignof_==16);\n"
+                "typedef int X[4] __attribute__((aligned(32)));\n"
+                "typedef const int Y[4] __attribute__((aligned(32)));\n"
+                "_Static_assert(typeof(const X)==typeof(Y));\n"),
+        },
+        {
+            "const array typedef initializers are constant like const elements", __LINE__,
+            SVI("typedef int A[2][3]; const A a={{1,2,3},{4,5,6}};\n"
+                "constexpr int n=a[1][2]; _Static_assert(n==6);\n"),
+        },
+        {
+            "array object reflection distinguishes atomic elements", __LINE__,
+            SVI("_Static_assert(!typeof(_Atomic int[2]).is_atomic);\n"
+                "_Static_assert(typeof(_Atomic int[2]).element_type.is_atomic);\n"
+                "typedef const int A[2]; volatile A a={1,2};\n"
+                "_Static_assert(!__builtin_constant_p(a[0]));\n"),
+        },
+        {
+            "array typedef qualification has the same type as element qualification", __LINE__,
+            SVI("typedef int A[3]; typedef const A CA;\n"
+                "_Static_assert(typeof(const A)==typeof(const int[3]));\n"
+                "_Static_assert(typeof(CA*)==typeof(const int (*)[3]));\n"
+                "extern const A a; extern const int a[3];\n"
+                "extern const int b[3]; extern const A b;\n"
+                "void f(const A*); void f(const int (*)[3]);\n"
+                "_Static_assert(_Generic((const A*)0, const int (*)[3]:1, default:0));\n"
+                "_Static_assert(_Generic((const int (*)[3])0, CA*:1, default:0));\n"),
+        },
+        {
+            "array qualifier reflection follows elements and stops at pointers", __LINE__,
+            SVI("typedef int A[2][3];\n"
+                "_Static_assert(typeof(const int[2][3]).is_const);\n"
+                "_Static_assert(typeof(volatile int[2][3]).is_volatile);\n"
+                "_Static_assert(typeof(const A).is_const);\n"
+                "_Static_assert(!typeof(const int*[3]).is_const);\n"
+                "_Static_assert(typeof(int *const[3]).is_const);\n"
+                "void f(int n){ typedef const volatile int V[n][3];\n"
+                "_Static_assert(typeof(V).is_const && typeof(V).is_volatile); }\n"),
+        },
+        {
+            "qualified array typedef parameters preserve element qualification", __LINE__,
+            SVI("typedef int A[3];\n"
+                "void f(const A a){ _Static_assert(_Generic(a, const int*:1, default:0)); a++; }\n"
+                "void f(const int*);\n"
+                "void g(const int*); void g(const A);\n"
+                "const int a[3]; f(a); g(a);\n"),
+        },
+        {
+            "nested qualified array typedef parameters", __LINE__,
+            SVI("typedef int A[2][3];\n"
+                "void f(const A a){ _Static_assert(_Generic(a, const int (*)[3]:1, default:0)); a++; }\n"
+                "void f(const int (*)[3]);\n"),
+        },
+        {
+            "array pointer conditional preserves composite bounds and typedefs", __LINE__,
+            SVI("typedef int A[2][3]; A a; const A *p=&a; volatile A *q=&a;\n"
+                "auto x=1?p:q;\n"
+                "_Static_assert(_Generic(x, const volatile int (*)[2][3]:1, default:0));\n"
+                "a[0][0]=1;\n"
+                "const int (*u)[]; volatile int (*v)[3];\n"
+                "auto y=1?u:v; auto z=1?v:u;\n"
+                "_Static_assert(sizeof(*y)==3*sizeof(int));\n"
+                "_Static_assert(sizeof(*z)==3*sizeof(int));\n"),
+        },
+        {
+            "VLA pointer conditional qualification", __LINE__,
+            SVI("void f(int n){ int a[n][3]; const int (*p)[n][3]=&a;\n"
+                "volatile int (*q)[n][3]=&a; auto x=1?p:q; auto y=1?q:p;\n"
+                "const volatile int (*z)[n][3]=x; z=y; p==q; p-q; }\n"),
+        },
+        {
+            "qualified array pointer comparisons and subtraction", __LINE__,
+            SVI("int a[2][3]; const int (*p)[3]=a;\n"
+                "p==a; a!=p; p<=a; a>=p; p-a; a-p;\n"),
+        },
+        {
+            "array pointer conditional merges element qualifiers", __LINE__,
+            SVI("int a[2][3]; const int (*p)[3]=a; volatile int (*q)[3]=a;\n"
+                "auto x=1?p:q; auto y=1?q:p;\n"
+                "_Static_assert(_Generic(x, const volatile int (*)[3]:1, default:0));\n"
+                "_Static_assert(_Generic(y, const volatile int (*)[3]:1, default:0));\n"
+                "void *v; auto z=1?v:p;\n"
+                "_Static_assert(_Generic(z, const void*:1, default:0));\n"),
+        },
+        {
+            "array element slice conversions and conditional qualifiers", __LINE__,
+            SVI("int a[2][3]; int s[:][3]=a; const int c[:][3]=a;\n"
+                "const int t[:][3]=s; volatile int v[:][3]=s;\n"
+                "auto x=1?c:v; auto y=1?v:c;\n"
+                "_Static_assert(_Generic(x, const volatile int[:][3]:1, default:0));\n"
+                "_Static_assert(_Generic(y, const volatile int[:][3]:1, default:0));\n"
+                "int u[:][3]=(int[:][3])c;\n"
+                "const int b[2][3]; int w[:][3]=(int[:][3])b;\n"),
+        },
+        {
+            "pointer to array adds element qualification", __LINE__,
+            SVI("void f(const float(*)[4]){}\n"
+                "f(1?&(float[]){1,2,3,4}:&(float[]){2,3,4,5});\n"),
+        },
+        {
+            "nested array pointers add element qualification", __LINE__,
+            SVI("int a[2][3];\n"
+                "const volatile int (*p)[2][3]=&a;\n"
+                "const int (*q)[3]=a;\n"),
+        },
+        {
+            "VLA pointers add element qualification", __LINE__,
+            SVI("void f(int n){ int a[n][3]; const int (*p)[n][3]=&a; }\n"),
+        },
+        {
             "array to const-qualified pointer param", __LINE__,
             SVI("void f(char *const argv[]);\n"
                "char* args[64];\n"
@@ -8756,6 +8880,66 @@ TestFunction(test_parse_errors){
             SVI("_Any a=3;\n"
                 "a++;"),
             SVI("(test):2:2: error: increment/decrement requires arithmetic or pointer type\n"),
+        },
+        {
+            "qualified array typedef declarations reject dropped qualification", __LINE__,
+            SVI("typedef int A[3]; extern const A a;\nextern int a[3];\n"),
+            SVI("(test):2:16: error: conflicting type for 'a': 'int[3]'; previous declaration has type 'const int[3]'\n"),
+        },
+        {
+            "atomic load rejects const array output buffer", __LINE__,
+            SVI("int a[1]; const int b[1];\n__atomic_load(&a,&b,0);\n"),
+            SVI("(test):2:1: error: atomic output buffer must be writable\n"),
+        },
+        {
+            "atomic store rejects const array object", __LINE__,
+            SVI("const int a[1]; int b[1];\n__atomic_store(&a,&b,0);\n"),
+            SVI("(test):2:1: error: atomic operation requires writable object\n"),
+        },
+        {
+            "atomic load rejects atomic array output buffer", __LINE__,
+            SVI("int a[1]; _Atomic int b[1];\n__atomic_load(&a,&b,0);\n"),
+            SVI("(test):2:1: error: atomic buffer argument must be a pointer to compatible non-atomic storage\n"),
+        },
+        {
+            "array typedef parameter rejects element mutation", __LINE__,
+            SVI("typedef int A[3];\nvoid f(const A a){a[0]=1;}\n"),
+            SVI("(test):2:23: error: cannot assign to variable with const-qualified type\n"),
+        },
+        {
+            "array slices reject removed qualification", __LINE__,
+            SVI("const int s[:][3];\nint t[:][3]=s;\n"),
+            SVI("(test):2:13: error: cannot implicitly convert from 'const int[:][3]' to 'int[:][3]'\n"),
+        },
+        {
+            "array decay to slice rejects removed qualification", __LINE__,
+            SVI("const int a[2][3];\nint s[:][3]=a;\n"),
+            SVI("(test):2:13: error: cannot implicitly convert from 'const int[2][3]' to 'int[:][3]'\n"),
+        },
+        {
+            "array pointer comparison rejects incompatible bounds", __LINE__,
+            SVI("int (*p)[2]; const int (*q)[3];\np==q;\n"),
+            SVI("(test):2:2: error: comparison of incompatible pointer types\n"),
+        },
+        {
+            "array pointer subtraction rejects incompatible bounds", __LINE__,
+            SVI("int (*p)[2]; const int (*q)[3];\np-q;\n"),
+            SVI("(test):2:2: error: pointer subtraction with incompatible types\n"),
+        },
+        {
+            "array pointers to void reject removed qualification", __LINE__,
+            SVI("const int a[3];\nvoid *p=&a;\n"),
+            SVI("(test):2:9: error: cannot implicitly convert from 'const int (*)[3]' to 'void *'\n"),
+        },
+        {
+            "array pointers reject removed element qualification", __LINE__,
+            SVI("const int a[3];\nint (*p)[3]=&a;\n"),
+            SVI("(test):2:13: error: cannot implicitly convert from 'const int (*)[3]' to 'int (*)[3]'\n"),
+        },
+        {
+            "array pointers reject qualification beyond a pointer", __LINE__,
+            SVI("int *a[3];\nconst int *(*p)[3]=&a;\n"),
+            SVI("(test):2:20: error: cannot implicitly convert from 'int * (*)[3]' to 'const int * (*)[3]'\n"),
         },
         {
             "array decay rejects unrelated element types", __LINE__,

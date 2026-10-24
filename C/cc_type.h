@@ -765,6 +765,24 @@ static inline CcQualType ccqt_array_element(CcQualType t){
     if(ccqt_kind(t) == CC_VECTOR) return ccqt_as_vector(t)->element;
     return ccqt_kind(t) == CC_VLA ? ccqt_as_vla(t)->element : ccqt_as_array(t)->element;
 }
+
+static inline
+CcQualType
+ccqt_qualified_array_element(CcQualType t){
+    t = ccqt_unaligned(t);
+    CcQualType element = ccqt_array_element(t);
+    element.quals |= t.quals;
+    return element;
+}
+
+static inline
+CcQualType
+ccqt_array_object_type(CcQualType t){
+    t = ccqt_unaligned(t);
+    while(ccqt_is_array(t))
+        t = ccqt_unaligned(ccqt_qualified_array_element(t));
+    return t;
+}
 static inline _Bool ccqt_is_vm(CcQualType t){
     for(;;){
         switch(ccqt_kind(t)){
