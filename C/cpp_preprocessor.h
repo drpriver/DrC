@@ -225,7 +225,7 @@ cpp_undef_macro(CppPreprocessor* cpp, StringView name);
 
 static
 int
-cpp_define_obj_macro(CppPreprocessor* cpp, StringView name, const CppToken*_Null_unspecified toks, size_t ntoks);
+cpp_define_obj_macro(CppPreprocessor* cpp, StringView name, const CppToken*_Null_unspecified toks, size_t ntoks, CppMacro*_Nullable*_Nullable outmacro);
 
 static
 int

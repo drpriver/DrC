@@ -1417,6 +1417,16 @@ TestFunction(test_messages){
             SVI("#define X 1\n#define X 1\n#define E\n#define E\n"
                 "#define F(a) a + 1\n#define F(a) a  +  1\n"),
             SVI("")},
+        {"identical object definition updates location", __LINE__,
+            SVI("#define X 1\n#define X 1\n#define X 2\n__print(X)\n"),
+            SVI("(test):3:9: warning: Macro (X) redefined with a different definition\n"
+                "(test):2:9: info: ... previously defined here\n"
+                "(test):4:1: 2\n")},
+        {"identical empty definition updates location", __LINE__,
+            SVI("#define X\n#define X\n#define X 2\n__print(X)\n"),
+            SVI("(test):3:9: warning: Macro (X) redefined with a different definition\n"
+                "(test):2:9: info: ... previously defined here\n"
+                "(test):4:1: 2\n")},
         {
             "__print", __LINE__,
             SVI("__print(hello)\n"),

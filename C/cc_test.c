@@ -7770,6 +7770,18 @@ TestFunction(test_parse_errors){
         StringView target_expect[CC_TARGET_COUNT];
     } cases[] = {
         {
+            "readcyclecounter rejects arguments", __LINE__,
+            SVI("__builtin_readcyclecounter(1);"),
+            SVI("(test):1:28: error: Expected ')'\n"),
+            .all_targets = 1,
+        },
+        {
+            "readcyclecounter cannot be evaluated in static_assert", __LINE__,
+            SVI("static_assert(__builtin_readcyclecounter());"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
             "static slice rejects omitted upper bound below lower bound", __LINE__,
             SVI("static int a[3];\nstatic int s[:]=a[4:];"),
             SVI("(test):2:18: error: static initializer requires a link-time constant\n"),

@@ -663,6 +663,7 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
             switch(e->builtin.op){
                 case CC_BUILTIN_UNREACHABLE: msb_write_literal(sb, "unreachable"); break;
                 case CC_BUILTIN_TRAP: msb_write_literal(sb, "trap"); break;
+                case CC_BUILTIN_READCYCLECOUNTER: msb_write_literal(sb, "__builtin_readcyclecounter()"); break;
                 case CC_BUILTIN_DEBUGTRAP: msb_write_literal(sb, "debugtrap()"); break;
                 case CC_BUILTIN_ABORT: msb_write_literal(sb, "abort()"); break;
                 case CC_BUILTIN_BACKTRACE: msb_write_literal(sb, "backtrace()"); break;

@@ -10,6 +10,7 @@
 #include "cc_errors.h"
 #include "srcloc.h"
 #include "nc_native_call.h"
+#include "../Drp/drp_profile.h"
 #include "../Drp/atom.h"
 #include "../Drp/merge_sort.h"
 #include "../Drp/ckdint.h"
@@ -3776,6 +3777,11 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             return 0;
         }
         case CC_EXPR_BUILTIN:{
+            if(e->builtin.op == CC_BUILTIN_READCYCLECOUNTER){
+                err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
+                if(err) return err;
+                out->slot = dest;
+            }
             if(e->builtin.op == CC_BUILTIN_CLEAR_CACHE)
                 return ci_lower_clear_cache(ci, ctx, e);
             if(e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE || e->builtin.op == CC_BUILTIN_SYMBOLICATE)
@@ -3787,6 +3793,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 .builtin = {
                     .kind = CI_OP_BUILTIN,
                     .op = e->builtin.op,
+                    .slot = dest,
                     .loc = e->loc,
                 },
             };
@@ -6992,6 +6999,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
                     .kind = CI_OP_BUILTIN,
                     .op = e->builtin.op,
                     .loc = e->loc,
+                    .slot = CI_NO_SLOT,
                 },
             };
             return 0;
@@ -8279,6 +8287,7 @@ ci_lower_resolve_gotos(CiInterpreter* ci, CiLowerCtx* ctx){
 static
 int
 ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
+    DRP_PROFILE_BEGIN(profile, "lower.function");
     int err;
     if(f->interp_ops) return 0;
     if(!f->parsed)
@@ -8342,13 +8351,17 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
         err = ci_lower_abi_argument(&ops->code, al, ops->abi, (uint32_t)i, slot, 1, f->loc);
         if(err) goto finally;
     }
+    DRP_PROFILE_BEGIN(body_profile, "lower.function_body");
     err = ci_lower_stmt(ci, &ctx, f->body_tree);
+    DRP_PROFILE_END(body_profile);
     if(err) goto finally;
+    DRP_PROFILE_BEGIN(finish_profile, "lower.function_finalize");
     err = ci_lower_resolve_gotos(ci, &ctx);
     if(err) goto finally;
     err = ci_lower_native_signature(ci, al, f->type, &ops->native_type);
     if(err) goto finally;
     err = ci_lower_deps_merge(deps, &ctx.deps, al);
+    DRP_PROFILE_END(finish_profile);
     finally:
     f->interp_lowering = 0;
     ci_bindings_cleanup(&ctx);
@@ -8374,6 +8387,7 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
     ops->frame_alignment = ctx.frame_alignment > 16 ? ctx.frame_alignment : 16;
     f->interp_ops = ops;
     return 0;
+    DRP_PROFILE_END(profile);
 }
 
 static
@@ -8470,6 +8484,7 @@ ci_resize_toplevel_slots(CiInterpreter* ci){
 static
 int
 ci_lower_toplevel(CiInterpreter* ci, CiLowerDeps* deps){
+    DRP_PROFILE_BEGIN(profile, "lower.toplevel");
     CcParser* p = &ci->parser;
     int err = ci_lower_nodes(
         ci,
@@ -8488,6 +8503,7 @@ ci_lower_toplevel(CiInterpreter* ci, CiLowerDeps* deps){
     ci->top_frame.op_count = ci->toplevel_ops.count;
     ci->top_frame.slots = ci->toplevel_slots;
     return 0;
+    DRP_PROFILE_END(profile);
 }
 
 static
@@ -8818,12 +8834,14 @@ ci_static_fold(CiInterpreter* ci, CcExpr* e, CiFoldValue* out){
 static
 int
 ci_initializer_fold(CiInterpreter* ci, CcExpr* e, CiFoldValue* out, CiLowerCtx* _Nullable runtime_ctx){
+    DRP_PROFILE_BEGIN(profile, "initializer.fold");
     if(!runtime_ctx) return ci_static_fold(ci, e, out);
     CiLowerCtx ctx = *runtime_ctx;
     // Static helpers can pass synthesized expressions with shorter lifetimes.
     ctx.fold_cache = NULL;
     int err = ci_fold_expr(ci, &ctx, e, out);
     return err == FOLD_FAIL ? _cc_not_constant_error : err;
+    DRP_PROFILE_END(profile);
 }
 
 static
@@ -9083,16 +9101,57 @@ ci_static_address(CiInterpreter* ci, CcExpr* e, _Bool lvalue, CiStaticReloc* out
 }
 
 static
+int
+ci_static_add_reloc(CiStaticBuffer* data, Allocator al, CiStaticReloc reloc){
+    size_t count = data->relocs.count;
+    size_t at = count;
+    if(count && reloc.offset < data->relocs.data[count - 1].offset){
+        size_t lo = 0, hi = count;
+        while(lo < hi){
+            size_t mid = lo + (hi - lo) / 2;
+            if(data->relocs.data[mid].offset < reloc.offset) lo = mid + 1;
+            else hi = mid;
+        }
+        at = lo;
+    }
+    int err = ma_push(CiStaticReloc)(&data->relocs, al, reloc);
+    if(err) return err;
+    if(at != count){
+        CiStaticReloc* items = data->relocs.data;
+        memmove(items + at + 1, items + at, (count - at) * sizeof *items);
+        items[at] = reloc;
+    }
+    return 0;
+}
+
+static
 void
 ci_static_forget_relocs(CiStaticBuffer* data, uint32_t offset, uint32_t size){
-    size_t count = 0;
-    for(size_t i = 0; i < data->relocs.count; i++){
-        CiStaticReloc r = data->relocs.data[i];
-        if((uint64_t)r.offset < (uint64_t)offset + size && (uint64_t)offset < (uint64_t)r.offset + r.size)
-            continue;
-        data->relocs.data[count++] = r;
+    DRP_PROFILE_BEGIN(profile, "initializer.forget_relocs");
+    size_t count = data->relocs.count;
+    if(!count) return;
+    CiStaticReloc* items = data->relocs.data;
+    uint64_t end = (uint64_t)offset + size;
+    if(offset >= (uint64_t)items[count - 1].offset + items[count - 1].size
+    || end <= items[0].offset)
+        return;
+    size_t lo = 0, hi = count;
+    while(lo < hi){
+        size_t mid = lo + (hi - lo) / 2;
+        if((uint64_t)items[mid].offset + items[mid].size <= offset) lo = mid + 1;
+        else hi = mid;
     }
-    data->relocs.count = count;
+    size_t first = lo;
+    hi = count;
+    while(lo < hi){
+        size_t mid = lo + (hi - lo) / 2;
+        if(items[mid].offset < end) lo = mid + 1;
+        else hi = mid;
+    }
+    if(lo == first) return; // The write lies in a gap between relocations.
+    memmove(items + first, items + lo, (count - lo) * sizeof *items);
+    data->relocs.count = count - (lo - first);
+    DRP_PROFILE_END(profile);
 }
 
 static
@@ -9112,7 +9171,8 @@ ci_static_copy_range(CiInterpreter* ci, CiStaticBuffer* data, const CiStaticBuff
         for(uint32_t at = lo; at < hi; at++)
             if(mask[at-start] != 0xff) return _cc_not_constant_error;
         r.offset = offset + r.offset - start;
-        if(ma_push(CiStaticReloc)(&data->relocs, ci_allocator(ci), r)) return CI_OOM_ERROR;
+        if(ci_static_add_reloc(data, ci_allocator(ci), r))
+            return CI_OOM_ERROR;
     }
     for(uint32_t i = 0; i < size; i++){
         unsigned char* byte = data->bytes + offset + i;
@@ -9352,6 +9412,7 @@ ci_static_slice(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e, uint32_t off
 static
 int
 ci_static_write(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e, uint32_t offset, uint32_t size){
+    DRP_PROFILE_BEGIN(profile, "initializer.write");
     CcParser* p = &ci->parser;
     int err;
     if(e->is_lvalue && (e->type.is_volatile || e->type.is_atomic))
@@ -9489,8 +9550,9 @@ ci_static_write(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e, uint32_t off
         return 0;
     }
     memset(data->bytes + offset, 0, size);
-    err = ma_push(CiStaticReloc)(&data->relocs, ci_allocator(ci), reloc);
+    err = ci_static_add_reloc(data, ci_allocator(ci), reloc);
     return err ? CI_OOM_ERROR : 0;
+    DRP_PROFILE_END(profile);
 }
 
 static
@@ -9628,7 +9690,7 @@ ci_partial_init_template(CiInterpreter* ci, CiStaticBuffer* buffer, CcExpr* e, C
         if(start > buffer->size || size > buffer->size - start){ err = _cc_not_constant_error; goto cleanup; }
         memcpy(buffer->bytes + start, probe.bytes + start, size);
         for(size_t j = 0; j < probe.relocs.count; j++){
-            err = ma_push(CiStaticReloc)(&buffer->relocs, al, probe.relocs.data[j]);
+            err = ci_static_add_reloc(buffer, al, probe.relocs.data[j]);
             if(err){ err = CI_OOM_ERROR; goto cleanup; }
         }
         constants += ci_init_store_count(entry.value);
@@ -9773,6 +9835,7 @@ ci_try_lower_init_template(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowe
 static
 int
 ci_build_static_data(CiInterpreter* ci, CiStaticData* data, CiLowerDeps* deps){
+    DRP_PROFILE_BEGIN(profile, "resolve.static_initializer");
     Allocator al = ci_allocator(ci);
     CcVariable* var = data->var;
     int err = cc_sizeof_as_uint(&ci->parser, var->type, var->loc, &data->size);
@@ -9813,6 +9876,7 @@ ci_build_static_data(CiInterpreter* ci, CiStaticData* data, CiLowerDeps* deps){
     ma_cleanup(CiStaticReloc)(&buffer.relocs, al);
     Allocator_free(al, buffer.bytes, buffer.size);
     return err;
+    DRP_PROFILE_END(profile);
 }
 
 static

@@ -41,9 +41,7 @@
 
 static void diff_print(void*_Null_unspecified up, const char* fmt, ...);
 static DbgDiffPrinter TEST_DIFF_PRINTER = {
-#ifndef __DRC__
-    .printer=diff_print,
-#endif
+    .printer      = diff_print,
     .escape_on    = "\033[4m",
     .escape_reset = "\033[24m",
     .deleted      = "\033[94m- ",
@@ -1168,7 +1166,7 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
         fprintf(stderr, "Somehow this program was called without an argv.\n");
         return 1;
     }
-    uint64_t t0 = performance_counter();
+    uint64_t t0 = monotonic_time_us();
     const char* filename = argv[0];
     _Bool no_colors = 0;
     _Bool force_colors = 0;
@@ -1544,7 +1542,7 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
         fprintf(stdout, "\n");
     }
     if(time){
-        uint64_t t1 = performance_counter();
+        uint64_t t1 = monotonic_time_us();
         uint64_t diff = t1 - t0;
         TestPrintf("%s%s%s: Time elapsed: %s%.3f%ss\n",
                 gray, filename, reset,

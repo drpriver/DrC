@@ -16,6 +16,7 @@
 #include "cc_errors.h"
 #include "cc_memory_order.h"
 #include "cc_keywords.h"
+#include "../Drp/drp_profile.h"
 #include "../Drp/msb_sprintf.h"
 #include "../Drp/path_util.h"
 #include "../Drp/parse_numbers.h"
@@ -117,8 +118,10 @@ cpp_define_macro(CppPreprocessor* cpp, StringView name, size_t ntoks, size_t npa
     void** slot = AM_getsert(&cpp->macros, cpp->allocator, key);
     if(!slot) return CPP_OOM_ERROR;
     CppMacro* macro = *slot;
-    if(macro)
+    if(macro){
+        *outmacro = macro;
         return macro->is_builtin?CPP_REDEFINING_BUILTIN_MACRO_ERROR:CPP_MACRO_ALREADY_EXISTS_ERROR;
+    }
     size_t size = sizeof *macro + sizeof(CppToken)*ntoks + sizeof(Atom)*nparams;
     macro = Allocator_zalloc(cpp->allocator, size);
     if(!macro) return CPP_OOM_ERROR;
@@ -177,14 +180,12 @@ cpp_undef_macro(CppPreprocessor* cpp, StringView name){
 
 static
 int
-cpp_define_obj_macro(CppPreprocessor* cpp, StringView name, const CppToken*_Null_unspecified toks, size_t ntoks){
-    CppMacro* macro;
+cpp_define_obj_macro(CppPreprocessor* cpp, StringView name, const CppToken*_Null_unspecified toks, size_t ntoks, CppMacro*_Nullable*_Nullable outmacro){
+    CppMacro* macro = NULL;
     int err = cpp_define_macro(cpp, name, ntoks, 0, &macro);
+    if(outmacro) *outmacro = macro;
     if(err == CPP_MACRO_ALREADY_EXISTS_ERROR){
-        Atom a = AT_get_atom(cpp->at, name.text, name.length);
-        if(!a) return CPP_UNREACHABLE_ERROR;
-        CppMacro* m = AM_get(&cpp->macros, a);
-        if(!m) return CPP_UNREACHABLE_ERROR;
+        CppMacro* m = macro;
         if(m->is_function_like || m->nreplace != ntoks)
             return CPP_MACRO_ALREADY_EXISTS_ERROR;
         for(size_t i = 0; i < ntoks; i++){
@@ -1745,6 +1746,7 @@ cpp_validate_replacement(CppPreprocessor* cpp, const CppMacro* macro, const CppT
 static
 int
 cpp_handle_directive(CppPreprocessor* cpp){
+    DRP_PROFILE_BEGIN(profile, "cpp.directive");
     int err;
     _Bool is_system_header = ma_tail(cpp->frames).is_system_header;
     CppToken tok;
@@ -1760,6 +1762,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
         return cpp_push_tok(cpp, &cpp->pending, tok);
     }
     if(sv_equals(tok.txt, SV("embed"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.embed");
         SrcLoc loc = tok.loc;
         CppTokens* input = cpp_get_scratch(cpp);
         if(!input) return CPP_OOM_ERROR;
@@ -1790,8 +1793,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
         cpp_release_scratch(cpp, input);
         cpp_release_scratch(cpp, output);
         return err;
+        DRP_PROFILE_END(directive_profile);
     }
     if(sv_equals(tok.txt, SV("define")) || sv_equals(tok.txt, SV("defifndef"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.define");
         _Bool ifndef = tok.txt.length > 6;
         err = cpp_read_directive_macro_name(cpp, &tok);
         if(err) return err;
@@ -1814,24 +1819,21 @@ cpp_handle_directive(CppPreprocessor* cpp){
         err = cpp_next_raw_token(cpp, &tok);
         if(err) return err;
         if(tok.type == CPP_NEWLINE || cpp_token_is_end(tok)){
-            err = cpp_define_obj_macro(cpp, name, NULL, 0);
+            CppMacro* m;
+            err = cpp_define_obj_macro(cpp, name, NULL, 0, &m);
             if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR)
                 return cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR){
-                Atom a = AT_get_atom(cpp->at, name.text, name.length);
-                if(!a) return CPP_UNREACHABLE_ERROR;
-                CppMacro* m = AM_get(&cpp->macros, a);
-                if(!m) return CPP_UNREACHABLE_ERROR;
                 if(!is_system_header){
                     cpp_warn(cpp, name_loc, "Macro (%.*s) redefined with a different definition", sv_p(name));
                     cpp_info(cpp, m->def_loc, "... previously defined here");
                 }
                 err = cpp_undef_macro(cpp, name);
                 if(err) return err;
-                err = cpp_define_obj_macro(cpp, name, NULL, 0);
+                err = cpp_define_obj_macro(cpp, name, NULL, 0, &m);
             }
             if(err) return err;
-            ((CppMacro*)AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length)))->def_loc = name_loc;
+            m->def_loc = name_loc;
             return cpp_push_tok(cpp, &cpp->pending, tok);
         }
         else if(tok.type == CPP_PUNCTUATOR && tok.punct == '('){
@@ -2080,22 +2082,13 @@ cpp_handle_directive(CppPreprocessor* cpp){
                     goto finish_obj_macro;
                 }
             }
-            err = cpp_define_obj_macro(cpp, name, repl->data, repl->count);
+            CppMacro* m;
+            err = cpp_define_obj_macro(cpp, name, repl->data, repl->count, &m);
             if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR){
                 err = cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
                 goto finish_obj_macro;
             }
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR){
-                Atom a = AT_get_atom(cpp->at, name.text, name.length);
-                if(!a){
-                    err = CPP_UNREACHABLE_ERROR;
-                    goto finish_obj_macro;
-                }
-                CppMacro* m = AM_get(&cpp->macros, a);
-                if(!m){
-                    err = CPP_UNREACHABLE_ERROR;
-                    goto finish_obj_macro;
-                }
                 // cpp_define_obj_macro already accepts identical definitions.
                 if(!is_system_header){
                     cpp_warn(cpp, name_loc, "Macro (%.*s) redefined with a different definition", sv_p(name));
@@ -2103,10 +2096,9 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 }
                 err = cpp_undef_macro(cpp, name);
                 if(err) goto finish_obj_macro;
-                err = cpp_define_obj_macro(cpp, name, repl->data, repl->count);
+                err = cpp_define_obj_macro(cpp, name, repl->data, repl->count, &m);
             }
             if(!err){
-                CppMacro* m = AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length));
                 m->def_loc = name_loc;
                 err = cpp_validate_replacement(cpp, m, repl->data, repl->count);
             }
@@ -2117,8 +2109,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
         else {
             return cpp_error(cpp, tok.loc, "Unexpected token type in #define");
         }
+        DRP_PROFILE_END(directive_profile);
     }
     else if(sv_equals(tok.txt, SV("defblock"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.defblock");
         err = cpp_read_directive_macro_name(cpp, &tok);
         if(err) return err;
         StringView name = tok.txt;
@@ -2313,7 +2307,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
             }
         }
         else {
-            err = cpp_define_obj_macro(cpp, name, repl->data, repl->count);
+            CppMacro* m;
+            err = cpp_define_obj_macro(cpp, name, repl->data, repl->count, &m);
             if(err == CPP_REDEFINING_BUILTIN_MACRO_ERROR){
                 err = cpp_error(cpp, tok.loc, "Redefining builtin macro (%.*s)", sv_p(name));
                 goto finish_defblock;
@@ -2322,7 +2317,6 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 goto finish_defblock;
             if(err == CPP_MACRO_ALREADY_EXISTS_ERROR) err = 0;
             else {
-                CppMacro* m = AM_get(&cpp->macros, (Atom)AT_get_atom(cpp->at, name.text, name.length));
                 m->def_loc = name_loc;
                 err = cpp_validate_replacement(cpp, m, repl->data, repl->count);
             }
@@ -2331,8 +2325,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
         cpp_release_scratch(cpp, repl);
         cpp_release_scratch(cpp, names);
         return err;
+        DRP_PROFILE_END(directive_profile);
     }
     else if(sv_equals(tok.txt, SV("undef"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.undef");
         err = cpp_read_directive_macro_name(cpp, &tok);
         if(err) return err;
         StringView name = tok.txt;
@@ -2351,8 +2347,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
         if(err){
             cpp_info(cpp, tok.loc, "error undefing macro: %d", err);
         }
+        DRP_PROFILE_END(directive_profile);
     }
     else if(sv_equals(tok.txt, SV("if"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.if");
         CppIncludePosition source_pos = ma_tail(cpp->frames).include_position;
         CppPoundIf s = { .start = tok.loc };
         CppTokens *toks = cpp_get_scratch(cpp);
@@ -2379,8 +2377,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
         if(err) return err;
         err = cpp_push_if(cpp, s);
         if(err) return CPP_OOM_ERROR;
+        DRP_PROFILE_END(directive_profile);
     }
     else if(sv_equals(tok.txt, SV("ifdef"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.ifdef");
         CppPoundIf s = { .start = tok.loc };
         err = cpp_read_directive_macro_name(cpp, &tok);
         if(err) return err;
@@ -2400,8 +2400,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
         s.is_active = s.true_taken;
         err = cpp_push_if(cpp, s);
         if(err) return CPP_OOM_ERROR;
+        DRP_PROFILE_END(directive_profile);
     }
     else if(sv_equals(tok.txt, SV("ifndef"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.ifndef");
         CppPoundIf s = { .start = tok.loc };
         err = cpp_read_directive_macro_name(cpp, &tok);
         if(err) return err;
@@ -2421,8 +2423,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
         s.is_active = s.true_taken;
         err = cpp_push_if(cpp, s);
         if(err) return CPP_OOM_ERROR;
+        DRP_PROFILE_END(directive_profile);
     }
     else if(sv_equals(tok.txt, SV("elif"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.elif");
         if(!cpp->if_stack.count)
             return cpp_error(cpp, tok.loc, "#elif outside of #if (or similar construct)");
         CppPoundIf* s = &ma_tail(cpp->if_stack);
@@ -2436,8 +2440,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
         err = cpp_push_tok(cpp, &cpp->pending, tok);
         if(err) return CPP_OOM_ERROR;
         s->is_active = 0;
+        DRP_PROFILE_END(directive_profile);
     }
     else if(sv_equals(tok.txt, SV("else"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.else");
         if(!cpp->if_stack.count)
             return cpp_error(cpp, tok.loc, "#else outside of #if (or similar construct)");
         CppPoundIf* s = &ma_tail(cpp->if_stack);
@@ -2457,8 +2463,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
         }
         s->seen_else = 1;
         s->is_active = !s->true_taken;
+        DRP_PROFILE_END(directive_profile);
     }
     else if(sv_equals(tok.txt, SV("elifdef"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.elifdef");
         if(!cpp->if_stack.count)
             return cpp_error(cpp, tok.loc, "#elifdef outside of #if (or similar construct)");
         CppPoundIf* s = &ma_tail(cpp->if_stack);
@@ -2479,8 +2487,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
             cpp_warn(cpp, tok.loc, "Trailing tokens after #elifdef");
         }
         s->is_active = 0;
+        DRP_PROFILE_END(directive_profile);
     }
     else if(sv_equals(tok.txt, SV("elifndef"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.elifndef");
         if(!cpp->if_stack.count)
             return cpp_error(cpp, tok.loc, "#elifndef outside of #if (or similar construct)");
         CppPoundIf* s = &ma_tail(cpp->if_stack);
@@ -2501,8 +2511,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
             cpp_warn(cpp, tok.loc, "Trailing tokens after #elifndef");
         }
         s->is_active = 0;
+        DRP_PROFILE_END(directive_profile);
     }
     else if(sv_equals(tok.txt, SV("endif"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.endif");
         if(!cpp->if_stack.count)
             return cpp_error(cpp, tok.loc, "#endif outside of #if (or similar construct)");
         CppFrame source = ma_tail(cpp->frames);
@@ -2527,8 +2539,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
             }
         }
         cpp->if_stack.count--;
+        DRP_PROFILE_END(directive_profile);
     }
     else if(sv_equals(tok.txt, SV("error")) || sv_equals(tok.txt, SV("warning"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.error");
         _Bool is_error = tok.txt.text[0] == 'e';
         SrcLoc directive_loc = tok.loc;
         MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
@@ -2560,8 +2574,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
         }
         cpp_warn(cpp, directive_loc, "%s%.*s", msg.length ? "#warning " : "#warning", sv_p(msg));
         msb_destroy(&sb);
+        DRP_PROFILE_END(directive_profile);
     }
     else if(sv_equals(tok.txt, SV("pragma"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.pragma");
         SrcLoc pragma_loc = tok.loc;
         do {
             err = cpp_next_raw_token(cpp, &tok);
@@ -2607,8 +2623,10 @@ cpp_handle_directive(CppPreprocessor* cpp){
         finish_pragma:;
         cpp_release_scratch(cpp, prag_toks);
         if(err) return err;
+        DRP_PROFILE_END(directive_profile);
     }
     else if(sv_equals(tok.txt, SV("include")) || sv_equals(tok.txt, SV("include_next")) || sv_equals(tok.txt, SV("include_oneof")) || sv_equals(tok.txt, SV("import")) || sv_equals(tok.txt, SV("try_include"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.include");
         _Bool is_next = sv_equals(tok.txt, SV("include_next"));
         _Bool is_import = sv_equals(tok.txt, SV("import"));
         _Bool is_optional = sv_equals(tok.txt, SV("try_include"));
@@ -2867,14 +2885,17 @@ cpp_handle_directive(CppPreprocessor* cpp){
             if(scratch) cpp_release_scratch(cpp, scratch);
             return err;
         }
+        DRP_PROFILE_END(directive_profile);
     }
     else if(sv_equals(tok.txt, SV("line"))){
+        DRP_PROFILE_BEGIN(directive_profile, "cpp.directive.line");
         // just ignore it
         do {
             err = cpp_next_raw_token(cpp, &tok);
             if(err) return err;
         } while(!cpp_token_is_end(tok) && tok.type != CPP_NEWLINE);
         return cpp_push_tok(cpp, &cpp->pending, tok);
+        DRP_PROFILE_END(directive_profile);
     }
     else {
         cpp_warn(cpp, tok.loc, "Unhandled directive: '#%.*s'", sv_p(tok.txt));
@@ -2885,6 +2906,7 @@ cpp_handle_directive(CppPreprocessor* cpp){
         return cpp_push_tok(cpp, &cpp->pending, tok);
     }
     return 0;
+    DRP_PROFILE_END(profile);
 }
 
 static
@@ -3060,6 +3082,7 @@ cpp_handle_directive_in_inactive_region(CppPreprocessor *cpp){
 static
 int
 cpp_expand_obj_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_loc, CppTokens *dst){
+    DRP_PROFILE_BEGIN(profile, "cpp.object_macro");
     if(macro->is_builtin){
         CppObjMacroFn* fn = (CppObjMacroFn*)macro->data[0];
         void* ctx = (void*) macro->data[1];
@@ -3116,6 +3139,7 @@ cpp_expand_obj_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_loc
         if(err) return err;
     }
     return 0;
+    DRP_PROFILE_END(profile);
 }
 
 static
@@ -3929,6 +3953,7 @@ cpp_substitute_and_paste(
 static
 int
 cpp_expand_func_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_loc, const CppTokens *args, const Marray(size_t) *arg_seps, CppTokens *dst){
+    DRP_PROFILE_BEGIN(profile, "cpp.function_macro");
     if(macro->is_builtin){
         CppFuncMacroFn *fn = (CppFuncMacroFn*)macro->data[0];
         void* ctx = (void*)macro->data[1];
@@ -4086,6 +4111,7 @@ finally:
     if(expanded_args)
         Allocator_free(cpp->allocator, expanded_args, sizeof(CppTokens*) * total_params);
     return err;
+    DRP_PROFILE_END(profile);
 }
 
 static
@@ -4178,7 +4204,7 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
                 {.type=CPP_WHITESPACE, .txt=SVI(" ")},
                 {.type=CPP_IDENTIFIER, .txt=SVI("char")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_unsigned_char: {
             static const CppToken toks[] = {
@@ -4186,13 +4212,13 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
                 {.type=CPP_WHITESPACE, .txt=SVI(" ")},
                 {.type=CPP_IDENTIFIER, .txt=SVI("char")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_short: {
             static const CppToken toks[] = {
                 {.type=CPP_IDENTIFIER, .txt=SVI("short")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_unsigned_short: {
             static const CppToken toks[] = {
@@ -4200,13 +4226,13 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
                 {.type=CPP_WHITESPACE, .txt=SVI(" ")},
                 {.type=CPP_IDENTIFIER, .txt=SVI("short")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_int: {
             static const CppToken toks[] = {
                 {.type=CPP_IDENTIFIER, .txt=SVI("int")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_unsigned: {
             static const CppToken toks[] = {
@@ -4214,7 +4240,7 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
                 {.type=CPP_WHITESPACE, .txt=SVI(" ")},
                 {.type=CPP_IDENTIFIER, .txt=SVI("int")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_long: {
             static const CppToken toks[] = {
@@ -4222,7 +4248,7 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
                 {.type=CPP_WHITESPACE, .txt=SVI(" ")},
                 {.type=CPP_IDENTIFIER, .txt=SVI("int")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_unsigned_long: {
             static const CppToken toks[] = {
@@ -4232,7 +4258,7 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
                 {.type=CPP_WHITESPACE, .txt=SVI(" ")},
                 {.type=CPP_IDENTIFIER, .txt=SVI("int")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_long_long: {
             static const CppToken toks[] = {
@@ -4242,7 +4268,7 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
                 {.type=CPP_WHITESPACE, .txt=SVI(" ")},
                 {.type=CPP_IDENTIFIER, .txt=SVI("int")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_unsigned_long_long: {
             static const CppToken toks[] = {
@@ -4254,7 +4280,7 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
                 {.type=CPP_WHITESPACE, .txt=SVI(" ")},
                 {.type=CPP_IDENTIFIER, .txt=SVI("int")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_long_double: {
             static const CppToken toks[] = {
@@ -4262,13 +4288,13 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
                 {.type=CPP_WHITESPACE, .txt=SVI(" ")},
                 {.type=CPP_IDENTIFIER, .txt=SVI("double")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_int128: {
             static const CppToken toks[] = {
                 {.type=CPP_IDENTIFIER, .txt=SVI("__int128")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_unsigned_int128: {
             static const CppToken toks[] = {
@@ -4276,55 +4302,55 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
                 {.type=CPP_WHITESPACE, .txt=SVI(" ")},
                 {.type=CPP_IDENTIFIER, .txt=SVI("__int128")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_char: {
             static const CppToken toks[] = {
                 {.type=CPP_IDENTIFIER, .txt=SVI("char")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_void: {
             static const CppToken toks[] = {
                 {.type=CPP_IDENTIFIER, .txt=SVI("void")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_bool: {
             static const CppToken toks[] = {
                 {.type=CPP_IDENTIFIER, .txt=SVI("_Bool")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_float: {
             static const CppToken toks[] = {
                 {.type=CPP_IDENTIFIER, .txt=SVI("float")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_double: {
             static const CppToken toks[] = {
                 {.type=CPP_IDENTIFIER, .txt=SVI("double")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_bfloat16: {
             static const CppToken toks[] = {
                 {.type=CPP_IDENTIFIER, .txt=SVI("__bf16")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_float16: {
             static const CppToken toks[] = {
                 {.type=CPP_IDENTIFIER, .txt=SVI("_Float16")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_float128: {
             static const CppToken toks[] = {
                 {.type=CPP_IDENTIFIER, .txt=SVI("_Float128")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_float16_complex: {
             static const CppToken toks[] = {
@@ -4332,7 +4358,7 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
                 {.type=CPP_WHITESPACE, .txt=SVI(" ")},
                 {.type=CPP_IDENTIFIER, .txt=SVI("_Complex")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_float_complex: {
             static const CppToken toks[] = {
@@ -4340,7 +4366,7 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
                 {.type=CPP_WHITESPACE, .txt=SVI(" ")},
                 {.type=CPP_IDENTIFIER, .txt=SVI("_Complex")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_double_complex: {
             static const CppToken toks[] = {
@@ -4348,7 +4374,7 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
                 {.type=CPP_WHITESPACE, .txt=SVI(" ")},
                 {.type=CPP_IDENTIFIER, .txt=SVI("_Complex")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_long_double_complex: {
             static const CppToken toks[] = {
@@ -4358,25 +4384,25 @@ cpp_define_type_name_macro(CppPreprocessor* cpp, StringView name, CcBasicTypeKin
                 {.type=CPP_WHITESPACE, .txt=SVI(" ")},
                 {.type=CPP_IDENTIFIER, .txt=SVI("_Complex")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_nullptr_t: {
             static const CppToken toks[] = {
                 {.type=CPP_IDENTIFIER, .txt=SVI("nullptr_t")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT__Type: {
             static const CppToken toks[] = {
                 {.type=CPP_IDENTIFIER, .txt=SVI("_Type")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT__Any: {
             static const CppToken toks[] = {
                 {.type=CPP_IDENTIFIER, .txt=SVI("_Any")},
             };
-            return cpp_define_obj_macro(cpp, name, toks, sizeof toks / sizeof toks[0]);
+            return cpp_define_obj_macro(cpp, name, toks, countof(toks), NULL);
         }
         case CCBT_INVALID:
         case CCBT_char_complex:
@@ -4453,7 +4479,7 @@ ccbt_literal_suffix(CcBasicTypeKind kind){
 static
 int
 cpp_def_1(CppPreprocessor* cpp, StringView name){
-    return cpp_define_obj_macro(cpp, name, (CppToken[]){{.type=CPP_NUMBER, .txt=SV("1")}}, 1);
+    return cpp_define_obj_macro(cpp, name, (CppToken[]){{.type=CPP_NUMBER, .txt=SV("1")}}, 1, NULL);
 }
 static
 int
@@ -4462,7 +4488,7 @@ cpp_def_num(CppPreprocessor* cpp, StringView name, StringView num){
     CppTokens* replacement = cpp_get_scratch(cpp);
     if(!replacement) return CPP_OOM_ERROR;
     int err = cpp_tokenize_text_impl(cpp, (SrcLoc){.line=1, .column=1}, num, replacement, 0);
-    if(!err) err = cpp_define_obj_macro(cpp, name, replacement->data, replacement->count);
+    if(!err) err = cpp_define_obj_macro(cpp, name, replacement->data, replacement->count, NULL);
     cpp_release_scratch(cpp, replacement);
     return err;
 }
@@ -4515,7 +4541,7 @@ cpp_def_target_int(CppPreprocessor* cpp, StringView name, int val){
         {.type=CPP_PUNCTUATOR, .punct='-', .txt=SV("-"), .loc={.line=1, .column=1}},
         {.type=CPP_NUMBER, .txt=digits, .loc={.line=1, .column=1 + negative}},
     };
-    return cpp_define_obj_macro(cpp, name, toks + !negative, 1 + negative);
+    return cpp_define_obj_macro(cpp, name, toks + !negative, 1 + negative, NULL);
 }
 
 static
@@ -4534,7 +4560,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     } while(0)
     #define DEFFLOAT(name, val) do { \
         err = cpp_define_obj_macro(cpp, SV(name), \
-            (CppToken[]){{.type=CPP_NUMBER, .txt=SV(val), .loc={.line=1, .column=1}}}, 1); \
+            (CppToken[]){{.type=CPP_NUMBER, .txt=SV(val), .loc={.line=1, .column=1}}}, 1, NULL); \
         if(err) return err; \
     } while(0)
     #define DEFINT(name, val) do { \
@@ -4601,11 +4627,11 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     // __USER_LABEL_PREFIX__
     if(t->user_label_prefix){
         err = cpp_define_obj_macro(cpp, SV("__USER_LABEL_PREFIX__"),
-            (CppToken[]){{.type=CPP_IDENTIFIER, .txt=SV("_")}}, 1);
+            (CppToken[]){{.type=CPP_IDENTIFIER, .txt=SV("_")}}, 1, NULL);
         if(err) return err;
     }
     else {
-        err = cpp_define_obj_macro(cpp, SV("__USER_LABEL_PREFIX__"), NULL, 0);
+        err = cpp_define_obj_macro(cpp, SV("__USER_LABEL_PREFIX__"), NULL, 0, NULL);
         if(err) return err;
     }
 
@@ -4673,14 +4699,14 @@ cpp_define_target_macros(CppPreprocessor* cpp){
             StringView _value = (kind) == CCBT_long && t->sizeof_[CCBT_long] == 4 \
                 ? SV("2147483647L") : smax[kind]; \
             err = cpp_define_obj_macro(cpp, SV(name), \
-                (CppToken[]){{.type=CPP_NUMBER, .txt=_value}}, 1); \
+                (CppToken[]){{.type=CPP_NUMBER, .txt=_value}}, 1, NULL); \
             if(err) return err; \
         } while(0)
         #define DEFUMAX(name, kind) do { \
             StringView _value = (kind) == CCBT_unsigned_long && t->sizeof_[CCBT_unsigned_long] == 4 \
                 ? SV("4294967295UL") : umax[kind]; \
             err = cpp_define_obj_macro(cpp, SV(name), \
-                (CppToken[]){{.type=CPP_NUMBER, .txt=_value}}, 1); \
+                (CppToken[]){{.type=CPP_NUMBER, .txt=_value}}, 1, NULL); \
             if(err) return err; \
         } while(0)
 
@@ -4932,7 +4958,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
                 if(val.length)
                     err = cpp_def_num(cpp, name, val);
                 else
-                    err = cpp_define_obj_macro(cpp, name, NULL, 0);
+                    err = cpp_define_obj_macro(cpp, name, NULL, 0, NULL);
             }
             else {
                 err = cpp_def_1(cpp, (StringView){len, p});
@@ -5642,19 +5668,19 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
         err = cpp_define_builtin_obj_macro(cpp, obj_builtins[i].name, obj_builtins[i].fn, NULL);
         if(err) return err;
     }
-    err = cpp_define_obj_macro(cpp, SV("__STDC__"), (CppToken[]){{.type=CPP_NUMBER, .txt=SV("1")}}, 1);
+    err = cpp_define_obj_macro(cpp, SV("__STDC__"), (CppToken[]){{.type=CPP_NUMBER, .txt=SV("1")}}, 1, NULL);
     if(err) return err;
-    err = cpp_define_obj_macro(cpp, SV("__VERSION__"), (CppToken[]){{.type=CPP_STRING, .txt=SV("\"drc 0.0.1\"")}}, 1);
+    err = cpp_define_obj_macro(cpp, SV("__VERSION__"), (CppToken[]){{.type=CPP_STRING, .txt=SV("\"drc 0.0.1\"")}}, 1, NULL);
     if(err) return err;
-    err = cpp_define_obj_macro(cpp, SV("__STDC_VERSION__"), (CppToken[]){{.type=CPP_NUMBER, .txt=SV("202602l")}}, 1);
+    err = cpp_define_obj_macro(cpp, SV("__STDC_VERSION__"), (CppToken[]){{.type=CPP_NUMBER, .txt=SV("202602l")}}, 1, NULL);
     if(err) return err;
-    err = cpp_define_obj_macro(cpp, SV("__STDC_DEFER_TS25755__"), (CppToken[]){{.type=CPP_NUMBER, .txt=SV("2")}}, 1);
+    err = cpp_define_obj_macro(cpp, SV("__STDC_DEFER_TS25755__"), (CppToken[]){{.type=CPP_NUMBER, .txt=SV("2")}}, 1, NULL);
     if(err) return err;
-    err = cpp_define_obj_macro(cpp, SV("__STDC_EMBED_NOT_FOUND__"), (CppToken[]){{.type=CPP_NUMBER, .txt=cpp_embed_result[CPP_EMBED_NOT_FOUND]}}, 1);
+    err = cpp_define_obj_macro(cpp, SV("__STDC_EMBED_NOT_FOUND__"), (CppToken[]){{.type=CPP_NUMBER, .txt=cpp_embed_result[CPP_EMBED_NOT_FOUND]}}, 1, NULL);
     if(err) return err;
-    err = cpp_define_obj_macro(cpp, SV("__STDC_EMBED_FOUND__"), (CppToken[]){{.type=CPP_NUMBER, .txt=cpp_embed_result[CPP_EMBED_FOUND]}}, 1);
+    err = cpp_define_obj_macro(cpp, SV("__STDC_EMBED_FOUND__"), (CppToken[]){{.type=CPP_NUMBER, .txt=cpp_embed_result[CPP_EMBED_FOUND]}}, 1, NULL);
     if(err) return err;
-    err = cpp_define_obj_macro(cpp, SV("__STDC_EMBED_EMPTY__"), (CppToken[]){{.type=CPP_NUMBER, .txt=cpp_embed_result[CPP_EMBED_EMPTY]}}, 1);
+    err = cpp_define_obj_macro(cpp, SV("__STDC_EMBED_EMPTY__"), (CppToken[]){{.type=CPP_NUMBER, .txt=cpp_embed_result[CPP_EMBED_EMPTY]}}, 1, NULL);
     if(err) return err;
     static const struct {
         StringView name; CppFuncMacroFn* fn; size_t nparams; _Bool variadic, no_expand;
@@ -6653,7 +6679,7 @@ cpp_builtin_let(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
         }
     }
     else {
-        err = cpp_define_obj_macro(cpp, macro_name, repl_toks, repl_count);
+        err = cpp_define_obj_macro(cpp, macro_name, repl_toks, repl_count, NULL);
         if(err == CPP_MACRO_ALREADY_EXISTS_ERROR)
             return cpp_error(cpp, name_loc, "__let macro name '%.*s' already defined", sv_p(macro_name));
         if(err) return err;

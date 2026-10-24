@@ -25,6 +25,8 @@
 #include "nc_native_call.h"
 #include "nc_va_list.h"
 #include "ci_softnum.h"
+#include "../Drp/measure_time.h"
+#include "../Drp/drp_profile.h"
 #include "../Drp/Allocators/allocator.h"
 #include "../Drp/Allocators/mallocator.h"
 #include "../Drp/Allocators/arena_allocator.h"
@@ -617,6 +619,7 @@ ci_closure_callback(const NcCallPlan* plan, NcCallState* state, void* userdata){
 static
 int
 ci_create_closure(CiInterpreter* ci, CcFunc* func){
+    DRP_PROFILE_BEGIN(profile, "resolve.native_closure");
     int err;
     Allocator al = ci_allocator(ci);
     void (*entry)(void);
@@ -665,6 +668,7 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
     ci->closures = cd;
 #endif
     return 0;
+    DRP_PROFILE_END(profile);
 }
 
 static
@@ -2679,6 +2683,13 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     return ci_error(ci, op->loc, "__builtin_unreachable reached");
                 case CC_BUILTIN_TRAP:
                     return ci_error(ci, op->loc, "__builtin_trap");
+                case CC_BUILTIN_READCYCLECOUNTER:{
+                    uint64_t ticks = performance_counter();
+                    if(op->builtin.slot != UINT32_MAX)
+                        ci_write_uint((char*)frame->slots + op->builtin.slot, 8, ticks);
+                    frame->pc++;
+                    return 0;
+                }
                 case CC_BUILTIN_DEBUGTRAP:
                     frame->pc++;
                     return 0;
@@ -2786,6 +2797,7 @@ ci_free_call_frame(CiInterpreter* ci, CiInterpFrame* frame){
 static
 int
 ci_interp_run(CiInterpreter* ci, CiInterpFrame* root){
+    DRP_PROFILE_BEGIN(profile, "interpreter.run");
     int err = 0;
     if(!root->stack){
         CiStack* stack;
@@ -2808,6 +2820,7 @@ ci_interp_run(CiInterpreter* ci, CiInterpFrame* root){
             if(!err){ frame->pc++; break; }
         }
     }
+    DRP_PROFILE_END(profile);
 }
 
 static
@@ -3418,6 +3431,7 @@ ci_relocate_static_data(CiStaticData* data){
 static
 int
 ci_resolve_deps(CiInterpreter* ci, CiLowerDeps* deps){
+    DRP_PROFILE_BEGIN(profile, "resolve.dependencies");
     int err = ci_tls_prepare(ci);
     if(err) return err;
     Allocator al = ci_allocator(ci);
@@ -3536,6 +3550,7 @@ ci_resolve_deps(CiInterpreter* ci, CiLowerDeps* deps){
         ci_static_data_cleanup(&initializers.data[i], al);
     ma_cleanup(CiStaticData)(&initializers, al);
     return err;
+    DRP_PROFILE_END(profile);
 }
 
 static
@@ -4108,11 +4123,11 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
                 StringView mname = {(size_t)(eq - val.text), val.text};
                 StringView mval = {val.length - mname.length - 1, eq + 1};
                 CppToken valtok = {.type = CPP_NUMBER, .txt = {mval.length, mval.text}};
-                err = cpp_define_obj_macro(cpp, mname, &valtok, 1);
+                err = cpp_define_obj_macro(cpp, mname, &valtok, 1, NULL);
             }
             else {
                 CppToken onetok = {.type = CPP_NUMBER, .txt = {1, "1"}};
-                err = cpp_define_obj_macro(cpp, val, &onetok, 1);
+                err = cpp_define_obj_macro(cpp, val, &onetok, 1, NULL);
             }
             if(err == _cc_macro_already_exists_error)
                 err = cpp_error(cpp, loc, "pkg-config: macro '%.*s' already defined with a different value", (int)val.length, val.text);
@@ -4476,6 +4491,7 @@ ci_target(const CiInterpreter* ci){
 static
 int
 ci_dlsym(CiInterpreter* ci, SrcLoc loc, Atom sym, const char* what, void*_Nullable*_Nonnull out){
+    DRP_PROFILE_BEGIN(profile, "resolve.symbol");
     void* p = NULL;
     int err = ci_try_dlsym(ci, sym, &p);
     if(err) return err;
@@ -4505,6 +4521,7 @@ ci_dlsym(CiInterpreter* ci, SrcLoc loc, Atom sym, const char* what, void*_Nullab
     }
     *out = p;
     return 0;
+    DRP_PROFILE_END(profile);
 }
 
 static

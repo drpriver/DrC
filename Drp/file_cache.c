@@ -14,6 +14,7 @@
 #include "hash_func.h"
 #include "ByteBuffer.h"
 #include "path_util.h"
+#include "drp_profile.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #else
@@ -25,6 +26,7 @@
 static
 FileCache*_Nullable
 fc_create(Allocator a, unsigned flags){
+    DRP_PROFILE_BEGIN(profile, "file_cache.create");
     FileCache* fc = Allocator_zalloc(a, sizeof *fc);
     if(!fc) return fc;
     fc->allocator = a;
@@ -32,23 +34,32 @@ fc_create(Allocator a, unsigned flags){
     fc->is_windows = flags & FC_IS_WINDOWS;
     fc->case_insensitive = flags & FC_IS_CASE_INSENSITIVE;
     return fc;
+    DRP_PROFILE_END(profile);
 }
-static void fc_destroy(FileCache* fc){
+static
+void
+fc_destroy(FileCache* fc){
+    DRP_PROFILE_BEGIN(profile, "file_cache.destroy");
     (void)fc; // TODO
+    DRP_PROFILE_END(profile);
 }
 static
 void
 fc_write_path(FileCache* fc, const char* txt, size_t len){
+    DRP_PROFILE_BEGIN(profile, "file_cache.write_path");
     msb_write_str(&fc->path_builder, txt, len);
+    DRP_PROFILE_END(profile);
 }
 
 static
 void
 fc_write_pathf(FileCache* fc, const char* fmt, ...){
+    DRP_PROFILE_BEGIN(profile, "file_cache.write_pathf");
     va_list va;
     va_start(va, fmt);
     msb_vsprintf(&fc->path_builder, fmt, va);
     va_end(va);
+    DRP_PROFILE_END(profile);
 }
 static
 MStringBuilder*
@@ -98,6 +109,7 @@ static
 void
 fc_correct_path_spelling(FileCache* fc, CachedFile* f, OsFileHandle handle){
     if(!fc->case_insensitive) return;
+    DRP_PROFILE_BEGIN(profile, "file_cache.correct_path_spelling");
     // On case insensitive file systems, the user might have used the wrong
     // case in the #include (common in windows headers), which can lead to
     // confusing results for tooling and makes #pragma once annoying.
@@ -128,11 +140,13 @@ fc_correct_path_spelling(FileCache* fc, CachedFile* f, OsFileHandle handle){
     (void)f;
     (void)handle;
     #endif
+    DRP_PROFILE_END(profile);
 }
 
 static
 CachedFile *_Nullable
 fc_get_entry(FileCache* fc){
+    DRP_PROFILE_BEGIN(profile, "file_cache.lookup");
     if(!fc->map.count) return NULL;
     fc_normalize_relative_path(fc);
     if(fc->path_builder.errored){
@@ -154,11 +168,13 @@ fc_get_entry(FileCache* fc){
         idx++;
         if(idx >= cap2) idx = 0;
     }
+    DRP_PROFILE_END(profile);
 }
 
 static
 CachedFile *_Nullable
 fc_create_entry(FileCache* fc){
+    DRP_PROFILE_BEGIN(profile, "file_cache.create_entry");
     if(fc->map.count >= fc->map.cap){
         size_t old_cap = fc->map.cap;
         size_t old_size = old_cap*2*sizeof(uint32_t)+old_cap*sizeof *fc->map.data;
@@ -209,18 +225,21 @@ fc_create_entry(FileCache* fc){
         idx++;
         if(idx >= cap2) idx = 0;
     }
+    DRP_PROFILE_END(profile);
 }
 
 static
 int
 fc_is_file(FileCache* fc){
+    DRP_PROFILE_BEGIN(profile, "file_cache.is_file");
     int result = FC_ERROR_NOT_FOUND;
     CachedFile* f = fc_get_entry(fc);
     if(f && f->valid){
         result = f->is_file ? FC_OK : FC_ERROR_NOT_FILE;
         goto finally;
     }
-    if(!fc->may_read_real_files) goto finally;
+    if(!fc->may_read_real_files || (fc->path_builder.cursor && fc->path_builder.data[0] == '<'))
+        goto finally;
     if(!f) f = fc_create_entry(fc);
     if(!f){ result = FC_ERROR_OOM; goto finally; }
     #ifdef _WIN32
@@ -229,7 +248,10 @@ fc_is_file(FileCache* fc){
         msb16_write_utf8(&wb, f->path.text, f->path.length);
         if(wb.errored){ msb16_destroy(&wb); result = FC_ERROR_OOM; goto finally; }
         msb16_nul_terminate(&wb);
-        DWORD attrs = GetFileAttributesW((LPCWSTR)wb.data);
+        DWORD attrs;
+        DRP_PROFILE_BEGIN(stat_profile, "file_cache.stat");
+        attrs = GetFileAttributesW((LPCWSTR)wb.data);
+        DRP_PROFILE_END(stat_profile);
         msb16_destroy(&wb);
         f->valid = 1;
         if(attrs == INVALID_FILE_ATTRIBUTES){
@@ -244,7 +266,10 @@ fc_is_file(FileCache* fc){
     }
     #else
     struct stat s;
-    int err = stat(f->path.text, &s);
+    int err;
+    DRP_PROFILE_BEGIN(stat_profile, "file_cache.stat");
+    err = stat(f->path.text, &s);
+    DRP_PROFILE_END(stat_profile);
     if(err){
         f->valid = 1;
         f->exists = 0;
@@ -262,21 +287,25 @@ fc_is_file(FileCache* fc){
     finally:
     msb_reset(&fc->path_builder);
     return result;
+    DRP_PROFILE_END(profile);
 }
 
 static
 int
 fc_read_file(FileCache* fc, StringView* outdata, uint32_t* file_id){
+    DRP_PROFILE_BEGIN(profile, "file_cache.read_file");
     ByteView bytes;
     int err = fc_read_bytes(fc, &bytes, file_id);
     if(err) return err;
     *outdata = (StringView){bytes.n_bytes, bytes.buff};
     return FC_OK;
+    DRP_PROFILE_END(profile);
 }
 
 static
 int
 fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
+    DRP_PROFILE_BEGIN(profile, "file_cache.read_bytes");
     int result = FC_ERROR_NOT_FOUND;
     #ifdef _WIN32
     HANDLE fh = INVALID_HANDLE_VALUE;
@@ -291,7 +320,8 @@ fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
             goto finally;
         }
     }
-    if(!fc->may_read_real_files) goto finally;
+    if(!fc->may_read_real_files || (fc->path_builder.cursor && fc->path_builder.data[0] == '<'))
+        goto finally;
     if(!f) f = fc_create_entry(fc);
     if(!f){ result = FC_ERROR_OOM; goto finally; }
     #ifdef _WIN32
@@ -300,7 +330,9 @@ fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
         msb16_write_utf8(&wb, f->path.text, f->path.length);
         if(wb.errored){ msb16_destroy(&wb); goto finally; }
         msb16_nul_terminate(&wb);
+        DRP_PROFILE_BEGIN(open_profile, "file_cache.open");
         fh = CreateFileW((LPCWSTR)wb.data, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        DRP_PROFILE_END(open_profile);
         msb16_destroy(&wb);
     }
     if(fh == INVALID_HANDLE_VALUE){
@@ -312,7 +344,11 @@ fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
     }
     fc_correct_path_spelling(fc, f, fh);
     LARGE_INTEGER size;
-    if(!GetFileSizeEx(fh, &size)){
+    BOOL size_ok;
+    DRP_PROFILE_BEGIN(stat_profile, "file_cache.fstat");
+    size_ok = GetFileSizeEx(fh, &size);
+    DRP_PROFILE_END(stat_profile);
+    if(!size_ok){
         f->valid = 1;
         f->exists = 0;
         f->is_file = 0;
@@ -326,7 +362,10 @@ fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
     f->is_file = 1;
     f->size_cached = 1;
     f->data_size = (size_t)size.QuadPart;
-    void* data = Allocator_alloc(fc->allocator, f->data_size);
+    void* data;
+    DRP_PROFILE_BEGIN(allocate_profile, "file_cache.allocate_contents");
+    data = Allocator_alloc(fc->allocator, f->data_size);
+    DRP_PROFILE_END(allocate_profile);
     if(!data){
         f->data_cached = 0;
         result = FC_ERROR_OOM;
@@ -337,7 +376,11 @@ fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
         size_t remaining = f->data_size - nread;
         DWORD to_read = remaining > 0x7FFFFFFF ? 0x7FFFFFFF : (DWORD)remaining;
         DWORD n;
-        if(!ReadFile(fh, (char*)data + nread, to_read, &n, NULL)){
+        BOOL read_ok;
+        DRP_PROFILE_BEGIN(read_profile, "file_cache.read");
+        read_ok = ReadFile(fh, (char*)data + nread, to_read, &n, NULL);
+        DRP_PROFILE_END(read_profile);
+        if(!read_ok){
             Allocator_free(fc->allocator, data, f->data_size);
             result = FC_ERROR_IO;
             goto finally;
@@ -355,7 +398,9 @@ fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
     *outdata = (ByteView){f->data.n_bytes, f->data.buff};
     result = FC_OK;
     #else
+    DRP_PROFILE_BEGIN(open_profile, "file_cache.open");
     fd = open(f->path.text, O_RDONLY);
+    DRP_PROFILE_END(open_profile);
     if(fd < 0){
         f->valid = 1;
         f->unreadable = 1;
@@ -365,7 +410,10 @@ fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
     }
     struct stat s;
     fc_correct_path_spelling(fc, f, fd);
-    int err = fstat(fd, &s);
+    int err;
+    DRP_PROFILE_BEGIN(stat_profile, "file_cache.fstat");
+    err = fstat(fd, &s);
+    DRP_PROFILE_END(stat_profile);
     if(err){
         f->valid = 1;
         f->exists = 0;
@@ -389,7 +437,10 @@ fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
         f->size_cached = 1;
         f->data_size = s.st_size;
     }
-    void* data = Allocator_alloc(fc->allocator, f->data_size);
+    void* data;
+    DRP_PROFILE_BEGIN(allocate_profile, "file_cache.allocate_contents");
+    data = Allocator_alloc(fc->allocator, f->data_size);
+    DRP_PROFILE_END(allocate_profile);
     if(!data){
         f->data_cached = 0;
         result = FC_ERROR_OOM;
@@ -399,7 +450,10 @@ fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
     while(nread < f->data_size){
         char* p = (char*)data + nread;
         errno = 0;
-        ssize_t e = read(fd, p, f->data_size - nread);
+        ssize_t e;
+        DRP_PROFILE_BEGIN(read_profile, "file_cache.read");
+        e = read(fd, p, f->data_size - nread);
+        DRP_PROFILE_END(read_profile);
         if(e < 0){
             if(errno == EINTR)
                 continue;
@@ -423,17 +477,27 @@ fc_read_bytes(FileCache* fc, ByteView* outdata, uint32_t* file_id){
     finally:
     if(result == FC_OK) *file_id = (uint32_t)(f - fc->map.data);
     #ifdef _WIN32
-    if(fh != INVALID_HANDLE_VALUE) CloseHandle(fh);
+    if(fh != INVALID_HANDLE_VALUE){
+        DRP_PROFILE_BEGIN(close_profile, "file_cache.close");
+        CloseHandle(fh);
+        DRP_PROFILE_END(close_profile);
+    }
     #else
-    if(fd >= 0) close(fd);
+    if(fd >= 0){
+        DRP_PROFILE_BEGIN(close_profile, "file_cache.close");
+        close(fd);
+        DRP_PROFILE_END(close_profile);
+    }
     #endif
     msb_reset(&fc->path_builder);
     return result;
+    DRP_PROFILE_END(profile);
 }
 
 static
 int
 fc_get_size(FileCache* fc, size_t* sz){
+    DRP_PROFILE_BEGIN(profile, "file_cache.get_size");
     int result = FC_ERROR_NOT_FOUND;
     CachedFile* f = fc_get_entry(fc);
     if(f && f->valid){
@@ -443,7 +507,8 @@ fc_get_size(FileCache* fc, size_t* sz){
             goto finally;
         }
     }
-    if(!fc->may_read_real_files) goto finally;
+    if(!fc->may_read_real_files || (fc->path_builder.cursor && fc->path_builder.data[0] == '<'))
+        goto finally;
     if(!f) f = fc_create_entry(fc);
     if(!f){ result = FC_ERROR_OOM; goto finally; }
     #ifdef _WIN32
@@ -452,7 +517,10 @@ fc_get_size(FileCache* fc, size_t* sz){
         msb16_write_utf8(&wb, f->path.text, f->path.length);
         if(wb.errored){ msb16_destroy(&wb); goto finally; }
         msb16_nul_terminate(&wb);
-        HANDLE fh = CreateFileW((LPCWSTR)wb.data, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        HANDLE fh;
+        DRP_PROFILE_BEGIN(open_profile, "file_cache.open");
+        fh = CreateFileW((LPCWSTR)wb.data, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        DRP_PROFILE_END(open_profile);
         msb16_destroy(&wb);
         if(fh == INVALID_HANDLE_VALUE){
             f->valid = 1;
@@ -463,15 +531,23 @@ fc_get_size(FileCache* fc, size_t* sz){
         }
         fc_correct_path_spelling(fc, f, fh);
         LARGE_INTEGER size;
-        if(!GetFileSizeEx(fh, &size)){
+        BOOL size_ok;
+        DRP_PROFILE_BEGIN(stat_profile, "file_cache.fstat");
+        size_ok = GetFileSizeEx(fh, &size);
+        DRP_PROFILE_END(stat_profile);
+        if(!size_ok){
+            DRP_PROFILE_BEGIN(close_profile, "file_cache.close");
             CloseHandle(fh);
+            DRP_PROFILE_END(close_profile);
             f->valid = 1;
             f->exists = 1;
             f->is_file = 0;
             result = FC_ERROR_IO;
             goto finally;
         }
+        DRP_PROFILE_BEGIN(close_profile, "file_cache.close");
         CloseHandle(fh);
+        DRP_PROFILE_END(close_profile);
         f->valid = 1;
         f->exists = 1;
         f->is_file = 1;
@@ -482,7 +558,10 @@ fc_get_size(FileCache* fc, size_t* sz){
     }
     #else
     struct stat s;
-    int err = stat(f->path.text, &s);
+    int err;
+    DRP_PROFILE_BEGIN(stat_profile, "file_cache.stat");
+    err = stat(f->path.text, &s);
+    DRP_PROFILE_END(stat_profile);
     if(err){
         f->valid = 1;
         f->exists = 0;
@@ -510,11 +589,13 @@ fc_get_size(FileCache* fc, size_t* sz){
     finally:
     msb_reset(&fc->path_builder);
     return result;
+    DRP_PROFILE_END(profile);
 }
 
 static
 int
 fc_intern_path(FileCache* fc, uint32_t* out_file_id){
+    DRP_PROFILE_BEGIN(profile, "file_cache.intern_path");
     int result = FC_OK;
     CachedFile* f = fc_get_entry(fc);
     if(!f) f = fc_create_entry(fc);
@@ -526,11 +607,13 @@ fc_intern_path(FileCache* fc, uint32_t* out_file_id){
     finally:
     msb_reset(&fc->path_builder);
     return result;
+    DRP_PROFILE_END(profile);
 }
 
 static
 int
 fc_cache_file(FileCache* fc, StringView data){
+    DRP_PROFILE_BEGIN(profile, "file_cache.cache_file");
     int result = FC_OK;
     CachedFile* f = fc_get_entry(fc);
     if(f && f->valid){
@@ -562,6 +645,7 @@ fc_cache_file(FileCache* fc, StringView data){
     finally:
     msb_reset(&fc->path_builder);
     return result;
+    DRP_PROFILE_END(profile);
 }
 
 

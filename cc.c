@@ -26,6 +26,7 @@
 #include "C/cc_errors.h"
 #include "C/cc_parser.h"
 #include "C/ci_interp.h"
+#include "Drp/drp_profile.h"
 #include "cpp_args.h"
 #include "cc_repl_completion.h"
 #include "C/ci_op_printer.h"
@@ -68,7 +69,21 @@ cc_cleanup_interp(void){
     ci_tls_cleanup(&cc_interp);
 }
 
+static
+int
+cc_run_toplevel(CiInterpreter* ci){
+    DRP_PROFILE_BEGIN(profile, "interpreter.toplevel");
+    CiInterpFrame* frame = &ci->top_frame;
+    while(frame->pc < frame->op_count){
+        int err = ci_interp_step(ci, frame);
+        if(err) return err;
+    }
+    return 0;
+    DRP_PROFILE_END(profile);
+}
+
 int main(int argc, char** argv, char** envp){
+    drp_profile_start();
     _Bool eager = 0,
           syntax_only = 0,
           poison_frame_slots = 0,
@@ -122,7 +137,6 @@ int main(int argc, char** argv, char** envp){
             .remainder = 1,
         },
     };
-    StringView output = {0};
     StringView eval_str = {0};
     _Bool repl = 0;
     _Bool dump = 0;
@@ -134,12 +148,14 @@ int main(int argc, char** argv, char** envp){
             .help = "Write final atoms: DRCATOM1 followed by little-endian u32 lengths and raw bytes",
             .min_num = 0, .max_num = 1,
         },
+        #if defined DRP_PROFILE && DRP_PROFILE
         {
             .name = SV("-o"),
-            .dest = ARGDEST(&output),
-            .help = "Where to write to",
+            .dest = ARGDEST(&drp_profile_out),
+            .help = "Where to write the profile to",
             .min_num = 0, .max_num = 1,
         },
+        #endif
         {
             .name = SV("-e"),
             .altname1 = SV("--eval"),
@@ -572,13 +588,10 @@ int main(int argc, char** argv, char** envp){
     if(repl){
         // Execute any statements from the initial file before entering REPL.
         if(!syntax_only){
-            CiInterpFrame* frame = &cc_interp.top_frame;
             err = ci_prepare_toplevel(&cc_interp);
             if(err) goto stringify_error;
-            while(frame->pc < frame->op_count){
-                err = ci_interp_step(&cc_interp, frame);
-                if(err) goto stringify_error;
-            }
+            err = cc_run_toplevel(&cc_interp);
+            if(err) goto stringify_error;
         }
         cc_interp.parser.repl = 1;
         fc->may_read_real_files = 1;
@@ -627,13 +640,9 @@ int main(int argc, char** argv, char** envp){
                     if(err){ msb.cursor = 0; continue; }
                     // Execute new statements
                     {
-                        CiInterpFrame* frame = &cc_interp.top_frame;
                         err = ci_prepare_toplevel(&cc_interp);
                         if(err) break;
-                        while(frame->pc < frame->op_count){
-                            err = ci_interp_step(&cc_interp, frame);
-                            if(err) break;
-                        }
+                        err = cc_run_toplevel(&cc_interp);
                     }
                 }
                 msb.cursor = 0;
@@ -656,13 +665,10 @@ int main(int argc, char** argv, char** envp){
         enum { EXIT_CODE_SENTINEL = 0x4a544d }; // "JTM" = jump to main
         if(!syntax_only){
             cc_interp.exit_code = EXIT_CODE_SENTINEL;
-            CiInterpFrame* frame = &cc_interp.top_frame;
             err = ci_prepare_toplevel(&cc_interp);
             if(err) goto stringify_error;
-            while(frame->pc < frame->op_count){
-                err = ci_interp_step(&cc_interp, frame);
-                if(err) goto stringify_error;
-            }
+            err = cc_run_toplevel(&cc_interp);
+            if(err) goto stringify_error;
         }
         if(dump)repl_builtin_command(&cc_interp.parser, SV("/dump"));
         if(syntax_only){

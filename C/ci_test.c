@@ -58,6 +58,19 @@ TestFunction(test_interpreter){
         const CcTargetConfig*_Nullable target;
     } testcases[] = {
         {
+            "readcyclecounter: discovery, type, runtime reads, and discarded results", __LINE__,
+            SVI("static_assert(__has_builtin(__builtin_readcyclecounter));"
+                "static_assert(typeof(__builtin_readcyclecounter()) == unsigned long long);"
+                "static_assert(!__builtin_constant_p(__builtin_readcyclecounter()));"
+                "unsigned long long read_ticks(void){return __builtin_readcyclecounter();}"
+                "unsigned long long before=read_ticks();"
+                "volatile unsigned work=0;for(unsigned i=0;i<1000;i++)work+=i;"
+                "__builtin_readcyclecounter();"
+                "unsigned long long after=read_ticks();"
+                "return before!=after;"),
+            .exit_code = 1,
+        },
+        {
             "ABI copies odd-sized aggregate argument and result pieces", __LINE__,
             SVI("struct S3 {unsigned char a[3];};struct S5 {unsigned char a[5];};"
                 "struct S6 {unsigned char a[6];};struct S7 {unsigned char a[7];};"
@@ -4618,6 +4631,55 @@ TestFunction(test_interpreter){
             SVI("int missing_static_dep(void); union U {int (*p)(void); unsigned bits:3;};\n"
                 "struct S {union U u;}; static struct S s={.u.p=missing_static_dep,.u.bits=5};\n"
                 "return s.u.bits==5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: backwards relocation inserts and partial overwrites", __LINE__,
+            SVI("int missing_static_dep(void); int f(void){return 7;}\n"
+                "struct S {int (*p)(void); int n;};\n"
+                "static struct S a[4]={[3]={f,3},[0]={missing_static_dep,1},"
+                "[2]={f,2},[0].p=nullptr,[1]={f,4},[2].n=9};\n"
+                "return a[0].p==nullptr && a[0].n==1 && a[1].p()==7 && a[1].n==4"
+                " && a[2].p()==7 && a[2].n==9 && a[3].p()==7 && a[3].n==3;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: clear all relocations then insert at lower offsets", __LINE__,
+            SVI("int missing_static_dep(void); int f(void){return 9;}\n"
+                "struct S {int (*p[3])(void);};\n"
+                "static struct S s={.p={missing_static_dep,missing_static_dep,missing_static_dep},"
+                ".p={},.p[1]=f,.p[0]=f,.p[1]=nullptr};\n"
+                "return s.p[0]()==9 && s.p[1]==nullptr && s.p[2]==nullptr;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: copied relocations survive adjacent writes and are overwritten", __LINE__,
+            SVI("static int x=13; struct S {int* p; int n;};\n"
+                "constexpr struct S source={&x,4};\n"
+                "static struct S a[3]={[2]=source,[0]=source,[1]=source,"
+                "[2].n=8,[0].p=nullptr};\n"
+                "return a[0].p==nullptr && a[0].n==4 && *a[1].p==13"
+                " && a[1].n==4 && *a[2].p==13 && a[2].n==8;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: middle relocation range removal preserves both neighbors", __LINE__,
+            SVI("int f(void){return 11;} int missing_static_dep(void);\n"
+                "struct S {int (*p[2])(void); int n;};\n"
+                "static struct S a[3]={[2]={{f,f},3},[0]={{f,f},1},"
+                "[1]={{missing_static_dep,missing_static_dep},2},[1].p={},[0].n=7};\n"
+                "return a[0].p[0]()==11 && a[0].p[1]()==11 && a[0].n==7"
+                " && a[1].p[0]==nullptr && a[1].p[1]==nullptr && a[1].n==2"
+                " && a[2].p[0]()==11 && a[2].p[1]()==11 && a[2].n==3;\n"),
+            .exit_code = 1,
+        },
+        {
+            "static data: partial pointer overlap removes the predecessor relocation", __LINE__,
+            SVI("int missing_static_dep(void); int f(void){return 5;}\n"
+                "union U {int (*p)(void); unsigned char bytes[sizeof(void*)];};\n"
+                "struct S {int (*before)(void); union U u; int (*after)(void);};\n"
+                "static struct S s={.after=f,.u.p=missing_static_dep,.before=f,.u.bytes[1]=7};\n"
+                "return s.before()==5 && s.after()==5 && s.u.bytes[1]==7;\n"),
             .exit_code = 1,
         },
         {

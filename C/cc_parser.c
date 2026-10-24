@@ -13,6 +13,7 @@
 #include "../Drp/ckdint.h"
 #include "../Drp/switch_macros.h"
 #include "../Drp/countof.h"
+#include "../Drp/drp_profile.h"
 #include "cc_expr.h"
 #include "cc_parser.h"
 #include "cc_type_check.h"
@@ -4326,6 +4327,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     return err;
                 }
                 case CC__builtin_unreachable:
+                case CC__builtin_readcyclecounter:
                 case CC__builtin_trap:
                 case CC__builtin_debugtrap:
                 case CC__builtin_abort:
@@ -4338,13 +4340,15 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     switch(builtin){
                         case CC__builtin_unreachable: op = CC_BUILTIN_UNREACHABLE; break;
                         case CC__builtin_trap:        op = CC_BUILTIN_TRAP; break;
+                        case CC__builtin_readcyclecounter: op = CC_BUILTIN_READCYCLECOUNTER; break;
                         case CC__builtin_debugtrap:   op = CC_BUILTIN_DEBUGTRAP; break;
                         case CC__builtin_abort:       op = CC_BUILTIN_ABORT; break;
                         case CC__bt:                  op = CC_BUILTIN_BACKTRACE; break;
                         default:
                         return CC_UNREACHABLE_ERROR;
                     }
-                    CcExpr* node = cc_make_expr(p, CC_EXPR_BUILTIN, tok.loc, ccqt_basic(CCBT_void), 0);
+                    CcBasicTypeKind ret = op == CC_BUILTIN_READCYCLECOUNTER ? CCBT_unsigned_long_long : CCBT_void;
+                    CcExpr* node = cc_make_expr(p, CC_EXPR_BUILTIN, tok.loc, ccqt_basic(ret), 0);
                     if(!node) return CC_OOM_ERROR;
                     node->builtin.op = op;
                     *out = node;
@@ -7807,6 +7811,7 @@ cc_parse_one_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullable lab
 static
 int
 cc_parse_all(CcParser* p){
+    DRP_PROFILE_BEGIN(profile, "parser.translation_unit");
     int err = 0;
     CcDeferContext saved_defer_context = p->defer_context;
     CcToken tok;
@@ -7857,6 +7862,7 @@ cc_parse_all(CcParser* p){
     cc_pop_stmt_sink(p, sink);
     p->file_scope = saved_file_scope;
     return err;
+    DRP_PROFILE_END(profile);
 }
 
 static
@@ -9851,6 +9857,7 @@ cc_field_layout_alignment(CcParser* p, CcField* field, _Bool packed, uint16_t pa
 static
 int
 cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
+    DRP_PROFILE_BEGIN(profile, "parser.struct_layout");
     int err = 0;
     uint32_t offset = 0;
     uint32_t max_align = 1;
@@ -10007,6 +10014,7 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
     s->is_incomplete = 0;
     cc_classify_record(p, s, natural_alignment);
     return 0;
+    DRP_PROFILE_END(profile);
 }
 
 static
@@ -11359,6 +11367,7 @@ cc_check_anon_member_duplicates(CcParser* p, CcField* existing, uint32_t existin
 static
 int
 cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_union, _Bool member, CcQualType* base_type){
+    DRP_PROFILE_BEGIN(profile, "parser.struct_or_union");
     CcParseFlags constexpr_flags = flags;
     constexpr_flags.vc = CC_CONSTEXPR_VALUE;
     constexpr_flags.unevaluated = 1;
@@ -11938,6 +11947,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
         *base_type = (CcQualType){.bits = (uintptr_t)u};
     }
     return 0;
+    DRP_PROFILE_END(profile);
 }
 
 
@@ -12013,6 +12023,7 @@ cc_finalize_enum(CcParser* p, CcEnum* e, _Bool fixed, _Bool packed){
 static
 int
 cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool member, CcQualType* base_type){
+    DRP_PROFILE_BEGIN(profile, "parser.enum");
     CcParseFlags constexpr_flags = flags;
     constexpr_flags.vc = CC_CONSTEXPR_VALUE;
     constexpr_flags.unevaluated = 1;
@@ -12335,11 +12346,13 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool member, CcQualT
     }
     *base_type = (CcQualType){.bits = (uintptr_t)e};
     return 0;
+    DRP_PROFILE_END(profile);
 }
 
 static
 int
 cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base){
+    DRP_PROFILE_BEGIN(profile, "parser.declaration_specifiers");
     CcParseFlags constexpr_flags = flags;
     constexpr_flags.vc = CC_CONSTEXPR_VALUE;
     constexpr_flags.unevaluated = 1;
@@ -12888,6 +12901,7 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
         }
     }
     return 0;
+    DRP_PROFILE_END(profile);
 }
 
 static
@@ -15235,6 +15249,7 @@ cc_check_pack_decl(CcParser* p, CcFunc* func, CcParsedParams* params, CcQualType
 static
 int
 cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcParsedDecls* out){
+    DRP_PROFILE_BEGIN(profile, "parser.declarations");
     *out = (CcParsedDecls){0};
     if(declbase->spec.sp_register
     && (cc_scope_declarations(p->current) == &p->global
@@ -15455,6 +15470,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             else {
                 Marray(CcToken)* body_tokens = cc_get_scratch(p);
                 if(!body_tokens) return CC_OOM_ERROR;
+                DRP_PROFILE_BEGIN(tokens_profile, "parser.function_tokens");
                 int depth = 1;
                 while(depth > 0){
                     CcToken t;
@@ -15473,6 +15489,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 }
                 func->_Self_type = p->current_tag_type;
                 func->tokens = body_tokens;
+                DRP_PROFILE_END(tokens_profile);
             }
             out->function_definition = func;
             return 0;
@@ -15888,6 +15905,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
         if(stop) break;
     }
     return cc_parse_local_methods(p);
+    DRP_PROFILE_END(profile);
 }
 static
 const CcTargetConfig*
@@ -16475,6 +16493,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("__builtin___clear_cache"), CC__builtin___clear_cache},
             {SVI("__builtin_unreachable"), CC__builtin_unreachable},
             {SVI("__builtin_trap"), CC__builtin_trap},
+            {SVI("__builtin_readcyclecounter"), CC__builtin_readcyclecounter},
             {SVI("__builtin_debugtrap"), CC__builtin_debugtrap},
             {SVI("__builtin_abort"), CC__builtin_abort},
             {SVI("__builtin_mul_overflow"), CC__builtin_mul_overflow},
@@ -16864,6 +16883,7 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
 static
 int
 cc_parse_func_body(CcParser* p, CcFunc* f){
+    DRP_PROFILE_BEGIN(profile, "parser.function_body");
     if(!f->defined) return CC_UNREACHABLE_ERROR;
     if(f->parsed) return 0;
     if(f->parse_failed) return CC_SYNTAX_ERROR;
@@ -16895,6 +16915,7 @@ cc_parse_func_body(CcParser* p, CcFunc* f){
     f->tokens = NULL;
     if(err) f->parse_failed = 1;
     return err;
+    DRP_PROFILE_END(profile);
 }
 
 static

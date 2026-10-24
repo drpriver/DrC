@@ -676,7 +676,7 @@ struct CiOp {
             CiOpKind kind: 8; // CI_OP_BUILTIN
             CcBuiltinOp op: 8;
             uint32_t _bitpad: 16;
-            uint32_t _pad;
+            uint32_t slot; // readcyclecounter result or UINT32_MAX
             uint64_t pad[2];
             SrcLoc loc;
         } builtin;

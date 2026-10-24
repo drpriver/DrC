@@ -600,7 +600,7 @@ BuildCtx*_Nullable
 b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecified*_Nonnull envp, const char*_Nonnull basefile){
     BuildCtx* ctx = Allocator_zalloc(MALLOCATOR, sizeof *ctx);
     if(!ctx) return NULL;
-    ctx->t0 = performance_counter();
+    ctx->t0 = monotonic_time_us();
     if(0){
         fail:
         if(ctx){
@@ -2852,7 +2852,7 @@ b_execute_targets(BuildCtx* ctx){
     write_to_json_file(ctx, &ctx->cmd_history, &TI_AM_MA_Atom.type_info, ctx->cmd_cache_path);
 
     if(ctx->measure_time){
-        uint64_t t1 = performance_counter();
+        uint64_t t1 = monotonic_time_us();
         uint64_t diff = t1 - ctx->t0;
         b_loglvl(BLOG_ERROR, ctx, "Time elapsed: %.3fs\n", (double)diff/1e6);
     }

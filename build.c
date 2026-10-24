@@ -68,6 +68,16 @@ int main(int argc, char** argv, char** envp){
     b_add_dep(ctx, all, cc);
     b_linkinp(ctx, cc, soft_float);
 
+    BuildTarget* prof_cc = b_exe_target(ctx, "drc-profile", "cc.c", ctx->target.os, B_COMPILE_OPTIMIZE|B_COMPILE_DEBUG_INFO|B_COMPILE_NO_SANITIZE);
+    b_arg(ctx, prof_cc, "-DDRP_PROFILE=1");
+    prof_cc->is_compile_command = 0;
+    link_native_capture(ctx, prof_cc, native_capture);
+    b_linkinp(ctx, prof_cc, soft_float);
+    if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
+        b_linkarg(ctx, prof_cc, "-lsynchronization");
+    b_get_target(ctx, "drc-profile")->description = b_atomize(ctx, "Optimized interpreter with hierarchical profiling.");
+    b_add_dep(ctx, all, prof_cc);
+
     BuildTarget* ctags = b_exe_target(ctx, "drctags", "ctags.c", ctx->target.os, B_COMPILE_NO_FLAGS);
     ctags->description = b_atomize(ctx, "C tagger.");
     b_get_target(ctx, "drctags")->description = cc->description;

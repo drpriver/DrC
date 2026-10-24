@@ -129,6 +129,7 @@ enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
     CC__builtin___clear_cache,
     CC__builtin_unreachable,
     CC__builtin_trap,
+    CC__builtin_readcyclecounter,
     CC__builtin_debugtrap,
     CC__builtin_abort,
     CC__builtin_mul_overflow,

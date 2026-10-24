@@ -1,9 +1,11 @@
 //
-// Copyright © 2021-2025, David Priver <david@davidpriver.com>
+// Copyright © 2021-2026, David Priver <david@davidpriver.com>
 //
 #ifndef THREAD_UTILS_H
 #define THREAD_UTILS_H
 #include <stdlib.h>
+#include <stdint.h>
+#include <limits.h>
 #include "posixheader.h"
 #include "windowsheader.h"
 #ifdef _MSC_VER
@@ -23,6 +25,7 @@
         // mach_task_self
         #include <mach/mach_init.h>
         #include <os/lock.h>
+        #include <os/os_sync_wait_on_address.h>
     #endif
 #endif
 
@@ -351,6 +354,101 @@ join_thread(ThreadHandle handle){
 #else
 #error "Unhandled threading platform."
 #endif
+
+#if defined _WIN32
+typedef struct { LONG64 sequence; } CONDVAR_T;
+#elif defined __APPLE__
+typedef struct { uint64_t sequence; } CONDVAR_T;
+#elif defined __linux__ || defined __wasm__
+typedef struct { uint32_t sequence; } CONDVAR_T;
+#endif
+#define CONDVAR_T_INIT {0}
+
+static inline
+void
+CONDVAR_T_init(CONDVAR_T* cv){
+    cv->sequence = 0;
+}
+
+static inline
+void
+CONDVAR_T_wait(CONDVAR_T* cv, LOCK_T* lock){
+    #if defined _WIN32
+        LONG64 sequence = InterlockedCompareExchange64(&cv->sequence, 0, 0);
+        LOCK_T_unlock(lock);
+        BOOL ok = WaitOnAddress(&cv->sequence, &sequence, sizeof sequence, INFINITE);
+        LOCK_T_lock(lock);
+        (void)ok; // idk
+    #elif defined __APPLE__ || defined __linux__
+        uint64_t sequence = __atomic_load_n(&cv->sequence, __ATOMIC_RELAXED);
+        LOCK_T_unlock(lock);
+        #if defined __APPLE__
+            int result = os_sync_wait_on_address(
+                &cv->sequence,
+                sequence, sizeof cv->sequence,
+                OS_SYNC_WAIT_ON_ADDRESS_NONE
+            );
+        #else
+            int result = (int)syscall(
+                SYS_futex, &cv->sequence, 
+                128/*FUTEX_WAIT_PRIVATE*/, (uint32_t)sequence, 
+                NULL, NULL, 0
+            );
+        #endif
+        (void)result; // idk
+        LOCK_T_lock(lock);
+    #else
+        (void)cv;
+        (void)lock;
+        unimplemented();
+    #endif
+}
+
+static inline
+void
+CONDVAR_T_wake_(CONDVAR_T* cv, _Bool all){
+    #if defined _WIN32
+        InterlockedIncrement64(&cv->sequence);
+        if(all) 
+            WakeByAddressAll(&cv->sequence);
+        else 
+            WakeByAddressSingle(&cv->sequence);
+    #elif defined __APPLE__ || defined __linux__
+        __atomic_fetch_add(&cv->sequence, 1, __ATOMIC_RELAXED);
+        int result;
+        #if defined __APPLE__
+        if(all)
+            result = os_sync_wake_by_address_all(&cv->sequence, sizeof cv->sequence, OS_SYNC_WAKE_BY_ADDRESS_NONE);
+        else
+            result = os_sync_wake_by_address_any(&cv->sequence, sizeof cv->sequence, OS_SYNC_WAKE_BY_ADDRESS_NONE);
+        (void)result; // idk
+        #else
+        result = (int)syscall(
+            SYS_futex, &cv->sequence,
+            129/*FUTEX_WAKE_PRIVATE*/, 
+            all ? INT_MAX : 1, 
+            NULL, NULL, 0
+        );
+        (void)result; // idk
+        #endif
+    #else
+        (void)cv;
+        (void)all;
+        unimplemented();
+    #endif
+}
+
+static inline
+void
+CONDVAR_T_signal(CONDVAR_T* cv){
+    CONDVAR_T_wake_(cv, 0);
+}
+
+static inline
+void
+CONDVAR_T_broadcast(CONDVAR_T* cv){
+    CONDVAR_T_wake_(cv, 1);
+}
 
 static
 warn_unused

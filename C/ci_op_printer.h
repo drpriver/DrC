@@ -758,6 +758,11 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             switch((uint32_t)op->builtin.op){
                 case CC_BUILTIN_UNREACHABLE: msb_write_literal(out, "unreachable"); break;
                 case CC_BUILTIN_TRAP: msb_write_literal(out, "trap"); break;
+                case CC_BUILTIN_READCYCLECOUNTER:
+                    if(op->builtin.slot != UINT32_MAX)
+                        msb_sprintf(out, "[%u] = ", op->builtin.slot);
+                    msb_write_literal(out, "readcyclecounter()");
+                    break;
                 case CC_BUILTIN_DEBUGTRAP: msb_write_literal(out, "debugtrap"); break;
                 case CC_BUILTIN_ABORT: msb_write_literal(out, "abort()"); break;
                 case CC_BUILTIN_BACKTRACE: msb_write_literal(out, "backtrace()"); break;
