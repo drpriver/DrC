@@ -342,7 +342,7 @@ msb_write_utf16(MStringBuilder* msb, const uint16_t* str, size_t len){
             if(i + 1 < len){
                 uint16_t nu = str[i+1];
                 if(nu >= 0xdc00u && nu <= 0xdfffu){
-                    cp = 0x1000u + ((u - 0xd800u) << 10) + (nu - 0xdc00u);
+                    cp = 0x10000u + ((u - 0xd800u) << 10) + (nu - 0xdc00u);
                     i += 2;
                 }
                 else {

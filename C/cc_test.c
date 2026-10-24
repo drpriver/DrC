@@ -19,6 +19,7 @@
 #include "../Drp/MStringBuilder.h"
 #include "../Drp/file_cache.h"
 #include "../Drp/msb_logger.h"
+#include "cc_type_check.h"
 #include "cc_parser.h"
 #include "cc_errors.h"
 
@@ -33,12 +34,11 @@
 static void cc_print_type(MStringBuilder* sb, CcQualType t);
 static void cc_print_expr(MStringBuilder* sb, CcExpr* e);
 static void cc_print_statement(MStringBuilder* sb, CcStmtNode* s);
-static void cc_print_runtime_value(CcParser*, CcQualType, const void*, MStringBuilder*, int);
 static int cc_sizeof_as_uint(CcParser*, CcQualType, SrcLoc, uint32_t*);
 static int test_eval_initializer(CcParser*, CcExpr*, CcExpr*_Nullable*_Nonnull);
 static int test_eval_bytes(CcParser*, CcExpr*, CcExpr*);
 static void cc_release_expr(CcParser*, CcExpr*);
-static _Bool cc_call_abi_type_equal(const CcTargetConfig*, CcQualType, CcQualType);
+
 
 static void test_print_init_paths(MStringBuilder* sb, CcExpr* e){
     if(e->kind == CC_EXPR_OBJECT_VIEW){
@@ -68,7 +68,7 @@ static _Bool test_init_path_layouts(CcParser* p, CcExpr* e){
     for(uint32_t i = 0; i < e->init_list->count; i++){
         CcInitEntry* entry = &e->init_list->entries[i];
         uint64_t offset;
-        if(cc_field_path_resolve(p->cpp.target, e->type, entry->path, &offset)) return 0;
+        if(cc_field_path_offset(p->cpp.target, e->type, entry->path, &offset)) return 0;
         uint32_t size;
         if(cc_sizeof_as_uint(p, e->type, e->loc, &size) || offset > size) return 0;
         if(entry->value && !test_init_path_layouts(p, entry->value)) return 0;
@@ -76,183 +76,26 @@ static _Bool test_init_path_layouts(CcParser* p, CcExpr* e){
     return 1;
 }
 
-TestFunction(test_field_paths){
-    TESTBEGIN();
-    Allocator al = MALLOCATOR;
-    CcFieldPath literal = {.n_components=1, .idx0=0};
-    TestExpectFalse(_Bool, literal.is_extended);
-    TestExpectEquals(uint64_t, literal._bits, 2);
-    uint32_t components[] = {0, 1, 1023, 3, 4, 5, UINT32_MAX};
-    for(uint32_t n = 0; n <= 7; n++){
-        CcFieldPath path = {0};
-        int err = cc_field_path_make(al, components, n, &path);
-        TestExpectEquals(int, err, 0);
-        if(err) continue;
-        TestExpectEquals(size_t, sizeof path, 8);
-        TestExpectEquals(uint32_t, cc_field_path_count(path), n);
-        TestExpectEquals(_Bool, path.is_extended, n > 6);
-        for(uint32_t i = 0; i < n; i++)
-            TestExpectEquals(uint32_t, cc_field_path_component(path, i), components[i]);
-        cc_field_path_free(al, path);
-    }
-    uint32_t large[] = {1024};
-    CcFieldPath path = {0};
-    int err = cc_field_path_make(al, large, 1, &path);
-    TestExpectEquals(int, err, 0);
-    if(!err){
-        TestExpectFalse(_Bool, path.is_extended);
-        TestExpectEquals(uint32_t, path.n_components, 7);
-        TestExpectEquals(uint32_t, cc_field_path_count(path), 1);
-        TestExpectEquals(uint32_t, cc_field_path_component(path, 0), 1024);
-        cc_field_path_free(al, path);
-    }
-    uint32_t single_indices[] = {0, 1023, 1024, UINT32_MAX};
-    Allocator no_alloc = {.type=ALLOCATOR_NULL};
-    for(uint32_t i = 0; i < 4; i++){
-        uint32_t index = single_indices[i];
-        err = cc_field_path_make(no_alloc, &index, 1, &path);
-        TestExpectEquals(int, err, 0);
-        if(err) continue;
-        TestExpectFalse(_Bool, path.is_extended);
-        TestExpectEquals(uint32_t, path.n_components, index > 1023 ? 7 : 1);
-        TestExpectEquals(uint32_t, cc_field_path_count(path), 1);
-        TestExpectEquals(uint32_t, cc_field_path_component(path, 0), index);
-        CcFieldPath copy = {0};
-        err = cc_field_path_concat(no_alloc, (CcFieldPath){0}, path, &copy);
-        TestExpectEquals(int, err, 0);
-        if(!err){
-            TestExpectEquals(uint64_t, path._bits, copy._bits);
-            TestExpectTrue(_Bool, cc_field_path_equal(path, copy));
-        }
-        uint32_t pair[] = {index, 1};
-        CcFieldPath child = {0};
-        err = cc_field_path_make(al, pair, 2, &child);
-        TestExpectEquals(int, err, 0);
-        if(!err){
-            TestExpectEquals(_Bool, child.is_extended, index > 1023);
-            TestExpectTrue(_Bool, cc_field_path_is_prefix(path, child));
-            TestExpectFalse(_Bool, cc_field_path_equal(path, child));
-            CcFieldPath joined = {0};
-            CcFieldPath next = {.n_components=1, .idx0=1};
-            err = cc_field_path_concat(al, path, next, &joined);
-            TestExpectEquals(int, err, 0);
-            if(!err){
-                TestExpectTrue(_Bool, cc_field_path_equal(child, joined));
-                cc_field_path_free(al, joined);
-            }
-            cc_field_path_free(al, child);
-        }
-        cc_field_path_free(no_alloc, path);
-        cc_field_path_free(no_alloc, copy);
-    }
-    CcFieldPath prefix = {.n_components=3, .idx0=0, .idx1=1, .idx2=2};
-    CcFieldPath suffix = {.n_components=4, .idx0=3, .idx1=4, .idx2=5, .idx3=6};
-    TestExpectTrue(_Bool, cc_field_path_is_prefix((CcFieldPath){0}, prefix));
-    TestExpectFalse(_Bool, cc_field_path_equal(prefix, suffix));
-    err = cc_field_path_concat(al, prefix, suffix, &path);
-    TestExpectEquals(int, err, 0);
-    if(!err){
-        TestExpectTrue(_Bool, path.is_extended);
-        TestExpectTrue(_Bool, cc_field_path_is_prefix(prefix, path));
-        TestExpectFalse(_Bool, cc_field_path_is_prefix(suffix, path));
-        for(uint32_t i = 0; i < 7; i++) TestExpectEquals(uint32_t, cc_field_path_component(path, i), i);
-        CcFieldPath copy = {0};
-        err = cc_field_path_concat(al, (CcFieldPath){0}, path, &copy);
-        TestExpectEquals(int, err, 0);
-        if(!err) TestExpectTrue(_Bool, cc_field_path_equal(path, copy));
-        cc_field_path_free(al, path);
-        if(!err){
-            TestExpectEquals(uint32_t, cc_field_path_component(copy, 6), 6);
-            CcFieldPath tail = {0};
-            TestExpectEquals(int, cc_field_path_drop(al, copy, 3, &tail), 0);
-            TestExpectTrue(_Bool, cc_field_path_equal(tail, suffix));
-            cc_field_path_free(al, tail);
-            cc_field_path_free(al, copy);
-        }
-    }
-    CcField fields[2] = {{.type=ccqt_basic(CCBT_int)}, {.type=ccqt_basic(CCBT_int)}};
-    CcStruct st = {.kind=CC_STRUCT, .fields=fields, .field_count=2};
-    CcUnion un = {.kind=CC_UNION, .fields=fields, .field_count=2};
-    CcFieldPath left = {.n_components=1, .idx0=0}, right = {.n_components=1, .idx0=1};
-    TestExpectFalse(_Bool, cc_field_paths_overlap((CcQualType){.ptr=(uintptr_t)&st >> 3}, left, right));
-    TestExpectTrue(_Bool, cc_field_paths_overlap((CcQualType){.ptr=(uintptr_t)&un >> 3}, left, right));
-    TestExpectTrue(_Bool, cc_field_paths_overlap((CcQualType){.bits=(uintptr_t)&st}, (CcFieldPath){0}, left));
-    const CcTargetConfig *target = cc_targets[CC_TARGET_TEST];
-    CcArray row = {.kind=CC_ARRAY, .element=ccqt_basic(CCBT_int), .length=1073741824};
-    CcArray matrix = {.kind=CC_ARRAY, .element={.bits=(uintptr_t)&row}, .length=2};
-    uint64_t offset;
-    TestExpectEquals(int, cc_field_path_resolve(target, (CcQualType){.bits=(uintptr_t)&matrix}, right, &offset),
-        _cc_overflow_error);
-    row.length = 1073741823;
-    TestExpectEquals(int, cc_field_path_resolve(target, (CcQualType){.bits=(uintptr_t)&matrix}, right, &offset), 0);
-    TestExpectEquals(uint64_t, offset, UINT64_C(4294967292));
-    TESTEND();
-}
 
-TestFunction(test_call_abi_types){
-    TESTBEGIN();
-    static int idx = 0;
-    for(int i = test_atomic_increment(&idx); i < CC_TARGET_COUNT; i = test_atomic_increment(&idx)){
-        const CcTargetConfig *target = cc_targets[i];
-        TestExpectEquals(unsigned, target->sizeof_[CCBT_bfloat16], 2);
-        TestExpectEquals(unsigned, target->alignof_[CCBT_bfloat16], 2);
-        TestExpectEquals(unsigned, target->sizeof_[CCBT_float16_complex], 2*target->sizeof_[CCBT_float16]);
-        TestExpectEquals(unsigned, target->alignof_[CCBT_float16_complex], target->alignof_[CCBT_float16]);
-        CcPointer ip = {.kind = CC_POINTER, .pointee = ccqt_basic(CCBT_int)};
-        CcPointer vp = {.kind = CC_POINTER, .pointee = ccqt_basic(CCBT_void)};
-        TestExpectTrue(_Bool, cc_call_abi_type_equal(target, (CcQualType){.bits = (uintptr_t)&ip},
-            (CcQualType){.bits = (uintptr_t)&vp}));
-        TestExpectEquals(_Bool, cc_call_abi_type_equal(target, ccqt_basic(CCBT_long), ccqt_basic(CCBT_int)),
-            target->sizeof_[CCBT_long] == target->sizeof_[CCBT_int]);
-        TestExpectTrue(_Bool, cc_call_abi_type_equal(target, ccqt_basic(CCBT_int), ccqt_basic(CCBT_unsigned)));
-        TestExpectFalse(_Bool, cc_call_abi_type_equal(target, ccqt_basic(CCBT_signed_char), ccqt_basic(CCBT_unsigned_char)));
-        TestExpectFalse(_Bool, cc_call_abi_type_equal(target, ccqt_basic(CCBT_bool), ccqt_basic(CCBT_unsigned_char)));
-        TestExpectFalse(_Bool, cc_call_abi_type_equal(target, ccqt_basic(CCBT_int), ccqt_basic(CCBT_float)));
-        TestExpectEquals(_Bool, cc_call_abi_type_equal(target, ccqt_basic(CCBT_long_double), ccqt_basic(CCBT_double)),
-            target->long_double_format == CC_LONG_DOUBLE_BINARY64);
-        TestExpectEquals(_Bool, cc_call_abi_type_equal(target, ccqt_basic(CCBT_long_double), ccqt_basic(CCBT_float128)),
-            target->long_double_format == CC_LONG_DOUBLE_BINARY128);
-    }
-    TESTEND();
-}
-
-TestFunction(test_runtime_bitfields){
-    TESTBEGIN();
-    static const struct {
-        CcBasicTypeKind type;
-        uint32_t width, shift;
-        StringView expected;
-    } cases[] = {
-        {CCBT_unsigned_int128, 4, 80, SVI("{\n  <anon> = 15,\n}")},
-        {CCBT_unsigned_int128, 80, 0, SVI("{\n  <anon> = 1208925819614629174706175,\n}")},
-        {CCBT_unsigned_int128, 128, 0, SVI("{\n  <anon> = 340282366920938463463374607431768211455,\n}")},
-        {CCBT_int128, 4, 80, SVI("{\n  <anon> = -1,\n}")},
-        {CCBT_int128, 128, 0, SVI("{\n  <anon> = -1,\n}")},
-        {CCBT_int, 4, 0, SVI("{\n  <anon> = -1,\n}")},
-    };
-    CcParser parser = {.cpp.target=&cc_target_test};
-    unsigned char bytes[16];
-    memset(bytes, 0xff, sizeof bytes);
-    for(size_t i = 0; i < countof(cases); i++){
-        CcField field = {.type=ccqt_basic(cases[i].type), .is_bitfield=1,
-            .bitwidth=cases[i].width, .bitoffset=cases[i].shift};
-        CcStruct st = {.kind=CC_STRUCT, .fields=&field, .field_count=1, .size=16, .alignment=16};
-        MStringBuilder sb = {.allocator=MALLOCATOR};
-        cc_print_runtime_value(&parser, (CcQualType){.bits=(uintptr_t)&st}, bytes, &sb, 0);
-        TestExpectEqualsSv(msb_borrow_sv(&sb), cases[i].expected);
-        msb_destroy(&sb);
-    }
-    CcEnum en = {.kind=CC_ENUM, .underlying=ccqt_basic(CCBT_unsigned_int128)};
-    MStringBuilder sb = {.allocator=MALLOCATOR};
-    cc_print_runtime_value(&parser, (CcQualType){.bits=(uintptr_t)&en}, bytes, &sb, 0);
-    TestExpectEqualsSv(msb_borrow_sv(&sb), SV("340282366920938463463374607431768211455"));
-    msb_reset(&sb);
-    en.underlying = ccqt_basic(CCBT_int128);
-    cc_print_runtime_value(&parser, (CcQualType){.bits=(uintptr_t)&en}, bytes, &sb, 0);
-    TestExpectEqualsSv(msb_borrow_sv(&sb), SV("-1"));
-    msb_destroy(&sb);
-    TESTEND();
-}
+#define CALL_ABI_SOURCE(ld_double, ld_quad, wide_arg) \
+    "#define CHECK(A,B,R) static_assert((A(void)).is_callable_through(B(void))==(R)); " \
+    "static_assert((void(A)).is_callable_through(void(B))==(R));\n" \
+    "typedef void (^Block)(void);\n" \
+    "CHECK(Block,void*,1) CHECK(_Float16,__bf16,1) CHECK(int*,void*,1)\n" \
+    "CHECK(long,int,sizeof(long)==sizeof(int)) CHECK(int,unsigned int,0)\n" \
+    "CHECK(signed char,unsigned char,0) CHECK(bool,unsigned char,0)\n" \
+    "CHECK(_Any,double _Complex,0) CHECK(int,float,0)\n" \
+    "CHECK(long double,double," #ld_double ") CHECK(long double,_Float128," #ld_quad ")\n" \
+    "static_assert(!(unsigned __int128(void)).is_callable_through(_Float128(void)));\n" \
+    "static_assert((void(unsigned __int128)).is_callable_through(void(_Float128))==" #wide_arg ");\n" \
+    "static_assert(!(void(int,...)).is_callable_through(void(int)));\n" \
+    "static_assert(!(void(int)).is_callable_through(void(int,...)));\n" \
+    "static_assert((void(int,...)).is_callable_through(void(int,...)));\n" \
+    "static_assert(sizeof(__bf16)==2&&alignof(__bf16)==2);\n" \
+    "static_assert(sizeof(_Float16 _Complex)==2*sizeof(_Float16));\n" \
+    "static_assert(alignof(_Float16 _Complex)==alignof(_Float16));\n" \
+    "static_assert(typeof((unsigned long)0+(long long)0)==" \
+    "(sizeof(long)<8?long long:unsigned long long));\n"
 
 TestFunction(test_parse_decls){
     TESTBEGIN();
@@ -291,7 +134,83 @@ TestFunction(test_parse_decls){
             unsigned loc_line, loc_col;
         } tags[N];
         _Bool skip;
+        const CcTargetConfig* _Nullable target;
     } testcases[] = {
+        {
+            "static slices accept empty and one-past-end ranges", __LINE__,
+            SVI("static int a[3];\nconstexpr int full[:]=a[:];\n"
+                "constexpr int empty[:]=a[0:0]; constexpr int end[:]=a[3:];\n"
+                "constexpr int tail[:]=full[3:3]; constexpr int ptr[:]=((int*)a)[1:1];\n"
+                "static_assert(full.count==3&&empty.count==0&&end.count==0&&tail.count==0&&ptr.count==0);\n"),
+        },
+        {
+            "atomic access uses the base alignment and member offset", __LINE__,
+            SVI("struct __attribute__((packed,aligned(4))) P {char pad[4]; _Atomic int x;};\n"
+                "struct P p; int load(void){return p.x;} void store(void){p.x=1;p.x++;++p.x;}\n"
+                "int builtin(void){return __atomic_load_n(&p.x,0);}\n"
+                "struct __attribute__((packed)) Q {char pad; _Atomic int x;}; struct Q q;\n"
+                "_Atomic int* address(void){return &q.x;}\n"
+                "static_assert(sizeof(q.x)==sizeof(int));\n"),
+        },
+        {"callable-through ABI: x86_64 Linux", __LINE__, SVI(CALL_ABI_SOURCE(0,0,0)),
+            .target=&cc_target_x86_64_linux},
+        {"callable-through ABI: aarch64 Linux", __LINE__, SVI(CALL_ABI_SOURCE(0,1,0)),
+            .target=&cc_target_aarch64_linux},
+        {"callable-through ABI: x86_64 macOS", __LINE__, SVI(CALL_ABI_SOURCE(0,0,0)),
+            .target=&cc_target_x86_64_macos},
+        {"callable-through ABI: aarch64 macOS", __LINE__, SVI(CALL_ABI_SOURCE(1,0,0)),
+            .target=&cc_target_aarch64_macos},
+        {"callable-through ABI: x86_64 MSVC", __LINE__, SVI(CALL_ABI_SOURCE(1,0,1)),
+            .target=&cc_target_x86_64_windows_msvc},
+        {"callable-through ABI: x86_64 MinGW", __LINE__, SVI(CALL_ABI_SOURCE(0,1,1)),
+            .target=&cc_target_x86_64_windows_mingw},
+        {"callable-through ABI: test target", __LINE__, SVI(CALL_ABI_SOURCE(0,1,1))},
+        {
+            "reflection cast admission for Any", __LINE__,
+            SVI("struct Small {int x;}; struct Large {char x[32];}; struct Incomplete;\n"
+                "static_assert(int.is_castable_to(_Any));\n"
+                "static_assert((int[4]).is_castable_to(_Any));\n"
+                "static_assert((struct Small).is_castable_to(_Any));\n"
+                "static_assert(!(struct Large).is_castable_to(_Any));\n"
+                "static_assert(!(struct Incomplete).is_castable_to(_Any));\n"
+                "static_assert(!void.is_castable_to(_Any));\n"),
+        },
+        {
+            "function identity ignores parameter object qualifiers", __LINE__,
+            SVI("struct S {int x;}; enum E {A}; typedef int V __attribute__((vector_size(16)));\n"
+                "#define CHECK(T) {typedef typeof(T) Q; static_assert(void(Q)==void(const Q)); "
+                "static_assert(void(Q)==void(volatile Q)); "
+                "static_assert(void(Q)==void(const volatile Q));}\n"
+                "#define ATOMIC(T) {typedef typeof(T) Q; static_assert(void(Q)==void(_Atomic Q)); "
+                "static_assert(void(Q)==void(const volatile _Atomic Q));}\n"
+                "void test(void){CHECK(int) CHECK(float) CHECK(int*) CHECK(int[:]) "
+                "CHECK(V) CHECK(struct S) CHECK(enum E) CHECK(typeof(nullptr)) CHECK(_Type) CHECK(_Any) "
+                "ATOMIC(int) ATOMIC(float) ATOMIC(int*) ATOMIC(struct S) ATOMIC(enum E)}\n"
+                "typedef int Aligned __attribute__((aligned(32))); static_assert(void(Aligned)==void(int));\n"
+                "static_assert(void(int*)!=void(const int*));\n"
+                "static_assert(void(int[static 3])==void(int*));\n"
+                "static_assert(void(int[3])==void(int*));\n"),
+        },
+        {
+            "half float constant truth for zero and subnormals", __LINE__,
+            SVI("static_assert(!0.0f16);\n"
+                "static_assert(0x1p-24f16&&1.0f16);\n"),
+        },
+        {
+            "bfloat constant truth for zero and subnormals", __LINE__,
+            SVI("static_assert(!0.0bf16);\n"
+                "static_assert(0x1p-133bf16&&1.0bf16);\n"),
+        },
+        {
+            "derived type identity survives intervening declarations", __LINE__,
+            SVI("typedef int A[3]; typedef A* P; typedef A S[:]; typedef P F(P);\n"
+                "void f(int n){typedef int V[n]; typedef V* VP;\n"
+                "static for(int i=0;i<64;i++){{typedef int B[i+1]; typedef B* Q;"
+                "typedef B R[:]; typedef Q G(Q); typedef int W[n+i];}}\n"
+                "static_assert(A==int[3]); static_assert(P==int(*)[3]);\n"
+                "static_assert(S==A[:]); static_assert(F==P(P));\n"
+                "static_assert(VP==V*); static_assert((const V).unqual==V);}\n"),
+        },
         {
             "auto drops atomic and volatile qualifiers", __LINE__,
             SVI("void f(void){volatile int v=1; _Atomic int a=2; auto x=v; auto y=a; static_assert(typeof(x)==int); static_assert(typeof(y)==int);}"),
@@ -552,11 +471,43 @@ TestFunction(test_parse_decls){
                 "+__builtin_constant_p(f());}"),
         },
         {
-            "reflection type-only arguments do not capture VLA bounds", __LINE__,
+            "castability rejects identical array and function targets", __LINE__,
+            SVI("static_assert(!(int[2]).is_castable_to(int[2]));"
+                "static_assert(!(int(void)).is_castable_to(int(void)));"
+                "static_assert((int[2]).is_castable_to(int*));"
+                "static_assert((int(void)).is_castable_to(int(*)(void)));"),
+        },
+        {
+            "callability reflection honors function prototypes", __LINE__,
+            SVI("_Static_assert((int()).is_callable_with(int));"
+                "_Static_assert((int(*)(...)).is_callable_with(float));"
+                "_Static_assert((int(int,...)).is_callable_with(short));"
+                "_Static_assert(!(int(void)).is_callable_with(int));"
+                "_Static_assert(!(int(int,int,...)).is_callable_with(int));"
+                "_Static_assert(!(int(int*,...)).is_callable_with(float));"
+                "_Static_assert(!(int).is_callable_with(int));"),
+        },
+        {
+            "callability reflection accepts typed variadic argument lists", __LINE__,
+            SVI("static_assert((int(void)).is_callable_with());"
+                "static_assert((int(int,double)).is_callable_with(short,float));"
+                "static_assert(!(int(int,double)).is_callable_with(int));"
+                "static_assert(!(int(int,double)).is_callable_with(int,int,int));"
+                "static_assert(!(int(int,int*)).is_callable_with(int,float));"
+                "static_assert((int(int,...)).is_callable_with(short,float,int*));"
+                "static_assert(!(int(int,...)).is_callable_with());"
+                "static_assert(!(int(int,...)).is_callable_with(int,void));"
+                "constexpr _Type args[]={int,double};"
+                "static_assert((int(int,double)).is_callable_with(.args=args));"
+                "static_assert((int(int,double)).is_callable_with([0]=args));"
+                "static_assert((int(double)).is_callable_with(.args=args[1:]));"),
+        },
+        {
+            "reflection type queries and VLA typed variadic argument lists", __LINE__,
             SVI("int n; int a=(int*).is_castable_to(int(*)[++n]);"
                 "int b=(int*).is_castable_to((int(*)[++n])0);"
                 "int c=(int(int(*)[2])).is_callable_with(int(*)[++n]);"
-                "int d=(int(int(*)[2])).is_callable_with((int(*)[++n])0);"),
+                "int d=(int(int(*)[2])).is_callable_with(typeof((int(*)[++n])0));"),
         },
         {
             "C2y generic selection example: generic variably modified types", __LINE__,
@@ -628,6 +579,21 @@ TestFunction(test_parse_decls){
             SVI("struct S{const int x;}; void f(struct S *a, struct S *b){*a=*b;}"),
         },
         {
+            "unsupported narrow floating casts do not manufacture constants", __LINE__,
+            SVI("static_assert(!__builtin_constant_p((_Float16)1.0));\n"
+                "static_assert(!__builtin_constant_p((_Float16)1));\n"
+                "static_assert(!__builtin_constant_p((__bf16)1.0));\n"
+                "static_assert(__builtin_constant_p((_Float16)1.0f16));\n"
+                "static_assert(__builtin_constant_p((__bf16)1.0bf16));\n"),
+        },
+        {
+            "narrow floating constant boolean conversions", __LINE__,
+            SVI("static_assert(!(bool)0.0f16 && (bool)1.0f16);\n"
+                "static_assert(!(bool)0.0bf16 && (bool)1.0bf16);\n"
+                "static_assert(!0.0f16 && !!1.0f16);\n"
+                "static_assert(!0.0bf16 && !!1.0bf16);\n"),
+        },
+        {
             "bfloat16 types, casts, literals, and arithmetic types", __LINE__,
             SVI("__bf16 a; typedef const __bf16 BF; BF b;\n"
                 "auto z=1.5bf16; auto w=2.0BF16; auto cast=(__bf16)1.0f;\n"
@@ -649,6 +615,10 @@ TestFunction(test_parse_decls){
                 "_Static_assert((unsigned)-0.5f == 0);\n"
                 "_Static_assert((unsigned)-0.5L == 0);\n"
                 "_Static_assert((unsigned __int128)-0.5L == 0);\n"
+                "_Static_assert((signed char)-128.5 == -128);\n"
+                "_Static_assert((signed char)-128.5f == -128);\n"
+                "_Static_assert((signed char)127.75 == 127);\n"
+                "_Static_assert((unsigned char)255.75f == 255);\n"
                 "_Static_assert((int)-2147483648.5L == (-2147483647-1));\n"
                 "_Static_assert((signed char)-128.5L == -128);\n"
                 "_Static_assert((int)-2147483648.0L == (-2147483647-1));\n"),
@@ -698,6 +668,10 @@ TestFunction(test_parse_decls){
                 "_Static_assert(typeof(-2.0fi)==float _Complex);\n"
                 "_Static_assert(typeof(+2i)==int _Complex);\n"
                 "_Static_assert(typeof(__builtin_complex(1.0f,2.0f))==float _Complex);\n"
+                "typedef double D __attribute__((aligned(32)));\n"
+                "const D real=1; volatile double imag=2;\n"
+                "_Static_assert(typeof(__builtin_complex(real,imag))==double _Complex);\n"
+                "_Static_assert(typeof(__builtin_complex(imag,real))==double _Complex);\n"
                 "_Static_assert(typeof(__builtin_complex(1.0L,2.0L))==long double _Complex);\n"),
             .vars = {{SVI("z"), SVI("double _Complex"), SVI("__builtin_complex(1, 2)")}},
         },
@@ -2078,6 +2052,29 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "repeated alignment attributes retain the strongest request", __LINE__,
+            SVI("char a __attribute__((aligned(32),aligned(8)));\n"
+                "char b __attribute__((aligned(8),aligned(32)));\n"
+                "static_assert(alignof(a)==32 && alignof(b)==32);\n"
+                "typedef char A __attribute__((aligned(32),aligned(8)));\n"
+                "static_assert(alignof(A)==32);\n"
+                "struct S {char x __attribute__((aligned(32),aligned(8)));};\n"
+                "static_assert(alignof(struct S)==32 && sizeof(struct S)==32);\n"
+                "struct __attribute__((aligned(32),aligned(8))) R {char x;};\n"
+                "static_assert(alignof(struct R)==32 && sizeof(struct R)==32);\n"
+                "__declspec(align(32) align(8)) char c;\n"
+                "static_assert(alignof(c)==32);\n"
+                "typedef int Low __attribute__((aligned(1)));\n"
+                "static_assert(alignof(Low)==1);\n"),
+        },
+        {
+            "default alignment attribute cannot erase a stronger request", __LINE__,
+            SVI("typedef char A __attribute__((aligned(32),aligned));\n"
+                "static_assert(alignof(A)==32);\n"
+                "struct __attribute__((aligned(32),aligned)) R {char x;};\n"
+                "static_assert(alignof(struct R)==32);\n"),
+        },
+        {
             "naturally aligned typedefs (Linux types.h)", __LINE__,
             SVI("typedef __signed__ __int128 __s128 __attribute__((aligned(16)));\n"
                "typedef unsigned __int128 __u128 __attribute__((aligned(16)));\n"
@@ -2307,6 +2304,83 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "default arguments may inspect parameter types without reading them", __LINE__,
+            SVI("int f(int n,int a=alignof(n),int b=sizeof(typeof(n)),"
+                "int c=(int(int)).is_callable_with(typeof(n))){return a+b+c;}"),
+        },
+        {
+            "void parameter markers are recognized after suffix attributes", __LINE__,
+            SVI("typedef void V;"
+                "int f(V __attribute__((unused)));int f(void){return 1;}"
+                "int g(void __attribute__((unused)));"
+                "static_assert(typeof(f)==typeof(g));"),
+        },
+        {
+            "void typedef denotes an empty parameter list", __LINE__,
+            SVI("typedef void V;int f(V);int f(void){return 3;}"
+                "static_assert(typeof(f).param_count==0);"),
+        },
+        {
+            "named field reflection retains anonymous owner qualifiers", __LINE__,
+            SVI("struct S{const struct{volatile int x;};};"
+                "static_assert((struct S).field(\"x\").type==const volatile int);"),
+        },
+        {
+            "slice metadata inherits slice object qualifiers", __LINE__,
+            SVI("int a[2];typedef int S[:];const S s=a;"
+                "static_assert(typeof(s.count).is_const);"
+                "static_assert(typeof(s.data).is_const);"
+                "static_assert(!typeof(s.data).pointee.is_const);"
+                "volatile S v=a;static_assert(typeof(v.count).is_volatile);"),
+        },
+        {
+            "ABI callability requires representable complete value types", __LINE__,
+            SVI("struct S;"
+                "typedef struct S F(int);typedef int G(struct S);"
+                "static_assert(!F.is_callable_through(F));"
+                "static_assert(!G.is_callable_through(G));"
+                "static_assert((void(int)).is_callable_through(void(int)));"),
+        },
+        {
+            "block record definitions can embed outer named records", __LINE__,
+            SVI("struct Base{int x;};union U{int y;};"
+                "void f(void){struct S{struct Base;union U;};"
+                "struct S s={.x=1,.y=2};static_assert(sizeof(s)==2*sizeof(int));}"),
+        },
+        {
+            "standalone block tag declarations introduce new identities", __LINE__,
+            SVI("struct S{int x;};union U{int x;};enum E{A};"
+                "void f(void){"
+                "struct S;union U;enum E;"
+                "static_assert((struct S).is_incomplete);"
+                "static_assert((union U).is_incomplete);"
+                "static_assert((enum E).is_incomplete);"
+                "struct S{double y;};union U{double y;};enum E{B};"
+                "static_assert(sizeof(struct S)==sizeof(double));}"),
+        },
+        {
+            "type queries share type-led expression parsing", __LINE__,
+            SVI("static_assert(_Generic(int.is_const,bool:1,default:0));"
+                "static_assert((int(bool)).is_callable_with(typeof(int.is_const)));"
+                "static_assert(int.is_castable_to(int.sizeof_));"
+                "int f(void);static_assert((int(int)).is_callable_with(typeof(f())));"),
+        },
+        {
+            "typeof accepts expressions beginning with a type value", __LINE__,
+            SVI("static_assert(typeof(int.is_const)==bool);"
+                "static_assert(typeof(int == float)==int);"
+                "static_assert(typeof_unqual(int.sizeof_)==typeof(sizeof(int)));"),
+        },
+        {
+            "parenthesized type values can end conditional branches", __LINE__,
+            SVI("static_assert((1 ? (int) : (float))==int);"),
+        },
+        {
+            "conditional type values preserve their selected type", __LINE__,
+            SVI("static_assert((1 ? int : float)==int);"
+                "_Type a=int,b=float;_Type c=1?a:b;"),
+        },
+        {
             "UAC: ternary type unification", __LINE__,
             SVI("typeof(1 ? 1 : 1u) a;\n"
                 "typeof(1 ? 1L : 1u) b;\n"
@@ -2425,6 +2499,17 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "typed null pointer conditional preserves qualifiers in either order", __LINE__,
+            SVI("_Static_assert(typeof(1?(const int*)0:(int*)0)==const int*);\n"
+                "_Static_assert(typeof(1?(int*)0:(const int*)0)==const int*);\n"
+                "_Static_assert(typeof(1?(const int*)0:0)==const int*);\n"
+                "_Static_assert(typeof(1?0:(const int*)0)==const int*);\n"
+                "_Static_assert(typeof(1?(void*)0:(const int*)0)==const int*);\n"
+                "_Static_assert(typeof(1?(const int*)0:(void*)0)==const int*);\n"
+                "_Static_assert(typeof(1?(const void*)0:(int*)0)==const void*);\n"
+                "_Static_assert(typeof(1?(int*)0:(const void*)0)==const void*);\n"),
+        },
+        {
             "ternary pointer qualifier merge", __LINE__,
             SVI("const int* p;\n"
                "volatile int* q;\n"
@@ -2506,6 +2591,18 @@ TestFunction(test_parse_decls){
             .vars = {
                 { SVI("a"), SVI("int"), SVI("(1 , 2)") },
             },
+        },
+        {
+            "constant nullptr integer conversions", __LINE__,
+            SVI("_Static_assert((int)nullptr==0);\n"
+                "_Static_assert((unsigned long long)nullptr==0);\n"
+                "_Static_assert((__int128)nullptr==0);\n"
+                "constexpr typeof(nullptr) n=nullptr;\n"
+                "_Static_assert((int)n==0);\n"
+                "constexpr typeof(nullptr) numeric=(typeof(nullptr))17;\n"
+                "_Static_assert((unsigned long long)numeric==17);\n"
+                "_Static_assert((unsigned __int128)numeric==17);\n"
+                "_Static_assert((int*)(typeof(nullptr))(int*)17==(int*)17);\n"),
         },
         {
             "true false nullptr", __LINE__,
@@ -4081,6 +4178,24 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "vector qualification has one canonical object type", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));\n"
+                "typedef const int CV __attribute__((vector_size(16)));\n"
+                "typedef volatile int VV __attribute__((vector_size(16)));\n"
+                "_Static_assert(typeof(CV)==typeof(const V));\n"
+                "_Static_assert(typeof(VV)==typeof(volatile V));\n"
+                "_Static_assert(typeof_unqual(CV)==typeof(V));\n"
+                "CV c={1,2,3,4}; V v=c; auto a=c; a[0]=5;\n"
+                "_Static_assert(typeof(a)==typeof(V));\n"
+                "const V *p=&c; CV *q=p;\n"
+                "_Static_assert(__builtin_types_compatible_p(CV*,const V*));\n"
+                "V f(CV); V f(V);\n"
+                "typedef const int E __attribute__((aligned(16)));\n"
+                "typedef E AV __attribute__((vector_size(16)));\n"
+                "_Static_assert(typeof(AV)==typeof(CV));\n"
+                "_Static_assert(typeof_unqual(CV*).pointee.is_const);\n"),
+        },
+        {
             "vector init: full", __LINE__,
             SVI("typedef int v4si __attribute__((vector_size(16)));\n"
                "v4si v = {1, 2, 3, 4};\n"),
@@ -4192,6 +4307,19 @@ TestFunction(test_parse_decls){
                 { SVI("p"), SVI("int __attribute__((aligned(1))) *") },
                 { SVI("q"), SVI("int * __attribute__((aligned(1)))") },
             },
+        },
+        {
+            "array completion preserves alignment across initializer forms", __LINE__,
+            SVI("typedef char A[] __attribute__((aligned(32)));\n"
+                "A plain=\"abc\", braced={\"abc\"}, elements={'a','b','c',0};\n"
+                "_Static_assert(typeof(plain)==typeof(braced));\n"
+                "_Static_assert(typeof(plain)==typeof(elements));\n"
+                "_Static_assert(typeof((A){\"abc\"})==typeof(plain));\n"
+                "_Static_assert(typeof((A){'a','b','c',0})==typeof(plain));\n"
+                "_Static_assert(alignof(typeof(braced))==32 && sizeof(braced)==4);\n"
+                "const A qualified={\"abc\"};\n"
+                "_Static_assert(typeof_unqual(qualified)==typeof(plain));\n"
+                "_Static_assert(typeof(qualified).element_type.is_const);\n"),
         },
         {
             "aligned typedefs preserve underlying layout and compatibility", __LINE__,
@@ -4601,6 +4729,85 @@ TestFunction(test_parse_decls){
                 "_Static_assert(typeof(_Atomic int[2]).element_type.is_atomic);\n"
                 "typedef const int A[2]; volatile A a={1,2};\n"
                 "_Static_assert(!__builtin_constant_p(a[0]));\n"),
+        },
+        {
+            "inferred pointer qualifiers are checked after inference", __LINE__,
+            SVI("void f(void){int x=1; restrict auto p=&x; _Atomic auto a=x;\n"
+                "_Atomic auto q=&x; const volatile auto cv=x;\n"
+                "*p=2;\n"
+                "_Static_assert(typeof(a)==typeof(_Atomic int));\n"
+                "_Static_assert(typeof(q)==typeof(int *_Atomic));\n"
+                "_Static_assert(typeof(cv)==typeof(const volatile int));\n"
+                "}\n"),
+        },
+        {
+            "atomic pointer conversions preserve storage type", __LINE__,
+            SVI("void f(_Atomic int *a){ void *v=a; _Atomic int *b=v;\n"
+                "const _Atomic int *c=a; (void)b; (void)c;\n"
+                "_Static_assert(typeof(1?a:v)==typeof(void*));\n"
+                "_Static_assert(typeof(1?v:a)==typeof(void*));\n"
+                "}\n"
+                "void g(_Atomic int (*p)[3], const _Atomic int (*q)[3]){\n"
+                "q=p; _Static_assert(typeof(1?p:q)==typeof(q));\n"
+                "_Static_assert(typeof(1?q:p)==typeof(q));\n"
+                "}\n"),
+        },
+        {
+            "type constructors preserve qualifier round trips", __LINE__,
+            SVI("#define CHECK(T) _Static_assert(typeof(const T)==typeof(const T)); "
+                "_Static_assert(typeof_unqual(const volatile T)==typeof(T)); "
+                "_Static_assert(typeof(const T*).pointee==typeof(const T)); "
+                "_Static_assert(typeof(const T[:]).element_type==typeof(const T)); "
+                "_Static_assert(typeof(void(T)).param_type(0)==typeof(void(T)).param_type(0));\n"
+                "typedef int I; typedef int *P; typedef int A[3]; typedef A M[2];\n"
+                "typedef int S[:]; typedef int (*F)(int);\n"
+                "typedef int V __attribute__((vector_size(16)));\n"
+                "typedef int L __attribute__((aligned(16)));\n"
+                "CHECK(I) CHECK(P) CHECK(A) CHECK(M) CHECK(S) CHECK(F) CHECK(V) CHECK(L)\n"
+                "void f(int n){typedef int D[n]; typedef D N[2]; CHECK(D) CHECK(N)}\n"),
+        },
+        {
+            "array parameter bracket qualifiers qualify the pointer", __LINE__,
+            SVI("void f(int a[const 3], int b[volatile 3]){\n"
+                "_Static_assert(typeof(a)==typeof(int *const));\n"
+                "_Static_assert(typeof(b)==typeof(int *volatile)); a[0]=1; b++; }\n"
+                "_Static_assert(typeof(f).param_type(0)==typeof(int *));\n"
+                "void g(int n,int a[const n]){\n"
+                "_Static_assert(typeof(a)==typeof(int *const)); a[0]=1; }\n"
+                "void h(int a[const *]);\n"
+                "_Static_assert(typeof(h).param_type(0)==typeof(int *));\n"
+                "void k(int a[_Atomic 3]);\n"
+                "_Static_assert(typeof(k).param_type(0)==typeof(int *));\n"
+                "void m(int a[const 2][3]){\n"
+                "_Static_assert(typeof(a)==typeof(int (*const)[3])); a[0][0]=1; }\n"
+                "typedef int A[3]; void j(const A a){\n"
+                "_Static_assert(typeof(a)==typeof(const int*)); a++; }\n"),
+        },
+        {
+            "VLA typedef qualification preserves type identity", __LINE__,
+            SVI("void f(int n){ typedef int A[n];\n"
+                "_Static_assert(typeof(const A)==typeof(const A));\n"
+                "_Static_assert(typeof_unqual(const A)==typeof(A));\n"
+                "_Static_assert(typeof(const A*)==typeof(const A*));\n"
+                "_Static_assert(typeof(const A[:])==typeof(const A[:]));\n"
+                "_Static_assert(typeof_unqual(A)==typeof(A));\n"
+                "_Static_assert(typeof(void(const A*))==typeof(void(const A*)));\n"
+                "typedef int B[n];\n"
+                "_Static_assert(typeof(A)!=typeof(B));\n"
+                "_Static_assert(typeof(const A)!=typeof(const B));\n"
+                "_Static_assert(typeof(const A[2])!=typeof(const A[3]));\n"
+                "}\n"),
+        },
+        {
+            "nested VLA typedef identity survives qualifier round trips", __LINE__,
+            SVI("void f(int n,int m){ typedef int A[2][n][m];\n"
+                "typedef const volatile A CV;\n"
+                "_Static_assert(typeof(CV)==typeof(const volatile A));\n"
+                "_Static_assert(typeof_unqual(CV)==typeof(A));\n"
+                "_Static_assert(typeof(const A[3])==typeof(const A[3]));\n"
+                "_Static_assert(typeof(volatile A)!=typeof(const A));\n"
+                "_Static_assert(typeof_unqual(const A*)!=typeof(A*));\n"
+                "}\n"),
         },
         {
             "array typedef qualification has the same type as element qualification", __LINE__,
@@ -5279,6 +5486,12 @@ TestFunction(test_parse_decls){
             .funcs = { { SVI("f"), SVI("void(const char *)") } },
         },
         {
+            "printf: count outputs use length-specific pointer types", __LINE__,
+            SVI("void f(void){signed char a;short b;int c;long d;long long e;\n"
+                "__INTMAX_TYPE__ j;__PTRDIFF_TYPE__ t;\n"
+                "printf(\"%hhn%hn%n%ln%lln%jn%tn%zn\",&a,&b,&c,&d,&e,&j,&t,&t);}\n"),
+        },
+        {
             "printf: %p with pointer", __LINE__,
             SVI("void f(int* p) { printf(\"%p\", p); }\n"),
             .funcs = { { SVI("f"), SVI("void(int *)") } },
@@ -5538,6 +5751,22 @@ TestFunction(test_parse_decls){
             "printf: %x with int (same size)", __LINE__,
             SVI("void f(int x) { printf(\"%x\", x); }\n"),
             .funcs = { { SVI("f"), SVI("void(int)") } },
+        },
+        {
+            "printf attr: declarations and definitions retain all format contracts", __LINE__,
+            SVI("void log(const char*,const char*,...) __attribute__((format(printf,1,3),format(printf,2,3)));\n"
+                "void log(const char* a,const char* b,...){}\n"
+                "void f(void){log(\"%d\",\"%x\",7);}\n"),
+        },
+        {
+            "printf attr: format string need not be the last fixed parameter", __LINE__,
+            SVI("void log(const char*,const char*,...) __attribute__((format(printf,1,3)));\n"
+                "void f(void){log(\"%d\",\"tag\",7);}\n"),
+        },
+        {
+            "printf attr: zero first argument checks syntax without call arguments", __LINE__,
+            SVI("void log(void*,const char*) __attribute__((format(printf,2,0)));\n"
+                "void f(void){log(0,\"%d %s %*f\");}\n"),
         },
         {
             "printf attr: udf valid", __LINE__,
@@ -5937,7 +6166,7 @@ TestFunction(test_parse_decls){
                "_Atomic int (*fp)(void);\n"
                "int (* _Atomic ap)(void);\n"),
             .funcs = {
-                { SVI("f"), SVI("_Atomic int(_Atomic int)") },
+                { SVI("f"), SVI("_Atomic int(int)") },
             },
             .vars = {
                 { SVI("fp"), SVI("_Atomic int (*)(void)") },
@@ -6268,6 +6497,80 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "array count queries do not require constant initializer values", __LINE__,
+            SVI("int f(void);"
+                "static_assert(_Countof(int[2]){f(),f()}==2);"),
+        },
+        {
+            "alignment queries do not require constant operand values", __LINE__,
+            SVI("int f(void);"
+                "static_assert(alignof(int.is_const ? f() : f())==alignof(int));"
+                "static_assert(alignof(int){f()}==alignof(int));"
+                "static_assert(alignof(_Alignas(32) int){f()}==32);"),
+        },
+        {
+            "compound literal suffix attributes retain storage alignment", __LINE__,
+            SVI("static_assert(alignof(int[2] __attribute__((aligned(32)))){1,2}==32);"
+                "static_assert(typeof((int[2] __attribute__((aligned(32)))){1,2})==int[2]);"),
+        },
+        {
+            "compound literal alignment belongs to its storage", __LINE__,
+            SVI("static_assert(alignof((int _Alignas(32)){1})==32);"
+                "static_assert(typeof((_Alignas(32) int){1})==int);"
+                "static_assert(sizeof(_Alignas(32) int){1}==sizeof(int));"
+                "static_assert(_Countof(_Alignas(32) int[3]){1,2,3}==3);"
+                "static_assert(alignof(_Alignas(32) int){1}==32);"),
+        },
+        {
+            "function definitions retain their parameter storage types", __LINE__,
+            SVI("typedef int A __attribute__((aligned(32)));"
+                "int f(A);int f(int x){static_assert(typeof(x)==int);return x;}"
+                "static_assert(typeof(f).param_type(0)==int);"
+                "int g(int);int g(A x){static_assert(typeof(x)==A);return x;}"
+                "static_assert(typeof(g).param_type(0)==int);"
+                "typedef int (*P)[3] __attribute__((aligned(32)));"
+                "typedef int (*Q)[] __attribute__((aligned(16)));"
+                "int h(P);int h(Q x){static_assert(typeof(x)==Q);return (*x)[0];}"
+                "static_assert(typeof(h).param_type(0).alignof_==alignof(int*));"
+                "static_assert(typeof(h).param_type(0).pointee.count==3);"),
+        },
+        {
+            "function signature identity ignores parameter object alignment", __LINE__,
+            SVI("typedef int A __attribute__((aligned(32)));"
+                "typedef void F(A);typedef void F(int);"
+                "typedef void (*P)(A);typedef void (*P)(int);"
+                "typedef void G(void(*)(A));typedef void G(void(*)(int));"),
+        },
+        {
+            "function typedef redeclarations ignore parameter object qualifiers", __LINE__,
+            SVI("typedef void F(int);\n"
+                "typedef void F(const int);\n"
+                "typedef void F(volatile int);\n"
+                "typedef void F(_Atomic int);\n"
+                "typedef void (*P)(int *);\n"
+                "typedef void (*P)(int *const);\n"
+                "typedef void (*A[2])(int);\n"
+                "typedef void (*A[2])(const int);\n"
+                "typedef void G(void (*)(int));\n"
+                "typedef void G(void (*)(const int));\n"),
+        },
+        {
+            "function reflection uses canonical parameter value types", __LINE__,
+            SVI("int f(const int x){static_assert(typeof(x)==const int);return x;}"
+                "void g(volatile int x,_Atomic int y){"
+                "static_assert(typeof(x)==volatile int);"
+                "static_assert(typeof(y)==_Atomic int);}"
+                "static_assert(typeof(f)==int(int));"
+                "static_assert(typeof(g)==void(int,int));"
+                "void p(const int*const x){static_assert(typeof(x)==const int*const);}"
+                "static_assert(typeof(p)==void(const int*));"
+                "static_assert(typeof(p)!=void(int*));"
+                "typedef void CB(const int);void h(CB*);"
+                "static_assert(typeof(h)==void(void(*)(int)));"
+                "typedef int A[3];void a(const A);"
+                "static_assert(typeof(a)==void(const int*));"),
+        },
+        {
             "identical typedef redecl", __LINE__,
             SVI("typedef int T;\n"
                 "typedef int T;\n"
@@ -6526,6 +6829,11 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "repeated records compare function member types semantically", __LINE__,
+            SVI("struct Callbacks { void (*f)(int); };\n"
+                "struct Callbacks { void (*f)(const int); };\n"),
+        },
+        {
             "C23 repeated record definitions", __LINE__,
             SVI("struct S { int x; struct S *next; };\n"
                 "typedef struct S Original;\n"
@@ -6573,12 +6881,511 @@ TestFunction(test_parse_decls){
                 "enum G { G0=-1, G1 }; enum G { G0=-1, G1 };\n"),
         },
         {
+            "enum colons distinguish generic associations and anonymous bitfields", __LINE__,
+            SVI("enum E:int{A};enum E e;"
+                "_Static_assert(_Generic(e,enum E:1,default:0));"
+                "_Static_assert(_Generic(e,enum E:sizeof(int),default:0)==sizeof(int));"
+                "_Static_assert(_Generic(e,enum E:(int).is_integer,default:0));"
+                "struct S{enum E:3;int n;};"
+                "_Static_assert(__builtin_offsetof(struct S,n)==sizeof(int));"
+                "enum E:int;enum F:unsigned{B};"
+                "struct T{enum G:unsigned{C} x:3;};"
+                "_Static_assert(_Generic(1,enum H:int{D}:1,default:0));"),
+        },
+        {
+            "enum compatibility includes its underlying integer without erasing identity", __LINE__,
+            SVI("enum E:int{A};enum F:int{B};enum Forward;"
+                "_Static_assert(__builtin_types_compatible_p(enum E,int));"
+                "_Static_assert(__builtin_types_compatible_p(int,enum E));"
+                "_Static_assert(__builtin_types_compatible_p(enum E*,int*));"
+                "_Static_assert(__builtin_types_compatible_p(enum E[3],int[3]));"
+                "_Static_assert(!__builtin_types_compatible_p(enum E,unsigned));"
+                "_Static_assert(!__builtin_types_compatible_p(enum E,enum F));"
+                "_Static_assert(!__builtin_types_compatible_p(enum Forward,int));"
+                "_Static_assert(!__builtin_types_compatible_p(const enum E*,int*));"
+                "_Static_assert(enum E!=int && enum E!=enum F);"),
+        },
+        {
+            "generic selection matches enum and underlying integer symmetrically", __LINE__,
+            SVI("enum E:unsigned{A};typedef enum E E;enum E e;unsigned u;"
+                "_Static_assert(_Generic(e,unsigned:1,default:0));"
+                "_Static_assert(_Generic(u,E:1,default:0));"
+                "_Static_assert(_Generic(&e,unsigned*:1,default:0));"),
+        },
+        {
+            "enum integer declaration composites preserve enum information", __LINE__,
+            SVI("enum E:int{A};enum E x;extern int x;"
+                "int y;extern enum E y;"
+                "enum E f(enum E);int f(int);"
+                "int(*p)(int);extern enum E(*p)(enum E);"
+                "_Static_assert(typeof(x)==enum E && typeof(y)==enum E);"
+                "_Static_assert(typeof(f).return_type==enum E);"
+                "_Static_assert(typeof(f).param_type(0)==enum E);"
+                "_Static_assert(typeof(p).pointee.param_type(0)==enum E);"),
+        },
+        {
+            "enum integer pointer common type is independent of operand order", __LINE__,
+            SVI("enum E:int{A};enum E* e;int* i;"
+                "_Static_assert(typeof(1?e:i).pointee==enum E);"
+                "_Static_assert(typeof(1?i:e).pointee==enum E);"
+                "const int* ci;const enum E* ce;"
+                "_Static_assert(typeof(1?e:ci)==typeof(ce));"
+                "_Static_assert(typeof(1?ci:e)==typeof(ce));"),
+        },
+        {
+            "compatible records may use enum or underlying integer members", __LINE__,
+            SVI("enum E:int{A};struct S{enum E x;};typedef struct S Original;"
+                "void f(void){struct S{int x;};"
+                "_Static_assert(__builtin_types_compatible_p(Original,struct S));"
+                "Original a={};struct S b=a;Original* p=&b;struct S* q=&a;"
+                "(void)(1?p:q);}"),
+        },
+        {
             "C23 records with compatible enum members", __LINE__,
             SVI("struct S { enum E { A=1, B=2 } e; }; typedef struct S Outer;\n"
                 "void f(void) { struct S { enum E { B=2, A=1 } e; };\n"
                 " _Static_assert(__builtin_types_compatible_p(Outer, struct S));\n"
                 " Outer *a=0; struct S *b=0; (void)(1 ? a : b); }\n"
                 "struct S { enum E { A=1, B=2 } e; };\n"),
+        },
+        {
+            "array composites prefer constant bounds over runtime bounds", __LINE__,
+            SVI("void f(int n){int (*v)[n];int (*s)[3];"
+                "_Static_assert(typeof(1?v:s)==typeof(s));"
+                "_Static_assert(typeof(1?s:v)==typeof(s));"
+                "_Static_assert(sizeof(*(1?v:s))==3*sizeof(int));"
+                "_Static_assert(sizeof(*(1?s:v))==3*sizeof(int));"
+                "const int (*c)[3];"
+                "_Static_assert(typeof(1?v:c)==typeof(c));"
+                "_Static_assert(typeof(1?c:v)==typeof(c));}\n"),
+        },
+        {
+            "array composites rank captured unspecified and incomplete bounds", __LINE__,
+            SVI("void f(int n){typedef int A[n];"
+                "typedef void (*Captured)(A*);"
+                "typedef void (*Unspecified)(int (*)[*]);"
+                "typedef void (*Incomplete)(int (*)[]);"
+                "typedef void (*Fixed)(int (*)[3]);"
+                "Captured a;Unspecified b;Incomplete c;Fixed d;"
+                "_Static_assert(typeof(1?a:b)==typeof(a));"
+                "_Static_assert(typeof(1?b:a)==typeof(a));"
+                "_Static_assert(typeof(1?a:c)==typeof(a));"
+                "_Static_assert(typeof(1?c:a)==typeof(a));"
+                "_Static_assert(typeof(1?b:c)==typeof(b));"
+                "_Static_assert(typeof(1?c:b)==typeof(b));"
+                "_Static_assert(typeof(1?b:d)==typeof(d));"
+                "_Static_assert(typeof(1?d:b)==typeof(d));}\n"),
+        },
+        {
+            "VLA composites merge nested element information", __LINE__,
+            SVI("void f(int n){ typedef int (*A[n])[3]; typedef int (*B[n])[];\n"
+                "A *a; B *b;\n"
+                "_Static_assert(sizeof(*(*(1?a:b))[0])==3*sizeof(int));\n"
+                "_Static_assert(sizeof(*(*(1?b:a))[0])==3*sizeof(int));\n"
+                "int (*(*c)[2])[];\n"
+                "_Static_assert(typeof(1?a:c).pointee.element_type==typeof(int (*)[3]));\n"
+                "_Static_assert(typeof(1?c:a).pointee.element_type==typeof(int (*)[3]));\n"
+                "_Static_assert(typeof(1?a:c).pointee==typeof(int (*[2])[3]));\n"
+                "_Static_assert(typeof(1?c:a).pointee==typeof(int (*[2])[3]));\n"
+                "}\n"),
+        },
+        {
+            "composite alignment is independent of operand order", __LINE__,
+            SVI("typedef int A __attribute__((aligned(16)));\n"
+                "typedef int B __attribute__((aligned(32)));\n"
+                "void f(A *a,B *b){\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof(1?a:b),typeof(1?b:a)));\n"
+                "_Static_assert(typeof(1?a:b).pointee.alignof_==32);\n"
+                "}\n"
+                "struct S { A *x; B *y; }; typedef struct S Outer;\n"
+                "void g(void){ struct S { B *x; A *y; }; Outer *a; struct S *b;\n"
+                "_Static_assert(typeof((1?a:b)->x).pointee.alignof_==32);\n"
+                "_Static_assert(typeof((1?a:b)->y).pointee.alignof_==32);\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof(1?a:b),typeof(1?b:a)));\n"
+                "}\n"),
+        },
+        {
+            "record value conditionals use the composite type", __LINE__,
+            SVI("struct S {int (*a)[3]; int (*b)[];}; typedef struct S Outer;\n"
+                "void f(void){struct S {int (*a)[]; int (*b)[4];};\n"
+                "Outer a; struct S b;\n"
+                "_Static_assert(sizeof(*(1?a:b).a)==3*sizeof(int));\n"
+                "_Static_assert(sizeof(*(1?a:b).b)==4*sizeof(int));\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof(1?a:b),typeof(1?b:a)));\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof(1?a:b),typeof(*(1?&a:&b))));\n"
+                "}\n"),
+        },
+        {
+            "composite records and enums are compatible in either operand order", __LINE__,
+            SVI("struct S { int x; }; typedef struct S Outer;\n"
+                "enum E { A=1 }; typedef enum E OuterEnum;\n"
+                "union U { int x; float y; }; typedef union U OuterUnion;\n"
+                "void f(void){ struct S { int x; }; enum E { A=1 }; union U { int x; float y; };\n"
+                "Outer *a; struct S *b; OuterEnum *e; enum E *g;\n"
+                "OuterUnion *u; union U *v;\n"
+                "_Static_assert(typeof(a)!=typeof(b));\n"
+                "_Static_assert(typeof(e)!=typeof(g));\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof(1?a:b),typeof(1?b:a)));\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof(1?e:g),typeof(1?g:e)));\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof(1?u:v),typeof(1?v:u)));\n"
+                "Outer *(*fa)(Outer *); struct S *(*fb)(struct S *);\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof(1?fa:fb),typeof(1?fb:fa)));\n"
+                "const Outer *ca; const struct S *cb;\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof(*(1?ca:cb)),typeof(*(1?a:b))));\n"
+                "}\n"),
+        },
+        {
+            "type attributes after asm labels are applied", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));"
+                "int v asm(\"vector_symbol\") __attribute__((vector_size(16)));"
+                "static_assert(typeof(v)==V);"
+                "int plain;static_assert(typeof(plain)==int);"),
+        },
+        {
+            "tag references preserve declaration attributes", __LINE__,
+            SVI("struct B{int x;};union U{int y;};"
+                "struct S{char c;__attribute__((packed)) struct B b;};"
+                "static_assert(__builtin_offsetof(struct S,b)==1);"
+                "struct A{char c;__attribute__((packed)) struct B;};"
+                "static_assert(__builtin_offsetof(struct A,x)==1);"
+                "struct T{char c;__attribute__((packed)) union U u;};"
+                "static_assert(__builtin_offsetof(struct T,u)==1);"
+                "static_assert(alignof(struct B)==alignof(int));"
+                "static_assert(alignof(union U)==alignof(int));"),
+        },
+        {
+            "anonymous members retain explicit alignment and packing", __LINE__,
+            SVI("struct B{int x;};typedef struct B B;"
+                "struct A{char c;_Alignas(32) struct B;};"
+                "static_assert(__builtin_offsetof(struct A,x)==32);"
+                "static_assert(alignof(struct A)==32 && sizeof(struct A)==64);"
+                "struct P{char c;__attribute__((packed)) B;};"
+                "static_assert(__builtin_offsetof(struct P,x)==1);"
+                "static_assert(alignof(struct P)==1 && sizeof(struct P)==5);"
+                "union U{char c;_Alignas(32) struct B;};"
+                "static_assert(alignof(union U)==32 && sizeof(union U)==32);"),
+        },
+        {
+            "member packing is preserved and scoped to each declarator", __LINE__,
+            SVI("struct S{char c;int x __attribute__((packed)),y;};"
+                "static_assert(__builtin_offsetof(struct S,x)==1);"
+                "static_assert(__builtin_offsetof(struct S,y)==8);"
+                "union U{int x __attribute__((packed));char c;};"
+                "static_assert(alignof(union U)==1);"
+                "struct A{char c;int x __attribute__((packed,aligned(2)));};"
+                "static_assert(__builtin_offsetof(struct A,x)==2);"
+                "static_assert(alignof(struct A)==2);"
+                "struct F{char c;int data[] __attribute__((packed));};"
+                "static_assert(__builtin_offsetof(struct F,data)==1);"),
+        },
+        {
+            "packed union metadata survives definition and redeclaration", __LINE__,
+            SVI("union __attribute__((packed)) U{int x;char c;};"
+                "static_assert(alignof(union U)==1);"
+                "static_assert(sizeof(union U)==sizeof(int));"
+                "union __attribute__((packed)) U{int x;char c;};"
+                "struct S{char tag;union U u;};"
+                "static_assert(__builtin_offsetof(struct S,u)==1);"),
+        },
+        {
+            "flexible array members honor explicit alignment", __LINE__,
+            SVI("struct S{char c;_Alignas(32) int data[];};"
+                "static_assert(__builtin_offsetof(struct S,data)==32);"
+                "static_assert(alignof(struct S)==32 && sizeof(struct S)==32);"
+                "union U{char c;_Alignas(32) int data[];};"
+                "static_assert(alignof(union U)==32 && sizeof(union U)==32);"),
+        },
+        {
+            "postfix member alignment applies to one declarator", __LINE__,
+            SVI("struct S{char c;int x __attribute__((aligned(32))),y;};"
+                "static_assert(__builtin_offsetof(struct S,x)==32);"
+                "static_assert(__builtin_offsetof(struct S,y)==36);"
+                "static_assert(alignof(struct S)==32);"),
+        },
+        {
+            "expression alignment follows member layout and lvalue paths", __LINE__,
+            SVI("struct S{char c;_Alignas(32) int x;};struct S s;"
+                "static_assert(alignof(s.x)==32 && alignof((&s)->x)==32);"
+                "static_assert(alignof((0,s.x))==32);"
+                "_Alignas(32) int v;static_assert(alignof((0,v))==32);"
+                "struct __attribute__((packed)) P{char c;int x;};struct P p;"
+                "static_assert(alignof(p.x)==1);"
+                "struct A{char c;struct{_Alignas(32) int x;};};struct A a;"
+                "static_assert(alignof(a.x)==32);"
+                "struct __attribute__((packed)) B{char c;struct{int x;};};struct B b;"
+                "static_assert(alignof(b.x)==1);"
+                "\n#pragma pack(push,1)\n"
+                "struct __attribute__((aligned(32))) Q{int x;};"
+                "\n#pragma pack(pop)\n"
+                "struct Q q;static_assert(alignof(q.x)==1);"
+                "static_assert(alignof(s.c)==1);"),
+        },
+        {
+            "castability requires a complete destination object", __LINE__,
+            SVI("struct S;union U;enum E;"
+                "static_assert(!(struct S).is_castable_to(struct S));"
+                "static_assert(!(union U).is_castable_to(union U));"
+                "static_assert(!(enum E).is_castable_to(enum E));"
+                "static_assert(void.is_castable_to(void));"
+                "static_assert((struct S*).is_castable_to(struct S*));"),
+        },
+        {
+            "cast results discard only top level qualifiers", __LINE__,
+            SVI("enum E:int{A};"
+                "_Static_assert(typeof((const int)1)==int);"
+                "_Static_assert(typeof((volatile int)1)==int);"
+                "_Static_assert(typeof((_Atomic int)1)==int);"
+                "_Static_assert(typeof((const enum E)1)==enum E);"
+                "_Static_assert(typeof((const int* const)0)==const int*);"
+                "_Static_assert(typeof((_Atomic int* const)0)==_Atomic int*);"
+                "_Static_assert(typeof((const _Type)int)==_Type);"
+                "typedef const int Aligned __attribute__((aligned(16)));"
+                "_Static_assert(!typeof((Aligned)1).is_const);"
+                "_Static_assert(typeof((Aligned)1).alignof_==16);\n"),
+        },
+        {
+            "value casts ignore top level object qualifiers", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));"
+                "const V v={1,2,3,4};V w=(V)v;"
+                "V x=(const V)w;"
+                "static_assert((const V).is_castable_to(V));"
+                "static_assert(V.is_castable_to(const V));"
+                "const _Type t=int;_Type u=(_Type)t;"
+                "static_assert((const _Type).is_castable_to(_Type));"
+                "static_assert(_Type.is_castable_to(const _Type));"),
+        },
+        {
+            "casts cannot read incomplete enum values", __LINE__,
+            SVI("enum E;static_assert(!(enum E).is_castable_to(int));"
+                "static_assert((enum E).is_castable_to(void));"),
+        },
+        {
+            "callability requires a complete return value", __LINE__,
+            SVI("struct S;"
+                "static_assert(!(struct S(int)).is_callable_with(int));"
+                "static_assert((void(int)).is_callable_with(int));"
+                "static_assert((struct S*(int)).is_callable_with(int));"),
+        },
+        {
+            "callability rejects argument types without values", __LINE__,
+            SVI("struct S;"
+                "static_assert(!(int()).is_callable_with(void));"
+                "static_assert(!(int(...)).is_callable_with(void));"
+                "static_assert(!(int(...)).is_callable_with(struct S));"
+                "static_assert((int(...)).is_callable_with(struct S*));"
+                "static_assert((int(...)).is_callable_with(int[]));"
+                "static_assert((int(...)).is_callable_with(int(void)));"),
+        },
+        {
+            "void reflection reports an incomplete type", __LINE__,
+            SVI("static_assert(void.is_incomplete);"
+                "static_assert((const void).is_incomplete);"
+                "static_assert(!int.is_incomplete);"
+                "static_assert(!(void*).is_incomplete);"
+                "static_assert(!(void(void)).is_incomplete);"
+                "struct S;static_assert((struct S).is_incomplete);"),
+        },
+        {
+            "type value expressions in size and alignment operands", __LINE__,
+            SVI("static_assert(sizeof(int==int)==sizeof(int));"
+                "static_assert(alignof(int==int)==alignof(int));"),
+        },
+        {
+            "parentheses preserve type value expressions", __LINE__,
+            SVI("constexpr _Type T=int;"
+                "static_assert((T==int));"
+                "static_assert((int!=float));"
+                "static_assert((int==int ? 7 : 9)==7);"
+                "static_assert((int, float)==float);"
+                "static_assert((int.is_const)==0);"),
+        },
+        {
+            "pointer declarator attributes survive qualifier parsing", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));"
+                "typedef int* __attribute__((vector_size(16))) const P;"
+                "static_assert(P==V*const);"
+                "constexpr _Type T=int* __attribute__((vector_size(16)));"
+                "static_assert(T==V*);"
+                "struct S{int* __attribute__((vector_size(16))) p;int plain;};"
+                "static_assert(typeof(((struct S*)0)->p)==V*);"
+                "static_assert(typeof(((struct S*)0)->plain)==int);"),
+        },
+        {
+            "method declarations apply return type attributes before their bodies", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));"
+                "struct S{int x;int get(_Self*self) __attribute__((vector_size(16)))"
+                "{return (V){self->x,2,3,4};}};"
+                "static_assert((struct S).method(\"get\").type==V(struct S*));"),
+        },
+        {
+            "vector attributes transform the scalar base of derived types", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));"
+                "typedef int *P __attribute__((vector_size(16)));"
+                "typedef int A[3] __attribute__((vector_size(16)));"
+                "typedef int F(int) __attribute__((vector_size(16)));"
+                "static_assert(P==V* && A==V[3] && F==V(int));"
+                "typedef const int *const CP __attribute__((vector_size(16)));"
+                "static_assert(CP==const V*const);"
+                "struct S{int a[2] __attribute__((vector_size(16)));};"
+                "static_assert(typeof(((struct S*)0)->a)==V[2]);"
+                "void f(int a[const 3] __attribute__((vector_size(16))));"
+                "static_assert(typeof(f).param_type(0)==V*);"
+                "constexpr _Type T=int (*)[3] __attribute__((vector_size(16)));"
+                "static_assert(T==V(*)[3]);"),
+        },
+        {
+            "type value expressions apply and isolate vector attributes", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));"
+                "constexpr _Type T=int __attribute__((vector_size(16)));"
+                "static_assert(T==V);"
+                "int plain;static_assert(typeof(plain)==int);"
+                "constexpr _Type U=const int __attribute__((vector_size(16)));"
+                "static_assert(U==const V);"),
+        },
+        {
+            "vector attributes are scoped to their declarators", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));"
+                "int f(int __attribute__((vector_size(16))) x,int y);"
+                "static_assert(typeof(f).param_type(0)==V);"
+                "static_assert(typeof(f).param_type(1)==int);"
+                "static_assert(typeof(f).return_type==int);"
+                "struct S{int x __attribute__((vector_size(16))),y;"
+                "int __attribute__((vector_size(16))) a,b;};"
+                "static_assert(typeof(((struct S*)0)->x)==V);"
+                "static_assert(typeof(((struct S*)0)->y)==int);"
+                "static_assert(typeof(((struct S*)0)->a)==V);"
+                "static_assert(typeof(((struct S*)0)->b)==V);"
+                "static_assert(sizeof(int __attribute__((vector_size(16))))==16);"
+                "int plain;static_assert(typeof(plain)==int);"
+                "static_assert(_Generic((int __attribute__((vector_size(16)))){1,2,3,4},V:1));"),
+        },
+        {
+            "vector attributes preserve parameter type identity", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));"
+                "void f(int x __attribute__((vector_size(16))));"
+                "static_assert(typeof(f).param_type(0)==V);"),
+        },
+        {
+            "vector attributes preserve field type identity", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));"
+                "struct S{int x __attribute__((vector_size(16)));};"
+                "static_assert(typeof(((struct S*)0)->x)==V);"
+                "static_assert(sizeof(struct S)==sizeof(V));"),
+        },
+        {
+            "vector attributes preserve abstract type identity", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));"
+                "static_assert(typeof(int __attribute__((vector_size(16))))==V);"),
+        },
+        {
+            "embedded base compatibility preserves qualifiers and nominal constraints", __LINE__,
+            SVI("struct Base{int x;};typedef struct Base Original;"
+                "struct Derived{int prefix;Original;};"
+                "void f(void){struct Base{int x;};"
+                "_Static_assert((void(struct Base*)).is_callable_with(struct Derived*));"
+                "_Static_assert((void(const struct Base*)).is_callable_with(const struct Derived*));"
+                "_Static_assert(!(void(struct Base*)).is_callable_with(const struct Derived*));"
+                "_Static_assert(!(void(struct Base*)).is_callable_with(volatile struct Derived*));"
+                "struct Other{int x;};"
+                "_Static_assert(!(void(struct Other*)).is_callable_with(struct Derived*));"
+                "{struct Base{double x;};"
+                "_Static_assert(!(void(struct Base*)).is_callable_with(struct Derived*));}}\n"),
+        },
+        {
+            "embedded base conditional pointers are order independent", __LINE__,
+            SVI("struct B{int x;};struct D{long prefix;struct B;};"
+                "void f(struct B*b,struct D*d,const struct D*cd){"
+                "static_assert(typeof(1?b:d)==typeof(1?d:b));"
+                "static_assert(typeof(1?d:b)==struct B*);"
+                "static_assert(typeof(1?b:cd)==const struct B*);"
+                "static_assert(typeof(1?cd:b)==const struct B*);}"),
+        },
+        {
+            "composites from separate compatible declarations preserve member information", __LINE__,
+            SVI("struct S{int(*x)[2];int(*y)[];};typedef struct S A;"
+                "void f(void){struct S{int(*x)[];int(*y)[3];};A*a;struct S*b;"
+                "typedef typeof(1?a:b) P;"
+                "{struct S{int(*x)[2];int(*y)[];};typedef struct S C;"
+                "{struct S{int(*x)[];int(*y)[3];};C*c;struct S*d;"
+                "static_assert(__builtin_types_compatible_p(P,typeof(1?c:d)));"
+                "static_assert(sizeof(*(1?c:d)->x)==2*sizeof(int));"
+                "static_assert(sizeof(*(1?c:d)->y)==3*sizeof(int));}}}"),
+        },
+        {
+            "composite unions and function wrappers are associative", __LINE__,
+            SVI("union U{int(*x)[2];int(*y)[];int(*z)[];};typedef union U A;"
+                "void f(void){union U{int(*x)[];int(*y)[3];int(*z)[];};typedef union U B;"
+                "{union U{int(*x)[];int(*y)[];int(*z)[4];};"
+                "A*(*a)(A*);B*(*b)(B*);union U*(*c)(union U*);"
+                "typedef typeof(1?(1?a:b):c) F;"
+                "static_assert(__builtin_types_compatible_p(F,typeof(1?a:(1?b:c))));"
+                "typedef typeof((1?a:(1?b:c))((A*)0)) R;R(*expected)(R);"
+                "static_assert(__builtin_types_compatible_p(F,typeof(expected)));"
+                "R r;static_assert(sizeof(*r->x)==2*sizeof(int));"
+                "static_assert(sizeof(*r->y)==3*sizeof(int));"
+                "static_assert(sizeof(*r->z)==4*sizeof(int));"
+                "}}"),
+        },
+        {
+            "composite records retain bounds from more complete declarations", __LINE__,
+            SVI("struct S{int(*x)[];int(*y)[];};typedef struct S A;"
+                "void f(void){struct S{int(*x)[2];int(*y)[];};typedef struct S B;"
+                "{struct S{int(*x)[];int(*y)[3];};A*a;B*b;struct S*c;"
+                "static_assert(__builtin_types_compatible_p(typeof(1?(1?a:b):c),typeof(1?a:(1?b:c))));"
+                "static_assert(sizeof(*(1?a:(1?b:c))->x)==2*sizeof(int));"
+                "static_assert(sizeof(*(1?a:(1?b:c))->y)==3*sizeof(int));"
+                "{struct S{int(*x)[2];int(*y)[3];};struct S*d;"
+                "static_assert(sizeof(*(1?(1?b:c):d)->x)==2*sizeof(int));"
+                "static_assert(sizeof(*(1?b:(1?c:d))->y)==3*sizeof(int));}}}"),
+        },
+        {
+            "separate record composites retain member information", __LINE__,
+            SVI("struct S{struct S*next;int(*x)[3];int(*y)[];};typedef struct S Outer;"
+                "void f(void){struct S{struct S*next;int(*x)[];int(*y)[4];};"
+                "Outer*a;struct S*b;typedef typeof(1?a:b) P;typedef typeof(1?a:b) Q;"
+                "static_assert(__builtin_types_compatible_p(P,Q));"
+                "P p;static_assert(__builtin_types_compatible_p(typeof(p->next),P));"
+                "static_assert(sizeof(*p->next->x)==3*sizeof(int));"
+                "static_assert(sizeof(*p->x)==3*sizeof(int));"
+                "static_assert(sizeof(*p->y)==4*sizeof(int));}"),
+        },
+        {
+            "composite record member information is associative", __LINE__,
+            SVI("struct S{struct S* next;int(*x)[2];int(*y)[];int(*z)[];};typedef struct S A;"
+                "void f(void){struct S{struct S* next;int(*x)[];int(*y)[3];int(*z)[];};typedef struct S B;"
+                "{struct S{struct S* next;int(*x)[];int(*y)[];int(*z)[4];};"
+                "A*a;B*b;struct S*c;"
+                "typedef typeof(1?(1?a:b):c) P;"
+                "static_assert(__builtin_types_compatible_p(P,typeof(1?a:(1?b:c))));"
+                "static_assert(__builtin_types_compatible_p(P,typeof(1?b:(1?c:a))));"
+                "static_assert(__builtin_types_compatible_p(P,typeof(1?c:(1?b:a))));"
+                "static_assert(__builtin_types_compatible_p(P,typeof((1?a:(1?b:c))->next)));"
+                "static_assert(sizeof(*(1?a:(1?b:c))->x)==2*sizeof(int));"
+                "static_assert(sizeof(*(1?a:(1?b:c))->y)==3*sizeof(int));"
+                "static_assert(sizeof(*(1?a:(1?b:c))->z)==4*sizeof(int));"
+                "}}"),
+        },
+        {
+            "composite recursive record types retain merged member information", __LINE__,
+            SVI("struct S { struct S *next; int (*a)[3]; int (*b)[]; }; typedef struct S Outer;\n"
+                "void f(void){ struct S { struct S *next; int (*a)[]; int (*b)[4]; };\n"
+                "Outer *a; struct S *b;\n"
+                "Outer *(*fa)(Outer *); struct S *(*fb)(struct S *);\n"
+                "typedef typeof(1?fa:fb) F;\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof(1?a:b),typeof(1?a:b)));\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof((1?fa:fb)(a)),typeof(1?a:b)));\n"
+                "typedef typeof(1?a:b) M; M (*expected)(M);\n"
+                "_Static_assert(__builtin_types_compatible_p(F,typeof(expected)));\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof(1?a:b),typeof(1?b:a)));\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof((1?a:b)->next),typeof(1?a:b)));\n"
+                "_Static_assert(typeof(a)!=typeof(b));\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof(1?a:b),typeof(a)));\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof(1?a:b),typeof(b)));\n"
+                "const Outer *ca=a; const struct S *cb=b;\n"
+                "_Static_assert(__builtin_types_compatible_p(typeof(*(1?ca:cb)),typeof(*(1?a:b))));\n"
+                "_Static_assert(sizeof(*(1?a:b)->a)==3*sizeof(int));\n"
+                "_Static_assert(sizeof(*(1?a:b)->b)==4*sizeof(int));\n"
+                "}\n"),
         },
         {
             "C23 composite recursive records combine member bounds", __LINE__,
@@ -6606,6 +7413,29 @@ TestFunction(test_parse_decls){
                 "}\n"
                 "void g(void) { struct S { union { int x; float y; }; unsigned b:4; };\n"
                 " _Static_assert(!__builtin_types_compatible_p(Outer, struct S)); }\n"),
+        },
+        {
+            "record compatibility requires matching member offsets", __LINE__,
+            SVI("struct S { char c; int i; } __attribute__((aligned(16))); typedef struct S Outer;\n"
+                "void f(void){\n"
+                "#pragma pack(push,1)\n"
+                "struct S { char c; int i; } __attribute__((aligned(16)));\n"
+                "#pragma pack(pop)\n"
+                "_Static_assert(sizeof(Outer)==sizeof(struct S));\n"
+                "_Static_assert(alignof(Outer)==alignof(struct S));\n"
+                "_Static_assert(!__builtin_types_compatible_p(Outer,struct S));\n"
+                "_Static_assert(!__builtin_types_compatible_p(Outer*,struct S*));\n"
+                "_Static_assert(!__builtin_types_compatible_p(Outer[2],struct S[2]));\n"
+                "_Static_assert(!__builtin_types_compatible_p(void(Outer),void(struct S)));\n"
+                "}\n"),
+        },
+        {
+            "compatible record arrays remain compatible across scopes", __LINE__,
+            SVI("struct S { int x; }; typedef struct S A[2][3];\n"
+                "void f(void){ struct S { int x; };\n"
+                "_Static_assert(__builtin_types_compatible_p(A,struct S[2][3]));\n"
+                "struct T { int a[2][3]; }; struct T { int a[2][3]; };\n"
+                "}\n"),
         },
         {
             "C23 recursive record mismatches", __LINE__,
@@ -6725,6 +7555,7 @@ TestFunction(test_parse_decls){
         Environment env = {.allocator = al, .at=&at};
         int err;
         MStringBuilder sb = {.allocator=al};
+        struct Case* c = &testcases[i];
         CcParser cc = {
             .cpp = {
                 .allocator = al,
@@ -6732,12 +7563,11 @@ TestFunction(test_parse_decls){
                 .at = &at,
                 .logger = logger,
                 .env = &env,
-                .target = &cc_target_test,
+                .target = (const CcTargetConfig* _Nonnull)(c->target ? c->target : &cc_target_test),
             },
             .current = &cc.global,
             .eager_parsing = 1,
         };
-        struct Case* c = &testcases[i];
         fc_write_path(fc, "(test)", 6);
         err = fc_cache_file(fc, c->input);
         if(err) {TestPrintf("%s:%d: failed to cache\n", __FILE__, c->line); goto finally;}
@@ -6926,6 +7756,8 @@ TestFunction(test_parse_decls){
     TESTEND();
 }
 
+#undef CALL_ABI_SOURCE
+
 TestFunction(test_parse_errors){
     TESTBEGIN();
     static struct ErrorCase {
@@ -6934,21 +7766,735 @@ TestFunction(test_parse_errors){
         StringView expected_msg;
         _Bool skip;
         _Bool builtin_headers;
+        _Bool all_targets;
+        StringView target_expect[CC_TARGET_COUNT];
     } cases[] = {
+        {
+            "static slice rejects omitted upper bound below lower bound", __LINE__,
+            SVI("static int a[3];\nstatic int s[:]=a[4:];"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static pointer slice rejects reversed bounds", __LINE__,
+            SVI("static int a[3];\nstatic int s[:]=((int*)a)[2:1];"),
+            SVI("(test):2:26: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static reslice checks the source slice length", __LINE__,
+            SVI("static int a[3];\nconstexpr int s[:]=a[:2];\nstatic int t[:]=s[:3];"),
+            SVI("(test):3:18: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static aggregate initializer validates slice elements", __LINE__,
+            SVI("static int a[3];\nstruct S {int s[:];};\nstatic struct S s={a[2:1]};"),
+            SVI("(test):3:19: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static data: reject reversed slice bounds", __LINE__,
+            SVI("static int a[3];\nstatic int s[:]=a[2:1];\nreturn s.count;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static data: reject slice bounds past array end", __LINE__,
+            SVI("static int a[3];\nstatic int s[:]=a[:4];\nreturn s.count;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static data: reject negative slice bounds", __LINE__,
+            SVI("static int a[3];\nstatic int s[:]=a[-1:2];\nreturn s.count;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "packed atomic prefix increment", __LINE__,
+            SVI("struct __attribute__((packed)) P {char c; _Atomic int x;};\nstruct P p;\n++p.x;"),
+            SVI("(test):3:4: error: underaligned atomic access requires 4-byte alignment\n"),
+            .all_targets = 1,
+        },
+        {
+            "packed atomic postfix increment", __LINE__,
+            SVI("struct __attribute__((packed)) P {char c; _Atomic int x;};\nstruct P p;\np.x++;"),
+            SVI("(test):3:2: error: underaligned atomic access requires 4-byte alignment\n"),
+            .all_targets = 1,
+        },
+        {
+            "packed atomic arrow load", __LINE__,
+            SVI("struct __attribute__((packed)) P {char c; _Atomic int x;};\nstruct P* p;\nreturn p->x;"),
+            SVI("(test):3:9: error: underaligned atomic access requires 4-byte alignment\n"),
+            .all_targets = 1,
+        },
+        {
+            "packed atomic builtin through comma", __LINE__,
+            SVI("struct __attribute__((packed)) P {char c; int x;};\nstruct P p;\n__atomic_store_n((0,&p.x),1,0);"),
+            SVI("(test):3:1: error: underaligned atomic access requires 4-byte alignment\n"),
+            .all_targets = 1,
+        },
+        {
+            "packed atomic load", __LINE__,
+            SVI("struct __attribute__((packed)) P { char c; _Atomic int x; };\n"
+                "struct P p;\nreturn p.x;"),
+            SVI("(test):3:9: error: underaligned atomic access requires 4-byte alignment\n"),
+            .all_targets = 1,
+        },
+        {
+            "packed atomic builtin", __LINE__,
+            SVI("struct __attribute__((packed)) P { char c; int x; };\n"
+                "struct P p;\nreturn __atomic_load_n(&p.x, 0);"),
+            SVI("(test):3:8: error: underaligned atomic access requires 4-byte alignment\n"),
+            .all_targets = 1,
+        },
+        {
+            "packed atomic store", __LINE__,
+            SVI("struct __attribute__((packed)) P { char c; _Atomic int x; };\n"
+                "struct P p;\np.x=1;"),
+            SVI("(test):3:2: error: underaligned atomic access requires 4-byte alignment\n"),
+            .all_targets = 1,
+        },
+        {
+            "packed atomic rmw", __LINE__,
+            SVI("struct __attribute__((packed)) P { char c; _Atomic int x; };\n"
+                "struct P p;\np.x+=1;"),
+            SVI("(test):3:2: error: underaligned atomic access requires 4-byte alignment\n"),
+            .all_targets = 1,
+        },
+        {
+            "packed atomic cas", __LINE__,
+            SVI("struct __attribute__((packed)) P { char c; int x; };\n"
+                "struct P p; int expected=0;\n__atomic_compare_exchange_n(&p.x,&expected,1,0,0,0);"),
+            SVI("(test):3:1: error: underaligned atomic access requires 4-byte alignment\n"),
+            .all_targets = 1,
+        },
+        {
+            "symbolic pointers: reject automatic nested member addresses", __LINE__,
+            SVI("void f(void){struct S {int a,b;} s;\nconstexpr long d=&s.b-&s.a;} f();\n"),
+            SVI("(test):2:22: error: constexpr initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "recursive by-value records are rejected before ABI classification", __LINE__,
+            SVI("struct S {struct S self;};"),
+            SVI("(test):1:24: error: member requires a complete object type. The type is 'struct S'\n"),
+            .all_targets = 1,
+        },
+        {
+            "recursive by-value unions are rejected before ABI classification", __LINE__,
+            SVI("union U {union U self;};"),
+            SVI("(test):1:22: error: member requires a complete object type. The type is 'union U'\n"),
+            .all_targets = 1,
+        },
+        {
+            "va_copy still rejects a const destination view", __LINE__,
+            SVI("typedef __builtin_va_list V;V ap;const V* dest=&ap;\n__builtin_va_copy(*dest,ap);"),
+            SVI("(test):2:1: error: expression does not have type va_list. The type is 'const struct __va_list_tag[1]'\n"),
+            .all_targets = 1,
+            .target_expect = {
+                [CC_TARGET_AARCH64_LINUX] = SVI("(test):2:1: error: expression does not have type va_list. The type is 'const struct __va_list'\n"),
+                [CC_TARGET_AARCH64_MACOS] = SVI("(test):2:1: error: expression does not have type va_list. The type is 'void *const '\n"),
+                [CC_TARGET_X86_64_WINDOWS_MSVC] = SVI("(test):2:1: error: expression does not have type va_list. The type is 'char *const '\n"),
+                [CC_TARGET_X86_64_WINDOWS_MINGW] = SVI("(test):2:1: error: expression does not have type va_list. The type is 'char *const '\n"),
+                [CC_TARGET_TEST] = SVI("(test):2:1: error: expression does not have type va_list. The type is 'void *const '\n"),
+            },
+        },
+        {
+            "_Type expression rejects declarator name", __LINE__,
+            SVI("_Type T = int name;\n"),
+            SVI("(test):1:11: error: unexpected declarator name 'name' in type expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "flexible member static initialization is rejected by parser", __LINE__,
+            SVI("struct S {int n; int a[];};\n"
+                "static struct S s={.a[0]=\n"
+                "1};\n"
+                "return s.n;\n"),
+            SVI("(test):3:1: error: initialization of flexible array members is not supported\n"),
+            .all_targets = 1,
+        },
+        {
+            "implicit constexpr: volatile const remains runtime", __LINE__,
+            SVI("const volatile int n=7;\nstatic_assert(n==7);"),
+            SVI("(test):2:15: error: expression 'n' is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "implicit constexpr: runtime const atomic remains runtime", __LINE__,
+            SVI("int x=7; const _Atomic int n=x;\nstatic_assert(n==7);"),
+            SVI("(test):2:15: error: expression 'n' is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "implicit constexpr: constant initialized atomic remains runtime", __LINE__,
+            SVI("const _Atomic int n=7;\nstatic_assert(n==7);"),
+            SVI("(test):2:15: error: expression 'n' is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "implicit constexpr: const atomic pointee remains runtime", __LINE__,
+            SVI("const _Atomic int n=7; const _Atomic int* const p=&n;\nstatic_assert(*p==7);"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "static data: reject atomic member read from const aggregate", __LINE__,
+            SVI("const struct S {_Atomic(int) x;} s={7};\nstatic int x=s.x; return x;\n"),
+            SVI("(test):2:15: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "symbolic pointers: reject atomic const pointer alias", __LINE__,
+            SVI("static int a; _Atomic(int*) const p=&a;\nstatic long d=p-&a; return d;\n"),
+            SVI("(test):2:16: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "implicit constexpr: runtime aggregate remains runtime", __LINE__,
+            SVI("int x=7; const struct S {int n;} s={x};\nstatic_assert(s.n==7);"),
+            SVI("(test):2:15: error: expression 's' is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "implicit constexpr: mutable pointee remains runtime", __LINE__,
+            SVI("int x=7; int* const p=&x;\nstatic_assert(*p==7);"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "clear cache: requires two operands", __LINE__,
+            SVI("__builtin___clear_cache(nullptr);\n"),
+            SVI("(test):1:32: error: Expected ','\n"),
+            .all_targets = 1,
+        },
+        {
+            "clear cache: rejects extra operands", __LINE__,
+            SVI("__builtin___clear_cache(nullptr, nullptr, nullptr);\n"),
+            SVI("(test):1:41: error: Expected ')'\n"),
+            .all_targets = 1,
+        },
+        {
+            "generic unsigned builtin rejects signed argument", __LINE__,
+            SVI("return __builtin_popcountg(1);\n"),
+            SVI("(test):1:28: error: bit builtin requires an unsigned integer argument. The type is 'int'\n"),
+            .all_targets = 1,
+        },
+        {
+            "generic signed builtin rejects unsigned argument", __LINE__,
+            SVI("return __builtin_ffsg(1u);\n"),
+            SVI("(test):1:23: error: bit builtin requires a signed integer argument. The type is 'unsigned int'\n"),
+            .all_targets = 1,
+        },
+        {
+            "generic builtin rejects floating argument", __LINE__,
+            SVI("return __builtin_clrsbg(1.0);\n"),
+            SVI("(test):1:25: error: bit builtin requires a signed integer argument. The type is 'double'\n"),
+            .all_targets = 1,
+        },
+        {
+            "generic builtin rejects boolean argument", __LINE__,
+            SVI("return __builtin_popcountg((_Bool)1);\n"),
+            SVI("(test):1:28: error: bit builtin requires an unsigned integer argument. The type is '_Bool'\n"),
+            .all_targets = 1,
+        },
+        {
+            "stdc builtin rejects signed argument", __LINE__,
+            SVI("return __builtin_stdc_bit_floor(1);\n"),
+            SVI("(test):1:33: error: bit builtin requires an unsigned integer argument. The type is 'int'\n"),
+            .all_targets = 1,
+        },
+        {
+            "generic zero fallback requires int", __LINE__,
+            SVI("return __builtin_clzg(1u,0L);\n"),
+            SVI("(test):1:26: error: zero fallback must have int type. The type is 'long'\n"),
+            .all_targets = 1,
+        },
+        {
+            "rotation count requires integer", __LINE__,
+            SVI("return __builtin_stdc_rotate_left(1u,1.0);\n"),
+            SVI("(test):1:38: error: rotation count must have integer type. The type is 'double'\n"),
+            .all_targets = 1,
+        },
+        {
+            "constant generic clz rejects zero without fallback", __LINE__,
+            SVI("_Static_assert(__builtin_clzg(0u));\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "constant generic ctz rejects zero without fallback", __LINE__,
+            SVI("_Static_assert(__builtin_ctzg(0u));\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "constant rotation rejects negative count", __LINE__,
+            SVI("_Static_assert(__builtin_stdc_rotate_left(1u,-1));\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "constant bit ceil rejects unrepresentable result", __LINE__,
+            SVI("_Static_assert(__builtin_stdc_bit_ceil((unsigned char)129));\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "symbolic pointers: reject subtraction of different symbols", __LINE__,
+            SVI("static int a,b;\nstatic long d=&b-&a; return d;\n"),
+            SVI("(test):2:17: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr metadata logical not rejects before evaluation", __LINE__,
+            SVI("constexpr _Type t=int;\n_Static_assert(!t); return 0;\n"),
+            SVI("(test):2:16: error: '!' requires scalar type. The type is '_Type'\n"),
+            .all_targets = 1,
+        },
+        {
+            "return type conflict cannot change an earlier call's ABI", __LINE__,
+            SVI("int f(); int g(void){return f();}\n"
+                "struct S {int a[4];};\n"
+                "struct S f(void){return (struct S){{1,2,3,4}};} return g();\n"),
+            SVI("(test):3:17: error: conflicting return type for 'f'. The types are 'int' and 'struct S'\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: symbolic pointer is not absolute integer bits", __LINE__,
+            SVI("static int a; constexpr union U {int* p; unsigned long bits;} u={.p=&a};\n_Static_assert(u.bits==0); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: unresolved floating point arithmetic is rejected", __LINE__,
+            SVI("static int a; constexpr union U {int* p; double d;} u={.p=&a};\nstatic double d=u.d+1.0; return d==0;\n"),
+            SVI("(test):2:20: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: narrow floating view cannot split relocation", __LINE__,
+            SVI("static int a; constexpr union U {int* p; float f;} u={.p=&a};\nstatic float f=u.f; return f==0;\n"),
+            SVI("(test):2:17: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: partially overwritten floating relocation is rejected", __LINE__,
+            SVI("static int a; constexpr union U {int* p; double d; unsigned bit:1;} u={.p=&a,.bit=1};\nstatic double d=u.d; return d==0;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: unresolved floating point narrowing is rejected", __LINE__,
+            SVI("static int a; constexpr union U {int* p; double d;} u={.p=&a};\nstatic float f=u.d; return f==0;\n"),
+            SVI("(test):2:17: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: unresolved floating point to integer cast is rejected", __LINE__,
+            SVI("static int a; constexpr union U {int* p; double d;} u={.p=&a};\nstatic long n=(long)u.d; return n==0;\n"),
+            SVI("(test):2:15: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: partial overwrite loses symbolic pointer identity", __LINE__,
+            SVI("static int a; constexpr union U {int* p; unsigned bit:1;} u={.p=&a,.bit=1};\n_Static_assert(u.p==&a); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: bitfield cannot read unresolved address bits", __LINE__,
+            SVI("static int a; constexpr union U {int* p; unsigned long bit:1;} u={.p=&a};\n_Static_assert(u.bit==0); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: bitfield cannot retain a pointer relocation", __LINE__,
+            SVI("static int a; constexpr union U {int* p; unsigned long bit:1;} u={.p=&a};\nstatic unsigned long bit=u.bit; return bit;\n"),
+            SVI("(test):2:27: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: partial symbolic pointer view is rejected", __LINE__,
+            SVI("static int a; constexpr union U {int* p; unsigned bit:1;} u={.p=&a,.bit=1};\nstatic int* p=u.p; return p==&a;\n"),
+            SVI("(test):2:16: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: partial relocation is not an integer constant", __LINE__,
+            SVI("static int a; constexpr union U {int* p; unsigned long bits; unsigned bit:1;} u={.p=&a,.bit=1};\nstatic unsigned long bits=u.bits; return bits;\n"),
+            SVI("(test):2:28: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: integer bits cannot fabricate type metadata", __LINE__,
+            SVI("constexpr union U {unsigned long bits; _Type t;} u={.bits=4096};\n_Static_assert(u.t.sizeof_==4); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: type metadata cannot become numeric bytes", __LINE__,
+            SVI("constexpr union U {_Type t; unsigned long bits;} u={.t=int};\n"
+                "_Static_assert(u.bits==u.bits); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: invalid metadata is still opaque storage", __LINE__,
+            SVI("constexpr union U {_Type t; unsigned long bits;} u={.t={}};\n"
+                "_Static_assert(u.bits==0); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: omitted pointer members remain opaque", __LINE__,
+            SVI("constexpr union U {struct P {void* p;} p; unsigned long bits;} u={.p={}};\n"
+                "_Static_assert(u.bits==0); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: omitted opaque members cannot become numeric aggregate fields", __LINE__,
+            SVI("constexpr union U {struct P {void* p;} p; struct B {unsigned long bits;} b;} u={.p={}};\n"
+                "static struct B copy=u.b; return 0;\n"),
+            SVI("(test):2:23: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: omitted Any tags remain opaque", __LINE__,
+            SVI("constexpr union U {_Any a; unsigned char bytes[sizeof(_Any)];} u={.a={}};\n"
+                "_Static_assert(u.bytes[0]==0); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: absolute pointers cannot become numeric bytes", __LINE__,
+            SVI("constexpr union U {int* p; unsigned long bits;} u={.p=(int*)7};\n"
+                "_Static_assert(u.bits==7); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: null pointers are opaque to byte reinterpretation", __LINE__,
+            SVI("constexpr union U {void* p; unsigned long bits;} u={.p=nullptr};\n"
+                "_Static_assert(u.bits==0); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: numeric addresses reject partial pointer overwrites", __LINE__,
+            SVI("constexpr union U {int* p; unsigned bit:1;} u={.p=(int*)6,.bit=1};\n"
+                "_Static_assert(u.p==(int*)7); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: numeric slice pointers reject partial overwrites", __LINE__,
+            SVI("constexpr union U {int s[:]; struct B {__SIZE_TYPE__ count; unsigned bit:1;} b; struct V {__SIZE_TYPE__ count; int* p;} v;} u={.s=((int*)6)[:2],.b.bit=1};\n"
+                "static struct V copy=u.v; return 0;\n"),
+            SVI("(test):2:23: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: floating views cannot reinterpret pointer relocations", __LINE__,
+            SVI("static int target; constexpr union U {int* p; double d;} u={.p=&target};\n"
+                "static const double d=u.d; return 0;\n"),
+            SVI("(test):2:24: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: aggregate copies cannot reinterpret pointer storage", __LINE__,
+            SVI("constexpr union U {int* p; struct B {unsigned long bits;} b;} u={.p=(int*)7};\n"
+                "static struct B copy=u.b; return 0;\n"),
+            SVI("(test):2:23: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: symbolic pointers cannot become integer relocations", __LINE__,
+            SVI("static int target; constexpr union U {int* p; unsigned long bits;} u={.p=&target};\n"
+                "static unsigned long bits=u.bits; return 0;\n"),
+            SVI("(test):2:28: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: aggregate copies cannot reinterpret metadata", __LINE__,
+            SVI("constexpr union U {_Type t; struct B {unsigned long bits;} b;} u={.t=int};\n"
+                "static struct B copy=u.b; return 0;\n"),
+            SVI("(test):2:23: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: aggregate copies cannot reinterpret Any tags", __LINE__,
+            SVI("constexpr union U {_Any a; struct B {unsigned long bits[2];} b;} u={.a=3};\n"
+                "static struct B copy=u.b; return 0;\n"),
+            SVI("(test):2:23: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: type metadata cannot feed a bitfield", __LINE__,
+            SVI("constexpr union U {_Type t; unsigned bit:1;} u={.t=int};\n"
+                "_Static_assert(u.bit==u.bit); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: Any tags cannot become numeric bytes", __LINE__,
+            SVI("constexpr union U {_Any a; unsigned char bytes[sizeof(_Any)];} u={.a=3};\n"
+                "_Static_assert(u.bytes[0]==u.bytes[0]); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: pointer casts cannot expose metadata bytes", __LINE__,
+            SVI("constexpr _Type t=int; constexpr const unsigned char* p=(const unsigned char*)&t;\n"
+                "_Static_assert(p[0]==p[0]); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: fabricated type metadata is rejected", __LINE__,
+            SVI("constexpr union U {unsigned long bits; _Type t;} u={.bits=4096};\nstatic _Type t=u.t; return 0;\n"),
+            SVI("(test):2:17: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: type overwrite cannot fabricate metadata", __LINE__,
+            SVI("constexpr union U {_Type t; unsigned long bits;} u={.t=int,.bits=4096};\n_Static_assert(u.t.sizeof_==4); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: integer bytes cannot fabricate Any tag", __LINE__,
+            SVI("constexpr union U {unsigned long bits[2]; _Any a;} u={.bits={4096,0}};\n_Static_assert(u.a.type.sizeof_==4); return 0;\n"),
+            SVI("(test):2:1: error: static_assert expression is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: aggregate view cannot split a relocation", __LINE__,
+            SVI("static int a; constexpr union U {int* p; struct B {unsigned low;} b;} u={.p=&a};\nstatic struct B b=u.b; return b.low;\n"),
+            SVI("(test):2:20: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: large aggregate view cannot cut trailing relocation", __LINE__,
+            SVI("static int a; constexpr union U {struct A {unsigned long x; int* p;} a; struct B {unsigned x[3];} b;} u={.a={7,&a}};\nstatic struct B b=u.b; return b.x[0];\n"),
+            SVI("(test):2:20: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: aggregate view cannot split slice pointer", __LINE__,
+            SVI("static int a[3]; constexpr union U {int s[:]; struct B {unsigned x[3];} b;} u={.s=a[:]};\nstatic struct B b=u.b; return b.x[0];\n"),
+            SVI("(test):2:20: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: slice address cannot exceed one-past-end", __LINE__,
+            SVI("static int a[3]; constexpr union U {int s[:];} u={.s=a[:]};\nstatic const int* p=&u.s[4]; return 0;\n"),
+            SVI("(test):2:21: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static reflection: invalid field index is rejected by parser", __LINE__,
+            SVI("struct S {int x;};\nstatic struct __builtin_Field f=(struct S).field(1); return 0;\n"),
+            SVI("(test):2:43: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "indexed field: negative index", __LINE__,
+            SVI("struct S {int x;} s;\nreturn s.[-1];\n"),
+            SVI("(test):2:11: error: field index must be a non-negative integer\n"),
+            .all_targets = 1,
+        },
+        {
+            "indexed field: out of bounds", __LINE__,
+            SVI("struct S {int x;} s;\nreturn s.[1];\n"),
+            SVI("(test):2:11: error: field index out of bounds\n"),
+            .all_targets = 1,
+        },
+        {
+            "indexed field: noninteger index", __LINE__,
+            SVI("struct S {int x;} s;\nreturn s.[1.5];\n"),
+            SVI("(test):2:11: error: field index must be a constant integer expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "indexed field: runtime index", __LINE__,
+            SVI("struct S {int x;} s; int n=0;\nreturn s.[n];\n"),
+            SVI("(test):2:11: error: expression 'n' is not a constant expression\n"),
+            .all_targets = 1,
+        },
+        {
+            "indexed field: incomplete aggregate", __LINE__,
+            SVI("struct S* s;\nreturn s.[0];\n"),
+            SVI("(test):2:11: error: can't access the fields of an incomplete struct\n"),
+            .all_targets = 1,
+        },
+        {
+            "indexed field: scalar operand", __LINE__,
+            SVI("int s;\nreturn s.[0];\n"),
+            SVI("(test):2:11: error: field index syntax unsupported on this type: int\n"),
+            .all_targets = 1,
+        },
+        {
+            "static reflection: missing named field is rejected by parser", __LINE__,
+            SVI("struct S {int x;};\nstatic struct __builtin_Field f=(struct S).field(\"missing\"); return 0;\n"),
+            SVI("(test):2:43: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: slice address cannot have negative index", __LINE__,
+            SVI("static int a[3]; constexpr union U {int s[:];} u={.s=a[:]};\nstatic const int* p=&u.s[-1]; return 0;\n"),
+            SVI("(test):2:21: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static union: aggregate view cannot start inside relocation", __LINE__,
+            SVI("static int a; constexpr union U {struct A {int* p; unsigned long x;} a; struct B {unsigned pad; struct C {unsigned x[3];} c;} b;} u={.a={&a,7}};\nstatic struct C c=u.b.c; return c.x[0];\n"),
+            SVI("(test):2:22: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: narrow integer view of relocation is rejected", __LINE__,
+            SVI("static int a; constexpr union U {int* p; unsigned low;} u={.p=&a};\nstatic unsigned low=u.low; return low;\n"),
+            SVI("(test):2:22: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "constexpr union: high half of relocation is rejected", __LINE__,
+            SVI("static int a; constexpr union U {int* p; struct W {unsigned low,high;} w;} u={.p=&a};\nstatic unsigned high=u.w.high; return high;\n"),
+            SVI("(test):2:25: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static Any: reject mismatched constant view", __LINE__,
+            SVI("const _Any boxed=7;\nstatic long x=boxed.as(long); return x;\n"),
+            SVI("(test):2:20: error: constant _Any.as requires the stored type, ignoring top-level qualifiers\n"),
+            .all_targets = 1,
+        },
+        {
+            "static data: reject volatile member read from const aggregate", __LINE__,
+            SVI("const struct S {volatile int x;} s={7};\nstatic int x=s.x; return x;\n"),
+            SVI("(test):2:15: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static data: reject volatile pointer member read", __LINE__,
+            SVI("static int a; const struct S {int* volatile p;} s={&a};\nstatic int* p=s.p; return p==&a;\n"),
+            SVI("(test):2:16: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "symbolic pointers: cyclic aggregate initializer is rejected", __LINE__,
+            SVI("const struct P {int* p;} s={s.p};\nstatic int same=s.p==s.p; return same;\n"),
+            SVI("(test):2:20: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "symbolic pointers: self copied aggregate initializer is rejected", __LINE__,
+            SVI("const struct P {int* p;} s=s;\nstatic int same=s.p==s.p; return same;\n"),
+            SVI("(test):2:20: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "symbolic pointers: reject mutable pointer alias in static difference", __LINE__,
+            SVI("static int a; int* p=&a;\nstatic long d=p-&a; return d;\n"),
+            SVI("(test):2:16: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "symbolic pointers: reject volatile const pointer alias", __LINE__,
+            SVI("static int a; int* const volatile p=&a;\nstatic long d=p-&a; return d;\n"),
+            SVI("(test):2:16: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "symbolic pointers: reject runtime member read masquerading as an address", __LINE__,
+            SVI("static int a; struct S {int* p;} s={&a};\nstatic long d=s.p-&a; return d;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "symbolic pointers: reject constexpr subtraction of different symbols", __LINE__,
+            SVI("static int a,b;\nconstexpr long d=&b-&a; return d;\n"),
+            SVI("(test):2:20: error: constexpr initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "symbolic pointers: reject fractional element difference", __LINE__,
+            SVI("static int a;\nstatic long d=(int*)((char*)&a+1)-&a; return d;\n"),
+            SVI("(test):2:34: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "symbolic pointers: reject address-dependent comparison", __LINE__,
+            SVI("static int a[2],b[2];\nstatic int same=(a+2)==b; return same;\n"),
+            SVI("(test):2:22: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static data: reject signed conversion below the truncated range", __LINE__,
+            SVI("static signed char x=(signed char)-129.0; return x;\n"),
+            SVI("(test):1:22: error: static initializer conversion is out of range\n"),
+            .all_targets = 1,
+        },
+        {
+            "implicit constexpr: preserve invalid initializer diagnostic", __LINE__,
+            SVI("const signed char x=(signed char)-129.0; return x;\n"),
+            SVI("(test):1:21: error: static initializer conversion is out of range\n"),
+            .all_targets = 1,
+        },
+        {
+            "static data: reject runtime slice bounds", __LINE__,
+            SVI("int n=1; static int a[3];\nstatic int s[:]=a[:n];\nreturn s.count;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static data: reject runtime pointer members", __LINE__,
+            SVI("struct S {const char* p;} s={\"abc\"};\nstatic const char* p=s.p;\nreturn p[0];\n"),
+            SVI("(test):2:23: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static data: reject runtime variable reads", __LINE__,
+            SVI("int source=7;\nstatic int value=source;\nreturn value;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static data: parser rejects external const read without a known value", __LINE__,
+            SVI("extern const int source;\nstatic int value=source;\nreturn value;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static data: parser rejects volatile const read", __LINE__,
+            SVI("const volatile int source=7;\nstatic int value=source;\nreturn value;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
+        {
+            "static data: parser rejects const object with runtime initializer", __LINE__,
+            SVI("int f(void){return 7;} const int source=f();\nstatic int value=source;\nreturn value;\n"),
+            SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
+            .all_targets = 1,
+        },
         {
             "method definition requires a complete return type", __LINE__,
             SVI("void outer(void){struct S {int n; struct Missing f(struct S *s){}};}"),
-            SVI("(test):1:50: error: function definition requires a complete return type\n"),
+            SVI("(test):1:50: error: function definition requires a complete return type. The type is 'struct Missing(struct S *)'\n"),
         },
         {
             "method definition requires complete parameter types", __LINE__,
             SVI("void outer(void){struct Missing; struct S {int n; void f(struct S *s, struct Missing x){}};}"),
-            SVI("(test):1:56: error: function definition requires complete parameter types\n"),
+            SVI("(test):1:56: error: function definition requires complete parameter types. The type is 'void(struct S *, struct Missing)'\n"),
         },
         {
             "anonymous const union through pointer", __LINE__,
             SVI("struct S {const union {int x;};}; void f(struct S *s){s->x=1;}"),
-            SVI("(test):1:59: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):1:59: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "sizeof numbered anonymous bitfield", __LINE__,
@@ -6993,37 +8539,37 @@ TestFunction(test_parse_errors){
         {
             "constexpr atomic member", __LINE__,
             SVI("struct S {_Atomic int n;}; constexpr struct S s={1};"),
-            SVI("(test):1:47: error: constexpr object cannot have volatile or atomic subobjects\n"),
+            SVI("(test):1:47: error: constexpr object cannot have volatile or atomic subobjects. The type is 'const struct S'\n"),
         },
         {
             "constexpr nested volatile array member", __LINE__,
             SVI("struct S {union {volatile int a[2];} u;}; constexpr struct S s={};"),
-            SVI("(test):1:62: error: constexpr object cannot have volatile or atomic subobjects\n"),
+            SVI("(test):1:62: error: constexpr object cannot have volatile or atomic subobjects. The type is 'const struct S'\n"),
         },
         {
             "constexpr compound literal volatile", __LINE__,
             SVI("void f(void){(constexpr volatile int){1};}"),
-            SVI("(test):1:15: error: constexpr object cannot have volatile or atomic subobjects\n"),
+            SVI("(test):1:15: error: constexpr object cannot have volatile or atomic subobjects. The type is 'volatile int'\n"),
         },
         {
             "flexible record in union array", __LINE__,
             SVI("struct S {int n; int a[];}; union U {struct S s; int n;}; union U a[2];"),
-            SVI("(test):1:59: error: array element contains a flexible array member\n"),
+            SVI("(test):1:59: error: array element contains a flexible array member. The type is 'union U[2]'\n"),
         },
         {
             "flexible record in VLA", __LINE__,
             SVI("struct S {int n; int a[];}; void f(int n){struct S a[n];}"),
-            SVI("(test):1:43: error: array element contains a flexible array member\n"),
+            SVI("(test):1:43: error: array element contains a flexible array member. The type is 'struct S[*]'\n"),
         },
         {
             "flexible record array behind pointer", __LINE__,
             SVI("struct S {int n; int a[];}; struct S (*a)[2];"),
-            SVI("(test):1:29: error: array element contains a flexible array member\n"),
+            SVI("(test):1:29: error: array element contains a flexible array member. The type is 'struct S (*)[2]'\n"),
         },
         {
             "incomplete return in lambda", __LINE__,
             SVI("void f(void){auto p=struct S(void){};}"),
-            SVI("(test):1:21: error: function definition requires a complete return type\n"),
+            SVI("(test):1:21: error: function definition requires a complete return type. The type is 'struct S(void)'\n"),
         },
         {
             "typedef function storage reversed", __LINE__,
@@ -7058,13 +8604,52 @@ TestFunction(test_parse_errors){
         {
             "anonymous member preserves const", __LINE__,
             SVI("struct S {const struct {int x;};}; void f(struct S s){s.x=1;}"),
-            SVI("(test):1:58: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):1:58: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
+        },
+        {
+            "pointer conversion preserves atomic qualification of array elements", __LINE__,
+            SVI("void f(int (*p)[3]){ _Atomic int (*q)[3]=p; }"),
+            SVI("(test):1:42: error: cannot implicitly convert from 'int (*)[3]' to '_Atomic int (*)[3]'\n"),
+        },
+        {
+            "slice conversion cannot introduce atomic storage", __LINE__,
+            SVI("void f(int p[:]){ _Atomic int q[:]=p; }"),
+            SVI("(test):1:36: error: cannot implicitly convert from 'int[:]' to '_Atomic int[:]'\n"),
+        },
+        {
+            "pointer comparison preserves atomic storage identity", __LINE__,
+            SVI("void f(int *p,_Atomic int *q){ (void)(p==q); }"),
+            SVI("(test):1:40: error: comparison of incompatible pointer types. The types are 'int *' and '_Atomic int *'\n"),
+        },
+        {
+            "pointer subtraction preserves atomic storage identity", __LINE__,
+            SVI("void f(int *p,_Atomic int *q){ (void)(p-q); }"),
+            SVI("(test):1:40: error: pointer subtraction with incompatible types. The types are 'int *' and '_Atomic int *'\n"),
+        },
+        {
+            "pointer qualification cannot introduce atomic storage", __LINE__,
+            SVI("void f(int *p){ _Atomic int *q=p; }"),
+            SVI("(test):1:32: error: cannot implicitly convert from 'int *' to '_Atomic int *'\n"),
+        },
+        {
+            "conditional pointers cannot introduce atomic storage", __LINE__,
+            SVI("void f(int *p,_Atomic int *q){ (void)(1?p:q); }"),
+            SVI("(test):1:41: error: cannot implicitly convert from 'int *' to '_Atomic int *'\n"),
+        },
+        {
+            "bracket qualifiers are not object array qualifiers", __LINE__,
+            SVI("int a[const 3];"),
+            SVI("(test):1:7: error: array bracket qualifiers require an outermost parameter array\n"),
+        },
+        {
+            "bracket qualifiers are not inner array qualifiers", __LINE__,
+            SVI("void f(int a[2][const 3]);"),
+            SVI("(test):1:17: error: array bracket qualifiers require an outermost parameter array\n"),
         },
         {
             "array parameter preserves bracket qualifiers", __LINE__,
             SVI("void f(int a[const 3]){a=0;}"),
-            SVI(""),
-            .skip = 1, // Deferred
+            SVI("(test):1:25: error: cannot assign to variable with const-qualified type. The type is 'int *const '\n"),
         },
         {
             "nested function rejects enclosing automatic variable [EXTENSIONS.md Nested functions]", __LINE__,
@@ -7075,57 +8660,57 @@ TestFunction(test_parse_errors){
         {
             "nested array of functions", __LINE__,
             SVI("int (*p)[3](void);"),
-            SVI("(test):1:1: error: array of functions is not allowed\n"),
+            SVI("(test):1:1: error: array of functions is not allowed. The type is 'int (*)[3](void)'\n"),
         },
         {
             "nested function returning array", __LINE__,
             SVI("int (*p)(void)[3];"),
-            SVI("(test):1:1: error: function cannot return array type\n"),
+            SVI("(test):1:1: error: function cannot return array type. The type is 'int (*)(void)[3]'\n"),
         },
         {
             "nested function returning function", __LINE__,
             SVI("int (*p)(void)(void);"),
-            SVI("(test):1:1: error: function cannot return function type\n"),
+            SVI("(test):1:1: error: function cannot return function type. The type is 'int (*)(void)(void)'\n"),
         },
         {
             "nested invalid member type", __LINE__,
             SVI("struct S {void (*p)[3];};"),
-            SVI("(test):1:11: error: array of void is not allowed\n"),
+            SVI("(test):1:11: error: array of void is not allowed. The type is 'void (*)[3]'\n"),
         },
         {
             "nested invalid abstract type", __LINE__,
             SVI("typedef typeof(void (*)[3]) T;"),
-            SVI("(test):1:16: error: array of void is not allowed\n"),
+            SVI("(test):1:16: error: array of void is not allowed. The type is 'void (*)[3]'\n"),
         },
         {
             "nested invalid parameter type", __LINE__,
             SVI("void f(void (*p)[3]);"),
-            SVI("(test):1:8: error: array of void is not allowed\n"),
+            SVI("(test):1:8: error: array of void is not allowed. The type is 'void (*)[3]'\n"),
         },
         {
             "array parameter of void", __LINE__,
             SVI("void f(void p[3]);"),
-            SVI("(test):1:8: error: array of void is not allowed\n"),
+            SVI("(test):1:8: error: array of void is not allowed. The type is 'void[3]'\n"),
         },
         {
             "invalid nested derived type", __LINE__,
             SVI("void (*p)[3];"),
-            SVI("(test):1:1: error: array of void is not allowed\n"),
+            SVI("(test):1:1: error: array of void is not allowed. The type is 'void (*)[3]'\n"),
         },
         {
             "typeof_unqual leaves original array typedef qualified", __LINE__,
             SVI("typedef const int A[2]; typeof_unqual(A) a={}; A b={}; void f(void){b[0]=1;}"),
-            SVI("(test):1:73: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):1:73: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "typeof_unqual leaves original VLA typedef qualified", __LINE__,
             SVI("void f(int n){typedef const int A[n]; typeof_unqual(A) a; A b; b[0]=1;}"),
-            SVI("(test):1:68: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):1:68: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "typeof_unqual preserves array pointee qualifiers", __LINE__,
             SVI("typedef const int *const A[2]; typeof_unqual(A) a={}; void f(void){*a[0]=1;}"),
-            SVI("(test):1:73: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):1:73: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "sizeof bitfield", __LINE__,
@@ -7161,7 +8746,7 @@ TestFunction(test_parse_errors){
         {
             "constexpr volatile object", __LINE__,
             SVI("constexpr volatile int x = 1;"),
-            SVI("(test):1:24: error: constexpr object cannot have volatile or atomic subobjects\n"),
+            SVI("(test):1:24: error: constexpr object cannot have volatile or atomic subobjects. The type is 'const volatile int'\n"),
         },
         {
             "constexpr without initializer", __LINE__,
@@ -7171,17 +8756,17 @@ TestFunction(test_parse_errors){
         {
             "flexible-member struct as array element", __LINE__,
             SVI("struct S {int n; int a[];}; struct S a[2];"),
-            SVI("(test):1:29: error: array element contains a flexible array member\n"),
+            SVI("(test):1:29: error: array element contains a flexible array member. The type is 'struct S[2]'\n"),
         },
         {
             "incomplete function return definition", __LINE__,
             SVI("struct S f(void) {}"),
-            SVI("(test):1:10: error: function definition requires a complete return type\n"),
+            SVI("(test):1:10: error: function definition requires a complete return type. The type is 'struct S(void)'\n"),
         },
         {
             "incomplete function parameter definition", __LINE__,
             SVI("struct S; void f(struct S x){}"),
-            SVI("(test):1:16: error: function definition requires complete parameter types\n"),
+            SVI("(test):1:16: error: function definition requires complete parameter types. The type is 'void(struct S)'\n"),
         },
         {
             "typedef function definition", __LINE__,
@@ -7206,22 +8791,22 @@ TestFunction(test_parse_errors){
         {
             "typeof preserves const", __LINE__,
             SVI("typedef const int A[2]; typeof(A) a={}; void f(void){a[0]=1;}"),
-            SVI("(test):1:58: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):1:58: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "named const member", __LINE__,
             SVI("struct S {const struct {int x;} a;}; void f(struct S s){s.a.x=1;}"),
-            SVI("(test):1:62: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):1:62: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "const pointer parameter", __LINE__,
             SVI("void f(int *const a){a=0;}"),
-            SVI("(test):1:23: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):1:23: error: cannot assign to variable with const-qualified type. The type is 'int *const '\n"),
         },
         {
             "direct array of void", __LINE__,
             SVI("void p[3];"),
-            SVI("(test):1:1: error: array of void is not allowed\n"),
+            SVI("(test):1:1: error: array of void is not allowed. The type is 'void[3]'\n"),
         },
         {
             "discarded static assertion still requires a constant value", __LINE__,
@@ -7236,7 +8821,7 @@ TestFunction(test_parse_errors){
         {
             "discarded alignas bound is still type checked", __LINE__,
             SVI("alignas(int[1.5]) int x;"),
-            SVI("(test):1:12: error: array dimension must have integer type\n"),
+            SVI("(test):1:12: error: array dimension must have integer type. The type is 'double'\n"),
         },
         {
             "C2y array declarator example: star inside an array length", __LINE__,
@@ -7254,6 +8839,68 @@ TestFunction(test_parse_errors){
             SVI("(test):1:29: error: [*] requires function prototype scope\n"),
         },
         {
+            "function specifiers cannot modify parameters", __LINE__,
+            SVI("void f(inline int x);"),
+            SVI("(test):1:8: error: function specifier is not allowed on parameters\n"),
+        },
+        {
+            "function specifiers cannot modify data members", __LINE__,
+            SVI("struct S{inline int x;};"),
+            SVI("(test):1:10: error: function specifier is not allowed on data members\n"),
+        },
+        {
+            "slice count is not writable through a const slice", __LINE__,
+            SVI("int a[2];typedef int S[:];const S s=a;\ns.count=0;"),
+            SVI("(test):2:8: error: cannot assign to variable with const-qualified type. The type is 'const unsigned long'\n"),
+        },
+        {
+            "methods cannot implicitly address register objects", __LINE__,
+            SVI("struct S{int x;int f(_Self*p){return p->x;}};"
+                "void g(void){register struct S s={1};\ns.f();}"),
+            SVI("(test):2:2: error: cannot take address of register variable\n"),
+        },
+        {
+            "type names cannot silently discard storage classes", __LINE__,
+            SVI("typeof(int static) x;"),
+            SVI("(test):1:8: error: storage class or function specifier is not allowed in a type name\n"),
+        },
+        {
+            "atomic type names cannot silently discard function specifiers", __LINE__,
+            SVI("_Atomic(inline int) x;"),
+            SVI("(test):1:9: error: storage class or function specifier is not allowed in a type name\n"),
+        },
+        {
+            "implicit receiver address cannot address a bitfield", __LINE__,
+            SVI("int f(int*p);struct S{int x:3;} s;\ns.x.f();"),
+            SVI("(test):2:4: error: cannot take address of bitfield\n"),
+        },
+        {
+            "implicit receiver address cannot address register storage", __LINE__,
+            SVI("int f(int*p);void g(void){register int x;\nx.f();}"),
+            SVI("(test):2:2: error: cannot take address of register variable\n"),
+        },
+        {
+            "default arguments cannot borrow enclosing VLA captures", __LINE__,
+            SVI("void g(int n){int a[n];\nint f(int x=sizeof(a));}"),
+            SVI("(test):2:20: error: default argument may not use automatic variable 'a'\n"),
+        },
+        {
+            "default arguments cannot retain automatic VLA bound reads", __LINE__,
+            SVI("void g(int n){int f(int x=sizeof(int[n]));}"),
+            SVI("(test):1:38: error: default argument may not use automatic variable 'n'\n"),
+        },
+        {
+            "register array elements cannot escape by address", __LINE__,
+            SVI("void f(void){register int a[2];\n&a[0];}"),
+            SVI("(test):2:1: error: cannot take address of register variable\n"),
+        },
+        {
+            "register vector elements cannot escape through receivers", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));int take(int*p);"
+                "void f(void){register V v={};\nv[0].take();}"),
+            SVI("(test):2:5: error: cannot take address of register variable\n"),
+        },
+        {
             "register parameter address", __LINE__,
             SVI("void f(register int x){&x;}"),
             SVI("(test):1:24: error: cannot take address of register variable\n"),
@@ -7264,19 +8911,94 @@ TestFunction(test_parse_errors){
             SVI("(test):1:47: error: cannot take address of register variable\n"),
         },
         {
+            "alignas cannot be ignored in a sizeof type operand", __LINE__,
+            SVI("sizeof(int _Alignas(32));"),
+            SVI("(test):1:1: error: _Alignas requires a compound literal\n"),
+        },
+        {
+            "alignas cannot be ignored in a cast", __LINE__,
+            SVI("(int _Alignas(32))1;"),
+            SVI("(test):1:1: error: _Alignas requires a compound literal\n"),
+        },
+        {
+            "compound literal alignment cannot weaken its type", __LINE__,
+            SVI("(int _Alignas(1)){1};"),
+            SVI("(test):1:2: error: _Alignas cannot weaken natural alignment. The type is 'int'\n"),
+        },
+        {
+            "alignas is forbidden on typedef declarations", __LINE__,
+            SVI("_Alignas(32) typedef int I;"),
+            SVI("(test):1:1: error: _Alignas is not allowed on typedef declarations\n"),
+        },
+        {
+            "zero alignas is forbidden on function declarations", __LINE__,
+            SVI("_Alignas(0) void f(void);"),
+            SVI("(test):1:1: error: _Alignas is not allowed on functions. The type is 'void(void)'\n"),
+        },
+        {
+            "alignas is forbidden on function definitions", __LINE__,
+            SVI("_Alignas(32) void f(void){}"),
+            SVI("(test):1:1: error: _Alignas is not allowed on functions. The type is 'void(void)'\n"),
+        },
+        {
+            "alignas is forbidden on methods", __LINE__,
+            SVI("struct S{\n_Alignas(32) void f(_Self* self){}\n};"),
+            SVI("(test):2:1: error: _Alignas is not allowed on functions. The type is 'void(struct S *)'\n"),
+        },
+        {
+            "zero alignas is forbidden on bitfields", __LINE__,
+            SVI("struct S{\n_Alignas(0) int x:1;\n};"),
+            SVI("(test):2:1: error: _Alignas is not allowed on bitfields\n"),
+        },
+        {
+            "alignas is forbidden on anonymous bitfields", __LINE__,
+            SVI("struct S{\n_Alignas(32) int :0;\n};"),
+            SVI("(test):2:1: error: _Alignas is not allowed on bitfields\n"),
+        },
+        {
+            "alignas is forbidden on register objects", __LINE__,
+            SVI("void f(void){\n_Alignas(32) register int x;\n}"),
+            SVI("(test):2:1: error: _Alignas is not allowed on register objects\n"),
+        },
+        {
             "zero alignas is still forbidden on parameters", __LINE__,
             SVI("void f(_Alignas(0) int x){}"),
             SVI("(test):1:8: error: _Alignas is not allowed on parameters\n"),
         },
         {
+            "alignas cannot weaken anonymous member alignment", __LINE__,
+            SVI("struct B{int x;};\nstruct S{_Alignas(1) struct B;};"),
+            SVI("(test):2:10: error: _Alignas cannot weaken natural alignment. The type is 'struct B'\n"),
+        },
+        {
+            "variadic calls reject void arguments", __LINE__,
+            SVI("void f(...);\nf((void)0);"),
+            SVI("(test):2:3: error: argument must have a complete object type. The type is 'void'\n"),
+        },
+        {
+            "unprototyped calls reject void arguments", __LINE__,
+            SVI("void f();\nf((void)0);"),
+            SVI("(test):2:3: error: argument must have a complete object type. The type is 'void'\n"),
+        },
+        {
             "alignas cannot weaken member alignment", __LINE__,
             SVI("struct S{_Alignas(1) int x;};"),
-            SVI("(test):1:10: error: _Alignas cannot weaken natural alignment\n"),
+            SVI("(test):1:10: error: _Alignas cannot weaken natural alignment. The type is 'int'\n"),
+        },
+        {
+            "restrict rejects nullptr_t", __LINE__,
+            SVI("restrict typeof(nullptr) x;\n"),
+            SVI("(test):1:1: error: restrict requires a pointer type. The type is 'nullptr_t'\n"),
+        },
+        {
+            "inferred restrict rejects nullptr_t", __LINE__,
+            SVI("void f(void){restrict auto x=nullptr;}\n"),
+            SVI("(test):1:14: error: restrict requires a pointer type. The type is 'nullptr_t'\n"),
         },
         {
             "regression: restrict requires a pointer type", __LINE__,
             SVI("restrict int x;"),
-            SVI("(test):1:1: error: restrict requires a pointer type\n"),
+            SVI("(test):1:1: error: restrict requires a pointer type. The type is 'int'\n"),
         },
         {
             "regression: register requires block scope", __LINE__,
@@ -7291,7 +9013,7 @@ TestFunction(test_parse_errors){
         {
             "regression: alignas cannot weaken natural alignment", __LINE__,
             SVI("_Alignas(1) int x;"),
-            SVI("(test):1:1: error: _Alignas cannot weaken natural alignment\n"),
+            SVI("(test):1:1: error: _Alignas cannot weaken natural alignment. The type is 'int'\n"),
         },
         {
             "regression: alignas cannot qualify a parameter", __LINE__,
@@ -7306,87 +9028,87 @@ TestFunction(test_parse_errors){
         {
             "complex bitwise", __LINE__,
             SVI("void f(double _Complex z){z & 1;}"),
-            SVI("(test):1:29: error: operator requires integer operands\n"),
+            SVI("(test):1:29: error: operator '&' requires integer operands. The types are 'double _Complex' and 'int'\n"),
         },
         {
             "complex compound bitwise", __LINE__,
             SVI("void f(double _Complex z){z &= 1;}"),
-            SVI("(test):1:29: error: operator requires integer operands\n"),
+            SVI("(test):1:29: error: operator '&=' requires integer operands. The types are 'double _Complex' and 'int'\n"),
         },
         {
             "complex shift", __LINE__,
             SVI("void f(double _Complex z){z << 1;}"),
-            SVI("(test):1:29: error: shift operands require integer type\n"),
+            SVI("(test):1:29: error: shift operands require integer type. The types are 'double _Complex' and 'int'\n"),
         },
         {
             "complex remainder", __LINE__,
             SVI("void f(double _Complex z){z % 1;}"),
-            SVI("(test):1:29: error: operator requires integer operands\n"),
+            SVI("(test):1:29: error: operator '%' requires integer operands. The types are 'double _Complex' and 'int'\n"),
         },
         {
             "complex shift count", __LINE__,
             SVI("void f(double _Complex z){1 >> z;}"),
-            SVI("(test):1:29: error: shift operands require integer type\n"),
+            SVI("(test):1:29: error: shift operands require integer type. The types are 'int' and 'double _Complex'\n"),
         },
         {
             "interlocked const destination", __LINE__,
             SVI("void f(const long *p){_InterlockedIncrement(p);}"),
-            SVI("(test):1:23: error: atomic operation requires writable object\n"),
+            SVI("(test):1:23: error: atomic operation requires writable object. The type is 'const long'\n"),
         },
         {
             "interlocked wrong pointee", __LINE__,
             SVI("void f(char *p){_InterlockedExchange64(p, 1);}"),
-            SVI("(test):1:17: error: interlocked destination has incorrect pointee type\n"),
+            SVI("(test):1:17: error: interlocked destination has incorrect pointee type. The types are 'char' and 'long long'\n"),
         },
         {
             "atomic const", __LINE__,
             SVI("void f(const long *p){__atomic_fetch_add(p, 1, 5);}"),
-            SVI("(test):1:23: error: atomic operation requires writable object\n"),
+            SVI("(test):1:23: error: atomic operation requires writable object. The type is 'const long'\n"),
         },
         {
             "interlocked const exchange", __LINE__,
             SVI("void f(const long long *p){_InterlockedExchange64(p, 1);}"),
-            SVI("(test):1:28: error: atomic operation requires writable object\n"),
+            SVI("(test):1:28: error: atomic operation requires writable object. The type is 'const long long'\n"),
         },
         {
             "interlocked wrong increment type", __LINE__,
             SVI("void f(double *p){_InterlockedIncrement64(p);}"),
-            SVI("(test):1:19: error: interlocked destination has incorrect pointee type\n"),
+            SVI("(test):1:19: error: interlocked destination has incorrect pointee type. The types are 'double' and 'long long'\n"),
         },
         {
             "interlocked 128 const destination", __LINE__,
             SVI("void f(const long long *p, long long *q){_InterlockedCompareExchange128(p, 1, 2, q);}"),
-            SVI("(test):1:42: error: atomic operation requires writable object\n"),
+            SVI("(test):1:42: error: atomic operation requires writable object. The type is 'const long long'\n"),
         },
         {
             "interlocked 128 wrong destination", __LINE__,
             SVI("void f(char *p, long long *q){_InterlockedCompareExchange128(p, 1, 2, q);}"),
-            SVI("(test):1:31: error: interlocked destination has incorrect pointee type\n"),
+            SVI("(test):1:31: error: interlocked destination has incorrect pointee type. The types are 'char' and 'long long'\n"),
         },
         {
             "method rejects Any receiver declaration", __LINE__,
             SVI("struct S {int x[8]; void boxed(_Any a){}};"),
-            SVI("(test):1:26: error: method requires a receiver of its enclosing type or a pointer to it\n"),
+            SVI("(test):1:26: error: method requires a receiver of its enclosing type or a pointer to it. The types are '_Any' and 'struct S'\n"),
         },
         {
             "method rejects unrelated receiver", __LINE__,
             SVI("struct S {int x; void bad(int *a);};"),
-            SVI("(test):1:23: error: method requires a receiver of its enclosing type or a pointer to it\n"),
+            SVI("(test):1:23: error: method requires a receiver of its enclosing type or a pointer to it. The types are 'int *' and 'struct S'\n"),
         },
         {
             "method rejects missing receiver", __LINE__,
             SVI("struct S {int x; void bad(void);};"),
-            SVI("(test):1:23: error: method requires a receiver of its enclosing type or a pointer to it\n"),
+            SVI("(test):1:23: error: method requires a receiver of its enclosing type or a pointer to it. The types are 'void(void)' and 'struct S'\n"),
         },
         {
             "push_method rejects Any receiver", __LINE__,
             SVI("struct S {int x;}; void bad(_Any a){} (struct S).push_method(bad,bad);"),
-            SVI("(test):1:39: error: method requires a receiver of its enclosing type or a pointer to it\n"),
+            SVI("(test):1:39: error: method requires a receiver of its enclosing type or a pointer to it. The types are '_Any' and 'struct S'\n"),
         },
         {
             "incomplete enum local", __LINE__,
             SVI("enum E; void f(void){enum E x;}"),
-            SVI("(test):1:30: error: variable has incomplete enum type\n"),
+            SVI("(test):1:30: error: variable has incomplete enum type. The type is 'enum E'\n"),
         },
         {
             "incomplete struct", __LINE__,
@@ -7396,12 +9118,12 @@ TestFunction(test_parse_errors){
         {
             "incompatible pointer subtraction", __LINE__,
             SVI("long f(char *p, int *q){return p-q;}"),
-            SVI("(test):1:33: error: pointer subtraction with incompatible types\n"),
+            SVI("(test):1:33: error: pointer subtraction with incompatible types. The types are 'char *' and 'int *'\n"),
         },
         {
             "prototype promotion declaration", __LINE__,
             SVI("int f(); int f(float);"),
-            SVI("(test):1:22: error: conflicting type for parameter 1 of 'f'\n"),
+            SVI("(test):1:22: error: conflicting type for parameter 1 of 'f'. The types are 'int()' and 'int(float)'\n"),
         },
         {
             "prototype promotion pointer", __LINE__,
@@ -7411,12 +9133,12 @@ TestFunction(test_parse_errors){
         {
             "anonymous bool width", __LINE__,
             SVI("struct S{_Bool :2;};"),
-            SVI("(test):1:16: error: bitfield width (2) exceeds size of type (1 bits)\n"),
+            SVI("(test):1:16: error: bitfield width (2) exceeds size of type (1 bits). The type is '_Bool'\n"),
         },
         {
             "named bool width", __LINE__,
             SVI("struct S{_Bool x:2;};"),
-            SVI("(test):1:17: error: bitfield width (2) exceeds size of type (1 bits)\n"),
+            SVI("(test):1:17: error: bitfield width (2) exceeds size of type (1 bits). The type is '_Bool'\n"),
         },
         {
             "named zero width", __LINE__,
@@ -7426,12 +9148,47 @@ TestFunction(test_parse_errors){
         {
             "expression sizeof incomplete", __LINE__,
             SVI("struct S; int n=sizeof(struct S);"),
-            SVI("(test):1:17: error: sizeof applied to incomplete struct type\n"),
+            SVI("(test):1:17: error: sizeof applied to incomplete struct type. The type is 'struct S'\n"),
+        },
+        {
+            "compound literal requires an object type", __LINE__,
+            SVI("void f(void){(void){};}"),
+            SVI("(test):1:20: error: initializer requires a complete object type or an array of unknown bound. The type is 'void'\n"),
+        },
+        {
+            "compound literal rejects incomplete record storage", __LINE__,
+            SVI("struct S;void f(void){(struct S){};}"),
+            SVI("(test):1:33: error: initializer requires a complete object type or an array of unknown bound. The type is 'struct S'\n"),
+        },
+        {
+            "compound literal rejects incomplete enum storage", __LINE__,
+            SVI("enum E;void f(void){(enum E){};}"),
+            SVI("(test):1:29: error: initializer requires a complete object type or an array of unknown bound. The type is 'enum E'\n"),
+        },
+        {
+            "struct data members require object types", __LINE__,
+            SVI("struct S {void value;};"),
+            SVI("(test):1:21: error: member requires a complete object type. The type is 'void'\n"),
+        },
+        {
+            "union data members require object types", __LINE__,
+            SVI("union U {const void value;};"),
+            SVI("(test):1:26: error: member requires a complete object type. The type is 'const void'\n"),
+        },
+        {
+            "record completion rejects direct self storage", __LINE__,
+            SVI("struct S {struct S self;};"),
+            SVI("(test):1:24: error: member requires a complete object type. The type is 'struct S'\n"),
+        },
+        {
+            "union completion rejects direct self storage", __LINE__,
+            SVI("union U {union U self;};"),
+            SVI("(test):1:22: error: member requires a complete object type. The type is 'union U'\n"),
         },
         {
             "layout sizeof incomplete", __LINE__,
             SVI("struct S; struct T{struct S s;};"),
-            SVI("(test):1:30: error: Taking sizeof of an incomplete type\n"),
+            SVI("(test):1:30: error: member requires a complete object type. The type is 'struct S'\n"),
         },
         {
             "nested designator range", __LINE__,
@@ -7481,102 +9238,299 @@ TestFunction(test_parse_errors){
         {
             "const member direct assignment", __LINE__,
             SVI("struct S{const int x;}; void f(struct S *a){a->x=1;}"),
-            SVI("(test):1:49: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):1:49: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "const member prefix increment", __LINE__,
             SVI("struct S{const int x;}; void f(struct S *a){++a->x;}"),
-            SVI("(test):1:45: error: cannot modify const-qualified variable\n"),
+            SVI("(test):1:45: error: cannot modify const-qualified variable. The type is 'const int'\n"),
         },
         {
             "const member postfix increment", __LINE__,
             SVI("struct S{const int x;}; void f(struct S *a){a->x++;}"),
-            SVI("(test):1:49: error: cannot modify const-qualified variable\n"),
+            SVI("(test):1:49: error: cannot modify const-qualified variable. The type is 'const int'\n"),
         },
         {
             "const member prefix decrement", __LINE__,
             SVI("struct S{const int x;}; void f(struct S *a){--a->x;}"),
-            SVI("(test):1:45: error: cannot modify const-qualified variable\n"),
+            SVI("(test):1:45: error: cannot modify const-qualified variable. The type is 'const int'\n"),
         },
         {
             "const member postfix decrement", __LINE__,
             SVI("struct S{const int x;}; void f(struct S *a){a->x--;}"),
-            SVI("(test):1:49: error: cannot modify const-qualified variable\n"),
+            SVI("(test):1:49: error: cannot modify const-qualified variable. The type is 'const int'\n"),
         },
         {
             "const assignment", __LINE__,
             SVI("void f(void){const int x=1; x=2;}"),
-            SVI("(test):1:30: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):1:30: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "const prefix", __LINE__,
             SVI("void f(void){const int x=1; ++x;}"),
-            SVI("(test):1:29: error: cannot modify const-qualified variable\n"),
+            SVI("(test):1:29: error: cannot modify const-qualified variable. The type is 'const int'\n"),
         },
         {
             "const postfix", __LINE__,
             SVI("void f(void){const int x=1; x++;}"),
-            SVI("(test):1:30: error: cannot modify const-qualified variable\n"),
+            SVI("(test):1:30: error: cannot modify const-qualified variable. The type is 'const int'\n"),
+        },
+        {
+            "ordered comparison rejects nullptr operands", __LINE__,
+            SVI("nullptr < nullptr;"),
+            SVI("(test):1:9: error: ordered pointer comparison requires two object pointers. The types are 'nullptr_t' and 'nullptr_t'\n"),
+        },
+        {
+            "ordered comparison cannot convert nullptr to a pointer", __LINE__,
+            SVI("int* p;\np>=nullptr;"),
+            SVI("(test):2:2: error: ordered pointer comparison requires two object pointers. The types are 'int *' and 'nullptr_t'\n"),
+        },
+        {
+            "ordered comparison cannot convert integer zero to a pointer", __LINE__,
+            SVI("int* p;\n0<p;"),
+            SVI("(test):2:2: error: ordered pointer comparison requires two object pointers. The types are 'int' and 'int *'\n"),
+        },
+        {
+            "ordered comparison rejects function pointers", __LINE__,
+            SVI("int(*p)(void),(*q)(void);\np<=q;"),
+            SVI("(test):2:2: error: ordered pointer comparison requires two object pointers. The types are 'int (*)(void)' and 'int (*)(void)'\n"),
+        },
+        {
+            "ordered comparison rejects function designators", __LINE__,
+            SVI("int f(void),g(void);\nf>g;"),
+            SVI("(test):2:2: error: ordered pointer comparison requires two object pointers. The types are 'int(void)' and 'int(void)'\n"),
         },
         {
             "overflow rejects boolean result", __LINE__,
             SVI("_Bool r;\n__builtin_add_overflow(1,1,&r);"),
-            SVI("(test):2:1: error: overflow builtin requires non-boolean integer operands and result\n"),
+            SVI("(test):2:1: error: overflow builtin requires a non-boolean integer result. The type is '_Bool'\n"),
         },
         {
-            "overflow rejects boolean operand", __LINE__,
-            SVI("int r;\n__builtin_mul_overflow((_Bool)1,2,&r);"),
-            SVI("(test):2:1: error: overflow builtin requires non-boolean integer operands and result\n"),
+            "overflow rejects boolean-backed enum result", __LINE__,
+            SVI("enum B:_Bool{No,Yes};enum B r;\n__builtin_mul_overflow(1,2,&r);"),
+            SVI("(test):2:1: error: overflow builtin requires a non-boolean integer result. The type is 'enum B'\n"),
         },
         {
             "overflow rejects const result", __LINE__,
             SVI("const int r=0;\n__builtin_add_overflow(1,1,&r);"),
-            SVI("(test):2:1: error: overflow builtin result must be writable non-atomic storage\n"),
+            SVI("(test):2:1: error: overflow builtin result must be writable non-atomic storage. The type is 'const int'\n"),
         },
         {
             "overflow rejects atomic result", __LINE__,
             SVI("_Atomic int r;\n__builtin_add_overflow(1,1,&r);"),
-            SVI("(test):2:1: error: overflow builtin result must be writable non-atomic storage\n"),
+            SVI("(test):2:1: error: overflow builtin result must be writable non-atomic storage. The type is '_Atomic int'\n"),
+        },
+        {
+            "function pointer addition requires an object stride", __LINE__,
+            SVI("int(*p)(void);\np+1;"),
+            SVI("(test):2:2: error: type has no size. The type is 'int(void)'\n"),
+        },
+        {
+            "function pointer subtraction requires an object stride", __LINE__,
+            SVI("int(*p)(void);\np-1;"),
+            SVI("(test):2:2: error: type has no size. The type is 'int(void)'\n"),
+        },
+        {
+            "function pointer difference requires an object stride", __LINE__,
+            SVI("int(*p)(void),(*q)(void);\np-q;"),
+            SVI("(test):2:2: error: type has no size. The type is 'int(void)'\n"),
+        },
+        {
+            "function pointer compound addition requires an object stride", __LINE__,
+            SVI("int(*p)(void);\np+=1;"),
+            SVI("(test):2:2: error: type has no size. The type is 'int(void)'\n"),
+        },
+        {
+            "function pointer prefix increment requires an object stride", __LINE__,
+            SVI("int(*p)(void);\n++p;"),
+            SVI("(test):2:1: error: type has no size. The type is 'int (*)(void)'\n"),
+        },
+        {
+            "function pointer postfix decrement requires an object stride", __LINE__,
+            SVI("int(*p)(void);\np--;"),
+            SVI("(test):2:2: error: type has no size. The type is 'int (*)(void)'\n"),
+        },
+        {
+            "function pointer subscript requires an object stride", __LINE__,
+            SVI("int(*p)(void);\np[0];"),
+            SVI("(test):2:2: error: type has no size. The type is 'int(void)'\n"),
+        },
+        {
+            "offsetof rejects named bitfields", __LINE__,
+            SVI("struct S{unsigned x:3;};\n__builtin_offsetof(struct S,x);"),
+            SVI("(test):2:29: error: __builtin_offsetof requires a non-bitfield data member\n"),
+        },
+        {
+            "offsetof rejects bitfields promoted from anonymous members", __LINE__,
+            SVI("struct S{int pad;struct {unsigned x:3;};};\n__builtin_offsetof(struct S,x);"),
+            SVI("(test):2:29: error: __builtin_offsetof requires a non-bitfield data member\n"),
+        },
+        {
+            "offsetof rejects methods", __LINE__,
+            SVI("struct S{int x;void f(_Self*);};\n__builtin_offsetof(struct S,f);"),
+            SVI("(test):2:29: error: __builtin_offsetof requires a non-bitfield data member\n"),
+        },
+        {
+            "atomic fetch add rejects boolean storage", __LINE__,
+            SVI("_Bool b;\n__atomic_fetch_add(&b,1,0);"),
+            SVI("(test):2:1: error: atomic arithmetic requires non-boolean storage. The type is '_Bool'\n"),
+        },
+        {
+            "atomic fetch sub rejects boolean storage", __LINE__,
+            SVI("_Atomic _Bool b;\n__atomic_fetch_sub(&b,1,0);"),
+            SVI("(test):2:1: error: atomic arithmetic requires non-boolean storage. The type is '_Atomic _Bool'\n"),
+        },
+        {
+            "atomic add fetch rejects boolean storage", __LINE__,
+            SVI("_Bool b;\n__atomic_add_fetch(&b,1,0);"),
+            SVI("(test):2:1: error: atomic arithmetic requires non-boolean storage. The type is '_Bool'\n"),
+        },
+        {
+            "atomic sub fetch rejects boolean enum storage", __LINE__,
+            SVI("enum E:_Bool{NO,YES};enum E b;\n__atomic_sub_fetch(&b,1,0);"),
+            SVI("(test):2:1: error: atomic arithmetic requires non-boolean storage. The type is 'enum E'\n"),
+        },
+        {
+            "atomic fetch and rejects boolean storage", __LINE__,
+            SVI("_Bool b;\n__atomic_fetch_and(&b,1,0);"),
+            SVI("(test):2:1: error: atomic arithmetic requires non-boolean storage. The type is '_Bool'\n"),
+        },
+        {
+            "atomic fetch or rejects boolean storage", __LINE__,
+            SVI("_Bool b;\n__atomic_fetch_or(&b,1,0);"),
+            SVI("(test):2:1: error: atomic arithmetic requires non-boolean storage. The type is '_Bool'\n"),
+        },
+        {
+            "atomic fetch xor rejects boolean storage", __LINE__,
+            SVI("_Bool b;\n__atomic_fetch_xor(&b,1,0);"),
+            SVI("(test):2:1: error: atomic arithmetic requires non-boolean storage. The type is '_Bool'\n"),
+        },
+        {
+            "atomic load rejects void storage", __LINE__,
+            SVI("void* p;\n__atomic_load_n(p,0);"),
+            SVI("(test):2:1: error: atomic operation requires a complete object type. The type is 'void'\n"),
+        },
+        {
+            "atomic pointer addition rejects function stride", __LINE__,
+            SVI("int (*p)(void);\n__atomic_fetch_add(&p,1,0);"),
+            SVI("(test):2:1: error: type has no size. The type is 'int(void)'\n"),
+        },
+        {
+            "atomic pointer subtraction rejects function stride", __LINE__,
+            SVI("int (*p)(void);\n__atomic_sub_fetch(&p,1,0);"),
+            SVI("(test):2:1: error: type has no size. The type is 'int(void)'\n"),
+        },
+        {
+            "atomic pointer addition rejects incomplete record stride", __LINE__,
+            SVI("struct S;struct S* p;\n__atomic_add_fetch(&p,1,0);"),
+            SVI("(test):2:1: error: type has no size. The type is 'struct S'\n"),
+        },
+        {
+            "atomic pointer subtraction rejects incomplete array stride", __LINE__,
+            SVI("int (*p)[];\n__atomic_fetch_sub(&p,1,0);"),
+            SVI("(test):2:1: error: type has no size. The type is 'int[]'\n"),
+        },
+        {
+            "atomic load rejects function storage", __LINE__,
+            SVI("int f(void);\n__atomic_load_n(&f,0);"),
+            SVI("(test):2:1: error: atomic operation requires a complete object type. The type is 'int(void)'\n"),
+        },
+        {
+            "generic atomic load rejects void storage", __LINE__,
+            SVI("void* p; void* out;\n__atomic_load(p,out,0);"),
+            SVI("(test):2:1: error: atomic operation requires a complete object type. The type is 'void'\n"),
+        },
+        {
+            "enum underlying type rejects alignment specifiers", __LINE__,
+            SVI("enum E:_Alignas(16) int{A};"),
+            SVI("(test):1:1: error: Underlying type does not allow non-type specifiers\n"),
+        },
+        {
+            "enum underlying type rejects even zero alignment specifiers", __LINE__,
+            SVI("enum E:_Alignas(0) int;"),
+            SVI("(test):1:1: error: Underlying type does not allow non-type specifiers\n"),
+        },
+        {
+            "default va_start checks the function where the default executes", __LINE__,
+            SVI("__builtin_va_list ap;\n"
+                "void outer(int n,...){int f(int x=(__builtin_va_start(ap),1));\n"
+                "void inner(void){f();}}"),
+            SVI("(test):2:36: error: va_start requires a variadic function\n"),
+        },
+        {
+            "va_start requires a variadic function", __LINE__,
+            SVI("void f(int n){__builtin_va_list ap;\n__builtin_va_start(ap,n);}"),
+            SVI("(test):2:1: error: va_start requires a variadic function\n"),
+        },
+        {
+            "va_start cannot capture enclosing variadic arguments", __LINE__,
+            SVI("void f(int n,...){void g(void){__builtin_va_list ap;\n__builtin_va_start(ap);}}"),
+            SVI("(test):2:1: error: va_start requires a variadic function\n"),
+        },
+        {
+            "va_start rejects top-level context", __LINE__,
+            SVI("__builtin_va_list ap;\n__builtin_va_start(ap);"),
+            SVI("(test):2:1: error: va_start requires a variadic function\n"),
+        },
+        {
+            "va_arg rejects void result", __LINE__,
+            SVI("__builtin_va_list ap;\n__builtin_va_arg(ap,void);"),
+            SVI("(test):2:1: error: va_arg requires a complete object type. The type is 'void'\n"),
+        },
+        {
+            "va_arg rejects function result", __LINE__,
+            SVI("__builtin_va_list ap;\n__builtin_va_arg(ap,int(void));"),
+            SVI("(test):2:1: error: va_arg requires a complete object type. The type is 'int(void)'\n"),
+        },
+        {
+            "va_arg rejects incomplete record result", __LINE__,
+            SVI("struct S; __builtin_va_list ap;\n__builtin_va_arg(ap,struct S);"),
+            SVI("(test):2:1: error: va_arg requires a complete object type. The type is 'struct S'\n"),
+        },
+        {
+            "va_arg rejects incomplete enum result", __LINE__,
+            SVI("enum E; __builtin_va_list ap;\n__builtin_va_arg(ap,enum E);"),
+            SVI("(test):2:1: error: va_arg requires a complete object type. The type is 'enum E'\n"),
         },
         {
             "generic atomic load rejects integer buffer", __LINE__,
             SVI("int x;\n__atomic_load(&x,123,0);"),
-            SVI("(test):2:1: error: atomic buffer argument must be a pointer to compatible non-atomic storage\n"),
+            SVI("(test):2:1: error: atomic buffer argument must be a pointer to compatible non-atomic storage. The types are 'int' and 'int'\n"),
         },
         {
             "generic atomic store rejects mismatched buffer", __LINE__,
             SVI("int x; short value;\n__atomic_store(&x,&value,0);"),
-            SVI("(test):2:1: error: atomic buffer argument must be a pointer to compatible non-atomic storage\n"),
+            SVI("(test):2:1: error: atomic buffer argument must be a pointer to compatible non-atomic storage. The types are 'short *' and 'int'\n"),
         },
         {
             "generic atomic exchange rejects const output", __LINE__,
             SVI("int x,value; const int out=0;\n__atomic_exchange(&x,&value,&out,0);"),
-            SVI("(test):2:1: error: atomic output buffer must be writable\n"),
+            SVI("(test):2:1: error: atomic output buffer must be writable. The type is 'const int *'\n"),
         },
         {
             "generic atomic load rejects atomic output", __LINE__,
             SVI("int x; _Atomic int out;\n__atomic_load(&x,&out,0);"),
-            SVI("(test):2:1: error: atomic buffer argument must be a pointer to compatible non-atomic storage\n"),
+            SVI("(test):2:1: error: atomic buffer argument must be a pointer to compatible non-atomic storage. The types are '_Atomic int *' and 'int'\n"),
         },
         {
             "compare exchange rejects const expected", __LINE__,
             SVI("int x; const int expected=0;\n__atomic_compare_exchange_n(&x,&expected,1,0,0,0);"),
-            SVI("(test):2:1: error: atomic output buffer must be writable\n"),
+            SVI("(test):2:1: error: atomic output buffer must be writable. The type is 'const int *'\n"),
         },
         {
             "atomic store rejects const object", __LINE__,
             SVI("const int x=0;\n__atomic_store_n(&x,1,0);"),
-            SVI("(test):2:1: error: atomic operation requires writable object\n"),
+            SVI("(test):2:1: error: atomic operation requires writable object. The type is 'const int'\n"),
         },
         {
             "generic atomic store rejects const object", __LINE__,
             SVI("const int x=0; int value=1;\n__atomic_store(&x,&value,0);"),
-            SVI("(test):2:1: error: atomic operation requires writable object\n"),
+            SVI("(test):2:1: error: atomic operation requires writable object. The type is 'const int'\n"),
         },
         {
             "atomic exchange rejects const object", __LINE__,
             SVI("const int x=0;\n__atomic_exchange_n(&x,1,0);"),
-            SVI("(test):2:1: error: atomic operation requires writable object\n"),
+            SVI("(test):2:1: error: atomic operation requires writable object. The type is 'const int'\n"),
         },
         {
             "generic atomic load rejects release order", __LINE__,
@@ -7591,12 +9545,12 @@ TestFunction(test_parse_errors){
         {
             "generic atomic rejects unsupported object size", __LINE__,
             SVI("struct S {char a[3];} x,out;\n__atomic_load(&x,&out,0);"),
-            SVI("(test):2:1: error: atomic operand size 3 is not a power of 2\n"),
+            SVI("(test):2:1: error: atomic operand size 3 is not a power of 2. The type is 'struct S'\n"),
         },
         {
             "generic atomic rejects oversized object", __LINE__,
             SVI("struct S {char a[32];} x,value;\n__atomic_store(&x,&value,0);"),
-            SVI("(test):2:1: error: atomic operand size 32 exceeds target's maximum lock-free size 16\n"),
+            SVI("(test):2:1: error: atomic operand size 32 exceeds target's maximum lock-free size 16. The type is 'struct S'\n"),
         },
         {
             "compound literal rejects extern", __LINE__,
@@ -7636,7 +9590,7 @@ TestFunction(test_parse_errors){
         {
             "compound literal constexpr is const", __LINE__,
             SVI("void f(void){\n++(constexpr int){1};}"),
-            SVI("(test):2:1: error: cannot modify const-qualified variable\n"),
+            SVI("(test):2:1: error: cannot modify const-qualified variable. The type is 'const int'\n"),
         },
         {
             "compound literal register address is forbidden", __LINE__,
@@ -7856,7 +9810,7 @@ TestFunction(test_parse_errors){
         {
             "VLA rejects noninteger bound", __LINE__,
             SVI("int a[1.5];"),
-            SVI("(test):1:6: error: array dimension must have integer type\n"),
+            SVI("(test):1:6: error: array dimension must have integer type. The type is 'double'\n"),
         },
         {
             "VLA rejects nonzero initializer", __LINE__,
@@ -7874,9 +9828,34 @@ TestFunction(test_parse_errors){
             SVI("(test):2:10: error: VLA initializer must be {} or {0}\n"),
         },
         {
+            "fixed array typedef rejects incomplete element", __LINE__,
+            SVI("struct S;\ntypedef struct S A[2];\n"),
+            SVI("(test):2:1: error: array requires a complete object element type. The type is 'struct S[2]'\n"),
+        },
+        {
+            "pointer to fixed array rejects incomplete element", __LINE__,
+            SVI("struct S;\nstruct S (*p)[2];\n"),
+            SVI("(test):2:1: error: array requires a complete object element type. The type is 'struct S (*)[2]'\n"),
+        },
+        {
+            "fixed array rejects incomplete inner array typedef", __LINE__,
+            SVI("typedef int A[];\ntypedef A B[2];\n"),
+            SVI("(test):2:1: error: array requires a complete object element type. The type is 'int[2][]'\n"),
+        },
+        {
+            "array parameter rejects incomplete element before pointer adjustment", __LINE__,
+            SVI("struct S;\nvoid f(struct S a[2]);\n"),
+            SVI("(test):2:8: error: array requires a complete object element type. The type is 'struct S[2]'\n"),
+        },
+        {
+            "fixed array rejects incomplete enum element", __LINE__,
+            SVI("enum E;\ntypedef enum E A[2];\n"),
+            SVI("(test):2:1: error: array requires a complete object element type. The type is 'enum E[2]'\n"),
+        },
+        {
             "VLA typedef rejects incomplete element", __LINE__,
             SVI("int n=3; struct S;\ntypedef struct S A[n];"),
-            SVI("(test):2:1: error: array requires a complete object element type\n"),
+            SVI("(test):2:1: error: array requires a complete object element type. The type is 'struct S[*]'\n"),
         },
         {
             "defer rejects entry into cleanup", __LINE__,
@@ -8005,7 +9984,7 @@ TestFunction(test_parse_errors){
         },
         {
             "complex rejects void", __LINE__, SVI("_Complex void z;"),
-            SVI("(test):1:1: error: invalid scalar type for _Complex\n"),
+            SVI("(test):1:1: error: invalid scalar type for _Complex. The type is 'void'\n"),
         },
         {
             "complex rejects duplicate specifier", __LINE__, SVI("_Complex _Complex float z;"),
@@ -8014,12 +9993,12 @@ TestFunction(test_parse_errors){
         {
             "complex constructor rejects mixed precision", __LINE__,
             SVI("auto z=__builtin_complex(1.0f,2.0);"),
-            SVI("(test):1:8: error: __builtin_complex requires two arguments of the same real floating type\n"),
+            SVI("(test):1:8: error: __builtin_complex requires two arguments of the same real floating type. The types are 'float' and 'double'\n"),
         },
         {
             "complex constructor rejects integers", __LINE__,
             SVI("auto z=__builtin_complex(1,2);"),
-            SVI("(test):1:8: error: __builtin_complex requires two arguments of the same real floating type\n"),
+            SVI("(test):1:8: error: __builtin_complex requires two arguments of the same real floating type. The types are 'int' and 'int'\n"),
         },
         {
             "imaginary rejects duplicate suffix", __LINE__, SVI("auto z=1.0ii;"),
@@ -8027,7 +10006,7 @@ TestFunction(test_parse_errors){
         },
         {
             "complex rejects ordered comparison", __LINE__, SVI("int x=1.0i<2.0;"),
-            SVI("(test):1:11: error: ordered comparison requires real operands\n"),
+            SVI("(test):1:11: error: ordered comparison requires real operands. The types are 'double _Complex' and 'double'\n"),
         },
         {
             "SRCLOC builtin requires parentheses", __LINE__,
@@ -8077,7 +10056,7 @@ TestFunction(test_parse_errors){
         {
             "default args reject surviving statement expressions", __LINE__,
             SVI("int f(int a=({1;}));"),
-            SVI("(test):1:13: error: default argument may not use a statement expression\n"),
+            SVI("(test):1:14: error: default argument may not use a statement expression\n"),
         },
         {
             "default args reject function pointer declarations", __LINE__,
@@ -8102,7 +10081,7 @@ TestFunction(test_parse_errors){
         {
             "default args do not change function pointer calls", __LINE__,
             SVI("int f(int a=1){return a;}\nint (*p)(int)=f;\nint x=p();"),
-            SVI("(test):3:8: error: Expected 1 arguments, got 0\n"),
+            SVI("(test):3:8: error: Expected 1 arguments, got 0. The type is 'int (*)(int)'\n"),
         },
         {
             "default args do not fill required parameters", __LINE__,
@@ -8116,6 +10095,26 @@ TestFunction(test_parse_errors){
                 "  return 0;\n"
                 "}\n"),
             SVI("(test):2:13: error: Use of undeclared label 'missing'\n"),
+        },
+        {
+            "callability reflection rejects mixed explicit and individual arguments", __LINE__,
+            SVI("(int(int)).is_callable_with(int,.args=(_Type[]){int});"),
+            SVI("(test):1:33: error: cannot combine an explicit typed pack with trailing arguments\n"),
+        },
+        {
+            "callability reflection rejects arguments after explicit pack", __LINE__,
+            SVI("(int(int)).is_callable_with(.args=(_Type[]){int},int);"),
+            SVI("(test):1:50: error: cannot combine an explicit typed pack with trailing arguments\n"),
+        },
+        {
+            "callability reflection rejects unknown parameter", __LINE__,
+            SVI("(int(int)).is_callable_with(.other=(_Type[]){int});"),
+            SVI("(test):1:30: error: no parameter named 'other'\n"),
+        },
+        {
+            "callability reflection rejects out of range parameter", __LINE__,
+            SVI("(int(int)).is_callable_with([1]=(_Type[]){int});"),
+            SVI("(test):1:29: error: positional designator value out of range\n"),
         },
         {
             "typed varargs reject function pointer syntax", __LINE__,
@@ -8160,17 +10159,17 @@ TestFunction(test_parse_errors){
         {
             "typed varargs reject incomplete elements", __LINE__,
             SVI("struct S; int f(struct S args...);"),
-            SVI("(test):1:30: error: typed varargs require a complete object element type\n"),
+            SVI("(test):1:30: error: typed varargs require a complete object element type. The type is 'struct S'\n"),
         },
         {
             "typed varargs require fixed arguments", __LINE__,
             SVI("int f(int x, int args...);\nint n=f();"),
-            SVI("(test):2:8: error: Too few arguments: expected at least 1, got 0\n"),
+            SVI("(test):2:8: error: Too few arguments: expected at least 1, got 0. The type is 'int(int, int[:])'\n"),
         },
         {
             "typed varargs function pointers do not pack", __LINE__,
             SVI("int f(int args...);\nint (*p)(int[:])=f;\nint n=p(1,2);"),
-            SVI("(test):3:8: error: Expected 1 arguments, got 2\n"),
+            SVI("(test):3:8: error: Expected 1 arguments, got 2. The type is 'int (*)(int[:])'\n"),
         },
         {
             "typed varargs check element conversions", __LINE__,
@@ -8416,8 +10415,18 @@ TestFunction(test_parse_errors){
             SVI("(test):2:18: error: static initializer requires a link-time constant\n"),
         },
         {
+            "static initializer rejects unsupported half numeric conversion", __LINE__,
+            SVI("static int x=(int)1.0f16;\n"),
+            SVI("(test):1:14: error: static initializer requires a link-time constant\n"),
+        },
+        {
             "static initializer rejects out-of-range float conversion", __LINE__,
             SVI("static signed char x=(signed char)-129.0;\n"),
+            SVI("(test):1:22: error: static initializer conversion is out of range\n"),
+        },
+        {
+            "static initializer checks range after rounded nested casts", __LINE__,
+            SVI("static signed char x=(signed char)(double)128.1L;\n"),
             SVI("(test):1:22: error: static initializer conversion is out of range\n"),
         },
         {
@@ -8438,22 +10447,22 @@ TestFunction(test_parse_errors){
         {
             "string initializer rejects incompatible integer array", __LINE__,
             SVI("int a[]=\"a\";\n"),
-            SVI("(test):1:9: error: string literal has incompatible array element type\n"),
+            SVI("(test):1:9: error: string literal has incompatible array element type. The types are 'char[2]' and 'int[]'\n"),
         },
         {
             "truncated string initializer rejects incompatible integer array", __LINE__,
             SVI("int a[1]=\"a\";\n"),
-            SVI("(test):1:10: error: string literal has incompatible array element type\n"),
+            SVI("(test):1:10: error: string literal has incompatible array element type. The types are 'char[2]' and 'int[1]'\n"),
         },
         {
             "string initializer rejects incompatible encoding", __LINE__,
             SVI("char a[]=u\"a\";\n"),
-            SVI("(test):1:10: error: string literal has incompatible array element type\n"),
+            SVI("(test):1:10: error: string literal has incompatible array element type. The types are 'unsigned short[2]' and 'char[]'\n"),
         },
         {
             "nested string initializer rejects incompatible encoding", __LINE__,
             SVI("struct S {unsigned short a[1];};\nstruct S s={\"a\"};\n"),
-            SVI("(test):2:13: error: string literal has incompatible array element type\n"),
+            SVI("(test):2:13: error: string literal has incompatible array element type. The types are 'char[2]' and 'unsigned short[1]'\n"),
         },
         {
             "local method cannot break enclosing loop", __LINE__,
@@ -8528,7 +10537,7 @@ TestFunction(test_parse_errors){
         {
             "for condition declaration requires scalar", __LINE__,
             SVI("for(;struct S{int x;} s={1};) {}\n"),
-            SVI("(test):1:1: error: 'for' condition requires scalar type\n"),
+            SVI("(test):1:1: error: 'for' condition requires scalar type. The type is 'struct S'\n"),
         },
         {
             "if header names do not escape", __LINE__,
@@ -8548,7 +10557,7 @@ TestFunction(test_parse_errors){
         {
             "switch header condition retains integer constraint", __LINE__,
             SVI("switch(float x=1) {}\n"),
-            SVI("(test):1:1: error: switch requires integer or _Type expression\n"),
+            SVI("(test):1:1: error: switch requires integer or _Type expression. The type is 'float'\n"),
         },
         {
             "selection header implicit condition requires initializer", __LINE__,
@@ -8568,7 +10577,7 @@ TestFunction(test_parse_errors){
         {
             "selection header condition retains scalar constraint", __LINE__,
             SVI("if(struct S{int n;} s={1}) {}\n"),
-            SVI("(test):1:1: error: 'if' condition requires scalar type\n"),
+            SVI("(test):1:1: error: 'if' condition requires scalar type. The type is 'struct S'\n"),
         },
         {
             "static_assert expression fails in unevaluated operand", __LINE__,
@@ -8714,7 +10723,7 @@ TestFunction(test_parse_errors){
             SVI("typedef int V __attribute__((vector_size(8)));\n"
                 "const _Any a=(V){1,2};\n"
                 "a.as(V)[0]=7;"),
-            SVI("(test):3:11: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):3:11: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "any rejects mutable const vector element pointer", __LINE__,
@@ -8728,7 +10737,7 @@ TestFunction(test_parse_errors){
             SVI("struct S {int items[2];};\n"
                 "const _Any a=(struct S){{1,2}};\n"
                 "a.as(struct S).items[0]=7;"),
-            SVI("(test):3:24: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):3:24: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "any rejects mutable const array member element pointer", __LINE__,
@@ -8744,7 +10753,7 @@ TestFunction(test_parse_errors){
                 "const struct S s={3};\n"
                 "s.a.as(int)=4;"
             ),
-            SVI("(test):3:12: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):3:12: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "any rejects tag write through const struct", __LINE__,
@@ -8753,7 +10762,7 @@ TestFunction(test_parse_errors){
                 "const struct S s={3};\n"
                 "s.a.type=int;\n"
             ),
-            SVI("(test):3:9: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):3:9: error: cannot assign to variable with const-qualified type. The type is 'const _Type'\n"),
         },
         {
             "any rejects mutable payload pointer through const struct", __LINE__,
@@ -8772,7 +10781,7 @@ TestFunction(test_parse_errors){
                 "const union U* p=&u;\n"
                 "p->a.as(int)=4;"
             ),
-            SVI("(test):4:13: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):4:13: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "any rejects oversized values", __LINE__,
@@ -8798,33 +10807,33 @@ TestFunction(test_parse_errors){
             "any rejects void view", __LINE__,
             SVI("_Any a={};\n"
                 "a.as(void);"),
-            SVI("(test):2:3: error: _Any.as requires a complete, non-array object type fitting its payload\n"),
+            SVI("(test):2:3: error: _Any.as requires a complete, non-array object type fitting its payload. The type is 'void'\n"),
         },
         {
             "any rejects array view", __LINE__,
             SVI("_Any a=3;\n"
                 "a.as(int[2]);"),
-            SVI("(test):2:3: error: _Any.as requires a complete, non-array object type fitting its payload\n"),
+            SVI("(test):2:3: error: _Any.as requires a complete, non-array object type fitting its payload. The type is 'int[2]'\n"),
         },
         {
             "any rejects large vector", __LINE__,
             SVI("_Any a=3;\n"
                 "typedef int __attribute__((vector_size(32))) int8;\n"
                 "a.as(int8);"),
-            SVI("(test):3:3: error: _Any.as requires a complete, non-array object type fitting its payload\n"),
+            SVI("(test):3:3: error: _Any.as requires a complete, non-array object type fitting its payload. The type is 'int __attribute__((vector_size(32)))'\n"),
         },
         {
             "any rejects oversized view", __LINE__,
             SVI("_Any a=3;\n"
                 "a.as(_Any);"),
-            SVI("(test):2:3: error: _Any.as requires a complete, non-array object type fitting its payload\n"),
+            SVI("(test):2:3: error: _Any.as requires a complete, non-array object type fitting its payload. The type is '_Any'\n"),
         },
         {
             "any rejects incomplete view", __LINE__,
             SVI("struct S;\n"
                 "_Any a=3;\n"
                 "a.as(struct S);"),
-            SVI("(test):3:3: error: _Any.as requires a complete, non-array object type fitting its payload\n"),
+            SVI("(test):3:3: error: _Any.as requires a complete, non-array object type fitting its payload. The type is 'struct S'\n"),
         },
         {
             "any rejects runtime view type", __LINE__,
@@ -8837,19 +10846,19 @@ TestFunction(test_parse_errors){
             "any rejects nontype view", __LINE__,
             SVI("_Any a=3;\n"
                 "a.as(4);"),
-            SVI("(test):2:3: error: _Any.as requires a complete, non-array object type fitting its payload\n"),
+            SVI("(test):2:3: error: _Any.as requires a complete, non-array object type fitting its payload. The type is 'int'\n"),
         },
         {
             "any rejects const view write", __LINE__,
             SVI("const _Any a=3;\n"
                 "a.as(int)=4;"),
-            SVI("(test):2:10: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):2:10: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "any rejects const tag write", __LINE__,
             SVI("const _Any a=3;\n"
                 "a.type=float;"),
-            SVI("(test):2:7: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):2:7: error: cannot assign to variable with const-qualified type. The type is 'const _Type'\n"),
         },
         {
             "any rejects const payload conversion", __LINE__,
@@ -8867,19 +10876,19 @@ TestFunction(test_parse_errors){
             "any rejects extraction cast", __LINE__,
             SVI("_Any a=3;\n"
                 "int i=(int)a;"),
-            SVI("(test):2:7: error: invalid cast\n"),
+            SVI("(test):2:7: error: invalid cast. The types are '_Any' and 'int'\n"),
         },
         {
             "any rejects compound assignment", __LINE__,
             SVI("_Any a=3;\n"
                 "a+=1;"),
-            SVI("(test):2:2: error: compound assignment requires arithmetic or pointer type\n"),
+            SVI("(test):2:2: error: compound assignment requires arithmetic or pointer type. The types are '_Any' and 'int'\n"),
         },
         {
             "any rejects increment", __LINE__,
             SVI("_Any a=3;\n"
                 "a++;"),
-            SVI("(test):2:2: error: increment/decrement requires arithmetic or pointer type\n"),
+            SVI("(test):2:2: error: increment/decrement requires arithmetic or pointer type. The type is '_Any'\n"),
         },
         {
             "qualified array typedef declarations reject dropped qualification", __LINE__,
@@ -8889,22 +10898,22 @@ TestFunction(test_parse_errors){
         {
             "atomic load rejects const array output buffer", __LINE__,
             SVI("int a[1]; const int b[1];\n__atomic_load(&a,&b,0);\n"),
-            SVI("(test):2:1: error: atomic output buffer must be writable\n"),
+            SVI("(test):2:1: error: atomic output buffer must be writable. The type is 'const int (*)[1]'\n"),
         },
         {
             "atomic store rejects const array object", __LINE__,
             SVI("const int a[1]; int b[1];\n__atomic_store(&a,&b,0);\n"),
-            SVI("(test):2:1: error: atomic operation requires writable object\n"),
+            SVI("(test):2:1: error: atomic operation requires writable object. The type is 'const int[1]'\n"),
         },
         {
             "atomic load rejects atomic array output buffer", __LINE__,
             SVI("int a[1]; _Atomic int b[1];\n__atomic_load(&a,&b,0);\n"),
-            SVI("(test):2:1: error: atomic buffer argument must be a pointer to compatible non-atomic storage\n"),
+            SVI("(test):2:1: error: atomic buffer argument must be a pointer to compatible non-atomic storage. The types are '_Atomic int (*)[1]' and 'int[1]'\n"),
         },
         {
             "array typedef parameter rejects element mutation", __LINE__,
             SVI("typedef int A[3];\nvoid f(const A a){a[0]=1;}\n"),
-            SVI("(test):2:23: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):2:23: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "array slices reject removed qualification", __LINE__,
@@ -8919,12 +10928,12 @@ TestFunction(test_parse_errors){
         {
             "array pointer comparison rejects incompatible bounds", __LINE__,
             SVI("int (*p)[2]; const int (*q)[3];\np==q;\n"),
-            SVI("(test):2:2: error: comparison of incompatible pointer types\n"),
+            SVI("(test):2:2: error: comparison of incompatible pointer types. The types are 'int (*)[2]' and 'const int (*)[3]'\n"),
         },
         {
             "array pointer subtraction rejects incompatible bounds", __LINE__,
             SVI("int (*p)[2]; const int (*q)[3];\np-q;\n"),
-            SVI("(test):2:2: error: pointer subtraction with incompatible types\n"),
+            SVI("(test):2:2: error: pointer subtraction with incompatible types. The types are 'int (*)[2]' and 'const int (*)[3]'\n"),
         },
         {
             "array pointers to void reject removed qualification", __LINE__,
@@ -8974,33 +10983,33 @@ TestFunction(test_parse_errors){
         {
             "constexpr pointer object cannot be assigned", __LINE__,
             SVI("static int n; constexpr int* p=&n;\np=nullptr;\n"),
-            SVI("(test):2:2: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):2:2: error: cannot assign to variable with const-qualified type. The type is 'int *const '\n"),
         },
         {
             "nullptr is not a pointer arithmetic operand", __LINE__,
             SVI("nullptr + 1;\n"),
-            SVI("(test):1:9: error: pointer arithmetic does not accept nullptr_t\n"),
+            SVI("(test):1:9: error: pointer arithmetic does not accept nullptr_t. The types are 'nullptr_t' and 'int'\n"),
         },
         {
             "nullptr subtraction rejects both null operands", __LINE__,
             SVI("nullptr - nullptr;\n"),
-            SVI("(test):1:9: error: pointer arithmetic does not accept nullptr_t\n"),
+            SVI("(test):1:9: error: pointer arithmetic does not accept nullptr_t. The types are 'nullptr_t' and 'nullptr_t'\n"),
         },
         {
             "pointer subtraction rejects nullptr rhs", __LINE__,
             SVI("int* p; p - nullptr;\n"),
-            SVI("(test):1:11: error: pointer arithmetic does not accept nullptr_t\n"),
+            SVI("(test):1:11: error: pointer arithmetic does not accept nullptr_t. The types are 'int *' and 'nullptr_t'\n"),
         },
         {
             "pointer subtraction rejects nullptr lhs", __LINE__,
             SVI("int* p; nullptr - p;\n"),
-            SVI("(test):1:17: error: pointer arithmetic does not accept nullptr_t\n"),
+            SVI("(test):1:17: error: pointer arithmetic does not accept nullptr_t. The types are 'nullptr_t' and 'int *'\n"),
         },
         {
             "any rejects condition", __LINE__,
             SVI("_Any a=3;\n"
                 "if(a) return 0;"),
-            SVI("(test):2:1: error: 'if' condition requires scalar type\n"),
+            SVI("(test):2:1: error: 'if' condition requires scalar type. The type is '_Any'\n"),
         },
         {
             "static_assert(0) fails", __LINE__,
@@ -9044,18 +11053,18 @@ TestFunction(test_parse_errors){
             "FAM embedded in struct", __LINE__,
             SVI("struct Inner { int n; char data[]; };\n"
                "struct Outer { struct Inner i; int x; };"),
-            SVI("(test):2:30: error: struct with flexible array member cannot be embedded\n"),
+            SVI("(test):2:30: error: struct with flexible array member cannot be embedded. The type is 'struct Inner'\n"),
         },
         {
             "FAM anon struct not at end", __LINE__,
             SVI("struct S { struct { int data[]; }; int x; };"),
-            SVI("(test):1:34: error: struct with flexible array member cannot be embedded\n"),
+            SVI("(test):1:34: error: struct with flexible array member cannot be embedded. The type is 'struct <anon>'\n"),
         },
         {
             "FAM named struct at end", __LINE__,
             SVI("struct Inner { int n; char data[]; };\n"
                "struct Outer { int x; struct Inner i; };"),
-            SVI("(test):2:37: error: struct with flexible array member cannot be embedded\n"),
+            SVI("(test):2:37: error: struct with flexible array member cannot be embedded. The type is 'struct Inner'\n"),
         },
         {
             "Duplicate field", __LINE__,
@@ -9080,12 +11089,12 @@ TestFunction(test_parse_errors){
         {
             "bitfield width exceeds type (int)", __LINE__,
             SVI("struct S { int x : 33; };"),
-            SVI("(test):1:18: error: bitfield width (33) exceeds size of type (32 bits)\n"),
+            SVI("(test):1:18: error: bitfield width (33) exceeds size of type (32 bits). The type is 'int'\n"),
         },
         {
             "bitfield width exceeds type (char)", __LINE__,
             SVI("struct S { char x : 9; };"),
-            SVI("(test):1:19: error: bitfield width (9) exceeds size of type (8 bits)\n"),
+            SVI("(test):1:19: error: bitfield width (9) exceeds size of type (8 bits). The type is 'char'\n"),
         },
         {
             "named bitfield zero width", __LINE__,
@@ -9095,23 +11104,23 @@ TestFunction(test_parse_errors){
         {
             "anonymous bitfield width exceeds type", __LINE__,
             SVI("struct S { int : 33; };"),
-            SVI("(test):1:16: error: bitfield width (33) exceeds size of type (32 bits)\n"),
+            SVI("(test):1:16: error: bitfield width (33) exceeds size of type (32 bits). The type is 'int'\n"),
         },
         {
             "float bitfield", __LINE__,
             SVI("struct S { float x : 3; };"),
-            SVI("(test):1:20: error: bitfield must have integer or enum type\n"),
+            SVI("(test):1:20: error: bitfield must have integer or enum type. The type is 'float'\n"),
         },
         {
             "struct bitfield", __LINE__,
             SVI("struct A { int x; };\n"
                 "struct S { struct A a : 3; };"),
-            SVI("(test):2:23: error: bitfield must have integer or enum type\n"),
+            SVI("(test):2:23: error: bitfield must have integer or enum type. The type is 'struct A'\n"),
         },
         {
             "anonymous float bitfield", __LINE__,
             SVI("struct S { float : 3; };"),
-            SVI("(test):1:18: error: bitfield must have integer or enum type\n"),
+            SVI("(test):1:18: error: bitfield must have integer or enum type. The type is 'float'\n"),
         },
         {
             "unnamed union method after unnamed field", __LINE__,
@@ -9127,7 +11136,7 @@ TestFunction(test_parse_errors){
             "unnamed typedef method with body", __LINE__,
             SVI("typedef int fn_t(int);\n"
                 "struct S { fn_t () {} };"),
-            SVI("(test):2:12: error: function cannot return function type\n"),
+            SVI("(test):2:12: error: function cannot return function type. The type is 'int()(int)'\n"),
         },
         {
             "typedef method body", __LINE__,
@@ -9236,13 +11245,13 @@ TestFunction(test_parse_errors){
             "chained designator: field into scalar", __LINE__,
             SVI("struct S { int a; };\n"
                "struct S s = {.a.b = 1};"),
-            SVI("(test):2:17: error: member designator into non-struct/union type\n"),
+            SVI("(test):2:17: error: member designator into non-struct/union type. The type is 'int'\n"),
         },
         {
             "chained designator: index into non-array", __LINE__,
             SVI("struct S { int a; };\n"
                "struct S s = {.a[0] = 1};"),
-            SVI("(test):2:17: error: index designator into non-array type\n"),
+            SVI("(test):2:17: error: index designator into non-array type. The type is 'int'\n"),
         },
         {
             "chained designator: unknown nested field", __LINE__,
@@ -9255,19 +11264,19 @@ TestFunction(test_parse_errors){
             "incomplete struct init", __LINE__,
             SVI("struct S;\n"
                "struct S s = {1};"),
-            SVI("(test):2:14: error: initializer for incomplete struct type\n"),
+            SVI("(test):2:14: error: initializer requires a complete object type or an array of unknown bound. The type is 'struct S'\n"),
         },
         {
             "incomplete union init", __LINE__,
             SVI("union U;\n"
                "union U u = {1};"),
-            SVI("(test):2:13: error: initializer for incomplete union type\n"),
+            SVI("(test):2:13: error: initializer requires a complete object type or an array of unknown bound. The type is 'union U'\n"),
         },
         {
             "init list for function type", __LINE__,
             SVI("typedef void fn(void);\n"
                "fn f = {1};"),
-            SVI("(test):2:8: error: cannot initialize type with initializer list\n"),
+            SVI("(test):2:8: error: initializer requires a complete object type or an array of unknown bound. The type is 'void(void)'\n"),
         },
         {
             "unterminated union init", __LINE__,
@@ -9328,6 +11337,56 @@ TestFunction(test_parse_errors){
             SVI("(test):1:23: error: aligned attribute requires a constant integral expression\n"),
         },
         {
+            "slice expressions cannot synthesize slices of void", __LINE__,
+            SVI("void*p;\np[:1];"),
+            SVI("(test):2:2: error: slice of void is not allowed. The type is 'void[:]'\n"),
+        },
+        {
+            "bounded slice expressions cannot synthesize slices of functions", __LINE__,
+            SVI("int(*p)(void);\np[0:1];"),
+            SVI("(test):2:2: error: type has no size. The type is 'int(void)'\n"),
+        },
+        {
+            "vector return elements are not assignable lvalues", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));V f(void);\nf()[0]=1;"),
+            SVI("(test):2:7: error: expression is not assignable\n"),
+        },
+        {
+            "vector return elements are not addressable", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));V f(void);\n&f()[0];"),
+            SVI("(test):2:1: error: cannot take address of rvalue\n"),
+        },
+        {
+            "qualified vector element remains read only", __LINE__,
+            SVI("typedef const int V __attribute__((vector_size(16)));\nV v={};\nv[0]=1;\n"),
+            SVI("(test):3:5: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
+        },
+        {
+            "vector rejects type erased element type", __LINE__,
+            SVI("typedef _Any V __attribute__((vector_size(32)));"),
+            SVI("(test):1:1: error: vector_size attribute requires a real arithmetic element type. The type is '_Any'\n"),
+        },
+        {
+            "vector rejects complex element type", __LINE__,
+            SVI("typedef _Complex float V __attribute__((vector_size(16)));"),
+            SVI("(test):1:1: error: vector_size attribute requires a real arithmetic element type. The type is 'float _Complex'\n"),
+        },
+        {
+            "vector rejects void element type", __LINE__,
+            SVI("typedef void V __attribute__((vector_size(16)));"),
+            SVI("(test):1:1: error: vector_size attribute requires a real arithmetic element type. The type is 'void'\n"),
+        },
+        {
+            "vector rejects type-valued element type", __LINE__,
+            SVI("typedef _Type V __attribute__((vector_size(16)));"),
+            SVI("(test):1:1: error: vector_size attribute requires a real arithmetic element type. The type is '_Type'\n"),
+        },
+        {
+            "vector rejects nullptr element type", __LINE__,
+            SVI("typedef typeof(nullptr) V __attribute__((vector_size(16)));"),
+            SVI("(test):1:1: error: vector_size attribute requires a real arithmetic element type. The type is 'nullptr_t'\n"),
+        },
+        {
             "wide vector size cannot discard high bits", __LINE__,
             SVI("typedef int v __attribute__((vector_size(((unsigned __int128)1<<64)+8)));"),
             SVI("(test):1:30: error: vector_size attribute requires a constant integral expression\n"),
@@ -9348,49 +11407,49 @@ TestFunction(test_parse_errors){
             "array element alignment exceeds size", __LINE__,
             SVI("typedef int High __attribute__((aligned(16)));\n"
                 "High a[3];"),
-            SVI("(test):2:1: error: alignment of array elements is greater than element size\n"),
+            SVI("(test):2:1: error: alignment of array elements is greater than element size. The type is 'int __attribute__((aligned(16)))[3]'\n"),
         },
         {
             "pointer to invalid aligned array", __LINE__,
             SVI("typedef int High __attribute__((aligned(16)));\n"
                 "High (*p)[3];"),
-            SVI("(test):2:1: error: alignment of array elements is greater than element size\n"),
+            SVI("(test):2:1: error: alignment of array elements is greater than element size. The type is 'int __attribute__((aligned(16))) (*)[3]'\n"),
         },
         {
             "typedef of invalid aligned array", __LINE__,
             SVI("typedef int High __attribute__((aligned(16)));\n"
                 "typedef High A[3];"),
-            SVI("(test):2:1: error: alignment of array elements is greater than element size\n"),
+            SVI("(test):2:1: error: alignment of array elements is greater than element size. The type is 'int __attribute__((aligned(16)))[3]'\n"),
         },
         {
             "aligned array parameter before decay", __LINE__,
             SVI("typedef int High __attribute__((aligned(16)));\n"
                 "void f(High a[3]);"),
-            SVI("(test):2:8: error: alignment of array elements is greater than element size\n"),
+            SVI("(test):2:8: error: alignment of array elements is greater than element size. The type is 'int __attribute__((aligned(16)))[3]'\n"),
         },
         {
             "invalid aligned array type name", __LINE__,
             SVI("typedef int High __attribute__((aligned(16)));\n"
                 "_Static_assert(sizeof(High[3])>0);"),
-            SVI("(test):2:23: error: alignment of array elements is greater than element size\n"),
+            SVI("(test):2:23: error: alignment of array elements is greater than element size. The type is 'int __attribute__((aligned(16)))[3]'\n"),
         },
         {
             "invalid aligned member array", __LINE__,
             SVI("typedef int High __attribute__((aligned(16)));\n"
                 "struct S { High a[3]; };"),
-            SVI("(test):2:12: error: alignment of array elements is greater than element size\n"),
+            SVI("(test):2:12: error: alignment of array elements is greater than element size. The type is 'int __attribute__((aligned(16)))[3]'\n"),
         },
         {
             "array element size must be a multiple of alignment", __LINE__,
             SVI("typedef struct { char bytes[6]; } Odd __attribute__((aligned(4)));\n"
                 "Odd a[3];"),
-            SVI("(test):2:1: error: size of array element is not a multiple of its alignment\n"),
+            SVI("(test):2:1: error: size of array element is not a multiple of its alignment. The type is 'struct <anon> __attribute__((aligned(4)))[3]'\n"),
         },
         {
             "vector_size on non-scalar type", __LINE__,
             SVI("struct S { int a; };\n"
                "typedef struct S v4s __attribute__((vector_size(16)));"),
-            SVI("(test):2:1: error: vector_size attribute requires a scalar type\n"),
+            SVI("(test):2:1: error: vector_size attribute requires a scalar type. The type is 'struct S'\n"),
         },
         {
             "vector_size not power of 2", __LINE__,
@@ -9405,7 +11464,7 @@ TestFunction(test_parse_errors){
         {
             "vector_size smaller than element", __LINE__,
             SVI("typedef int v __attribute__((vector_size(2)));"),
-            SVI("(test):1:1: error: vector_size is smaller than the element type\n"),
+            SVI("(test):1:1: error: vector_size is smaller than the element type. The type is 'int'\n"),
         },
         {
             "vector init: excess elements", __LINE__,
@@ -9422,42 +11481,42 @@ TestFunction(test_parse_errors){
         {
             "packed on non-struct", __LINE__,
             SVI("typedef int packed_int __attribute__((packed));"),
-            SVI("(test):1:1: error: packed attribute on non-struct type is not supported\n"),
+            SVI("(test):1:1: error: packed attribute on non-struct type is not supported. The type is 'int'\n"),
         },
         {
             "transparent_union on non-union", __LINE__,
             SVI("typedef int tu __attribute__((transparent_union));"),
-            SVI("(test):1:1: error: transparent_union attribute on non-union type is not supported\n"),
+            SVI("(test):1:1: error: transparent_union attribute on non-union type is not supported. The type is 'int'\n"),
         },
         {
             "too few args", __LINE__,
             SVI("void f(int a, int b);\n"
                "int x = f(1);"),
-            SVI("(test):2:10: error: Expected 2 arguments, got 1\n"),
+            SVI("(test):2:10: error: Expected 2 arguments, got 1. The type is 'void(int, int)'\n"),
         },
         {
             "too many args", __LINE__,
             SVI("void f(int a);\n"
                "int x = f(1, 2);"),
-            SVI("(test):2:10: error: Expected 1 arguments, got 2\n"),
+            SVI("(test):2:10: error: Expected 1 arguments, got 2. The type is 'void(int)'\n"),
         },
         {
             "zero args to non-void function", __LINE__,
             SVI("int f(int a);\n"
                "int x = f();"),
-            SVI("(test):2:10: error: Expected 1 arguments, got 0\n"),
+            SVI("(test):2:10: error: Expected 1 arguments, got 0. The type is 'int(int)'\n"),
         },
         {
             "too few args to variadic", __LINE__,
             SVI("int printf(const char *fmt, ...);\n"
                "int x = printf();"),
-            SVI("(test):2:15: error: Too few arguments: expected at least 1, got 0\n"),
+            SVI("(test):2:15: error: Too few arguments: expected at least 1, got 0. The type is 'int(const char *, ...)'\n"),
         },
         {
             "call non-function", __LINE__,
             SVI("int x;\n"
                "int y = x(1);"),
-            SVI("(test):2:10: error: Called object is not a function or function pointer\n"),
+            SVI("(test):2:10: error: Called object is not a function or function pointer. The type is 'int'\n"),
         },
         {
             "call: struct arg to int param", __LINE__,
@@ -9497,6 +11556,16 @@ TestFunction(test_parse_errors){
             SVI("(test):2:14: error: cannot implicitly convert from 'int' to 'struct S'\n"),
         },
         {
+            "typed null pointer cannot discard pointee qualifiers", __LINE__,
+            SVI("int *p=(const int*)0;\n"),
+            SVI("(test):1:8: error: cannot implicitly convert from 'const int *' to 'int *'\n"),
+        },
+        {
+            "typed null pointer must have compatible pointee", __LINE__,
+            SVI("int *p=(float*)0;\n"),
+            SVI("(test):1:8: error: cannot implicitly convert from 'float *' to 'int *'\n"),
+        },
+        {
             "assign non-zero int to pointer", __LINE__,
             SVI("int *p = 1;"),
             SVI("(test):1:10: error: cannot implicitly convert from 'int' to 'int *'\n"),
@@ -9524,52 +11593,52 @@ TestFunction(test_parse_errors){
         {
             "void call is not an if condition", __LINE__,
             SVI("void f(void);\nif(f()){}\n"),
-            SVI("(test):2:1: error: 'if' condition requires scalar type\n"),
+            SVI("(test):2:1: error: 'if' condition requires scalar type. The type is 'void'\n"),
         },
         {
             "vector is not an if condition", __LINE__,
             SVI("typedef int V __attribute__((vector_size(32))); V v={};\nif(v){}\n"),
-            SVI("(test):2:1: error: 'if' condition requires scalar type\n"),
+            SVI("(test):2:1: error: 'if' condition requires scalar type. The type is 'int __attribute__((vector_size(32)))'\n"),
         },
         {
             "type metadata is not an if condition", __LINE__,
             SVI("_Type t=int;\nif(t){}\n"),
-            SVI("(test):2:1: error: 'if' condition requires scalar type\n"),
+            SVI("(test):2:1: error: 'if' condition requires scalar type. The type is '_Type'\n"),
         },
         {
             "type metadata is not a logical not operand", __LINE__,
             SVI("constexpr _Type t=int;\n!t;\n"),
-            SVI("(test):2:1: error: '!' requires scalar type\n"),
+            SVI("(test):2:1: error: '!' requires scalar type. The type is '_Type'\n"),
         },
         {
             "type metadata is not a logical and operand", __LINE__,
             SVI("_Type t=int;\nt&&1;\n"),
-            SVI("(test):2:2: error: '&&' requires scalar type\n"),
+            SVI("(test):2:2: error: '&&' requires scalar type. The type is '_Type'\n"),
         },
         {
             "type metadata is not a logical or operand", __LINE__,
             SVI("_Type t=int;\n1||t;\n"),
-            SVI("(test):2:2: error: '||' requires scalar type\n"),
+            SVI("(test):2:2: error: '||' requires scalar type. The type is '_Type'\n"),
         },
         {
             "type metadata is not a conditional condition", __LINE__,
             SVI("_Type t=int;\nt?1:0;\n"),
-            SVI("(test):2:2: error: '?:' requires scalar type\n"),
+            SVI("(test):2:2: error: '?:' requires scalar type. The type is '_Type'\n"),
         },
         {
             "vector is not a logical operand", __LINE__,
             SVI("typedef int V __attribute__((vector_size(16))); V v={};\nv && 1;\n"),
-            SVI("(test):2:3: error: '&&' requires scalar type\n"),
+            SVI("(test):2:3: error: '&&' requires scalar type. The type is 'int __attribute__((vector_size(16)))'\n"),
         },
         {
             "vector is not a logical not operand", __LINE__,
             SVI("typedef int V __attribute__((vector_size(32))); V v={};\n!v;\n"),
-            SVI("(test):2:1: error: '!' requires scalar type\n"),
+            SVI("(test):2:1: error: '!' requires scalar type. The type is 'int __attribute__((vector_size(32)))'\n"),
         },
         {
             "vector is not a conditional condition", __LINE__,
             SVI("typedef int V __attribute__((vector_size(8))); V v={};\nv?1:0;\n"),
-            SVI("(test):2:2: error: '?:' requires scalar type\n"),
+            SVI("(test):2:2: error: '?:' requires scalar type. The type is 'int __attribute__((vector_size(8)))'\n"),
         },
         {
             "vector cannot implicitly convert to bool", __LINE__,
@@ -9589,17 +11658,17 @@ TestFunction(test_parse_errors){
         {
             "void call is not a logical operand", __LINE__,
             SVI("void f(void);\nf() && 1;\n"),
-            SVI("(test):2:5: error: '&&' requires scalar type\n"),
+            SVI("(test):2:5: error: '&&' requires scalar type. The type is 'void'\n"),
         },
         {
             "void call is not a logical not operand", __LINE__,
             SVI("void f(void);\n!f();\n"),
-            SVI("(test):2:1: error: '!' requires scalar type\n"),
+            SVI("(test):2:1: error: '!' requires scalar type. The type is 'void'\n"),
         },
         {
             "void call is not a conditional condition", __LINE__,
             SVI("void f(void);\nf()?1:0;\n"),
-            SVI("(test):2:4: error: '?:' requires scalar type\n"),
+            SVI("(test):2:4: error: '?:' requires scalar type. The type is 'void'\n"),
         },
         {
             "assign pointer to int", __LINE__,
@@ -9617,7 +11686,7 @@ TestFunction(test_parse_errors){
             "assign to const variable", __LINE__,
             SVI("const int x = 0;\n"
                "x = 1;"),
-            SVI("(test):2:3: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):2:3: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "method-only struct remains incomplete", __LINE__,
@@ -9686,6 +11755,22 @@ TestFunction(test_parse_errors){
             SVI("(test):2:1: error: Redefinition of struct 'S'\n"),
         },
         {
+            "record redefinition rejects changed member offsets with equal size", __LINE__,
+            SVI("struct S { char c; int i; } __attribute__((aligned(16)));\n"
+                "#pragma pack(push,1)\n"
+                "struct S { char c; int i; } __attribute__((aligned(16)));\n"
+                "#pragma pack(pop)\n"),
+            SVI("(test):3:1: error: Redefinition of struct 'S'\n"),
+        },
+        {
+            "record redefinition rejects distinct compatible array element types", __LINE__,
+            SVI("struct S { int x; };\n"
+                "void f(void) { struct T { struct S s[2][3]; };\n"
+                "struct S { int x; };\n"
+                "struct T { struct S s[2][3]; }; }\n"),
+            SVI("(test):4:1: error: Redefinition of struct 'T'\n"),
+        },
+        {
             "record redefinition rejects distinct compatible member types", __LINE__,
             SVI("struct S { int x; };\n"
                 "void f(void) { struct T { struct S s; };\n"
@@ -9721,7 +11806,7 @@ TestFunction(test_parse_errors){
         {
             "lambda: non-function type", __LINE__,
             SVI("int r = int{1};"),
-            SVI("(test):1:9: error: Lambda requires a function type, got non-function type\n"),
+            SVI("(test):1:9: error: Lambda requires a function type, got non-function type. The type is 'int'\n"),
         },
         {
             "static if: non-constant condition", __LINE__,
@@ -9768,7 +11853,7 @@ TestFunction(test_parse_errors){
         {
             "self sizeof inferred array", __LINE__,
             SVI("int x[] = {sizeof x};"),
-            SVI("(test):1:12: error: sizeof applied to incomplete array type\n"),
+            SVI("(test):1:12: error: sizeof applied to incomplete array type. The type is 'int[]'\n"),
         },
         {
             "assign to rvalue", __LINE__,
@@ -9798,23 +11883,23 @@ TestFunction(test_parse_errors){
         {
             "pointer plus pointer", __LINE__,
             SVI("int* a; int* b; int* c = a + b;"),
-            SVI("(test):1:28: error: addition of two pointers\n"),
+            SVI("(test):1:28: error: addition of two pointers. The types are 'int *' and 'int *'\n"),
         },
         {
             "prefix inc const", __LINE__,
             SVI("const int x = 1; int y = ++x;"),
-            SVI("(test):1:26: error: cannot modify const-qualified variable\n"),
+            SVI("(test):1:26: error: cannot modify const-qualified variable. The type is 'const int'\n"),
         },
         {
             "postfix inc const", __LINE__,
             SVI("const int x = 1; int y = x++;"),
-            SVI("(test):1:27: error: cannot modify const-qualified variable\n"),
+            SVI("(test):1:27: error: cannot modify const-qualified variable. The type is 'const int'\n"),
         },
         {
             "const struct members", __LINE__,
             SVI("const struct S {int x, y;} s = {1, 2};\n"
                 "s.x = 3;"),
-            SVI("(test):2:5: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):2:5: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "addrof const struct members", __LINE__,
@@ -9831,32 +11916,32 @@ TestFunction(test_parse_errors){
         {
             "bitnot float", __LINE__,
             SVI("int x = ~3.0f;\n"),
-            SVI("(test):1:9: error: '~' requires integer type\n"),
+            SVI("(test):1:9: error: '~' requires integer type. The type is 'float'\n"),
         },
         {
             "modulo float", __LINE__,
             SVI("float x = 3.0f % 2.0f;\n"),
-            SVI("(test):1:16: error: operator requires integer operands\n"),
+            SVI("(test):1:16: error: operator '%' requires integer operands. The types are 'float' and 'float'\n"),
         },
         {
             "bitand float", __LINE__,
             SVI("float a; float b; int z = a & b;\n"),
-            SVI("(test):1:29: error: operator requires integer operands\n"),
+            SVI("(test):1:29: error: operator '&' requires integer operands. The types are 'float' and 'float'\n"),
         },
         {
             "bitor float", __LINE__,
             SVI("float a; float b; int z = a | b;\n"),
-            SVI("(test):1:29: error: operator requires integer operands\n"),
+            SVI("(test):1:29: error: operator '|' requires integer operands. The types are 'float' and 'float'\n"),
         },
         {
             "bitxor float", __LINE__,
             SVI("float a; float b; int z = a ^ b;\n"),
-            SVI("(test):1:29: error: operator requires integer operands\n"),
+            SVI("(test):1:29: error: operator '^' requires integer operands. The types are 'float' and 'float'\n"),
         },
         {
             "switch float", __LINE__,
             SVI("switch(1.0){}\n"),
-            SVI("(test):1:1: error: switch requires integer or _Type expression\n"),
+            SVI("(test):1:1: error: switch requires integer or _Type expression. The type is 'double'\n"),
         },
         {
             "duplicate case", __LINE__,
@@ -9931,142 +12016,142 @@ TestFunction(test_parse_errors){
         {
             "if struct condition", __LINE__,
             SVI("struct S{int x;}; struct S s; if(s){}\n"),
-            SVI("(test):1:31: error: 'if' condition requires scalar type\n"),
+            SVI("(test):1:31: error: 'if' condition requires scalar type. The type is 'struct S'\n"),
         },
         {
             "while struct condition", __LINE__,
             SVI("struct S{int x;}; struct S s; while(s){}\n"),
-            SVI("(test):1:31: error: 'while' condition requires scalar type\n"),
+            SVI("(test):1:31: error: 'while' condition requires scalar type. The type is 'struct S'\n"),
         },
         {
             "do-while struct condition", __LINE__,
             SVI("struct S{int x;}; struct S s; do{}while(s);\n"),
-            SVI("(test):1:31: error: 'do-while' condition requires scalar type\n"),
+            SVI("(test):1:31: error: 'do-while' condition requires scalar type. The type is 'struct S'\n"),
         },
         {
             "for struct condition", __LINE__,
             SVI("struct S{int x;}; struct S s; for(;s;){}\n"),
-            SVI("(test):1:31: error: 'for' condition requires scalar type\n"),
+            SVI("(test):1:31: error: 'for' condition requires scalar type. The type is 'struct S'\n"),
         },
         {
             "logand struct", __LINE__,
             SVI("struct S{int x;}; struct S a; struct S b; int c = a && b;\n"),
-            SVI("(test):1:53: error: '&&' requires scalar type\n"),
+            SVI("(test):1:53: error: '&&' requires scalar type. The type is 'struct S'\n"),
         },
         {
             "logor struct", __LINE__,
             SVI("struct S{int x;}; struct S a; struct S b; int c = a || b;\n"),
-            SVI("(test):1:53: error: '||' requires scalar type\n"),
+            SVI("(test):1:53: error: '||' requires scalar type. The type is 'struct S'\n"),
         },
         {
             "lognot struct", __LINE__,
             SVI("struct S{int x;}; struct S s; int c = !s;\n"),
-            SVI("(test):1:39: error: '!' requires scalar type\n"),
+            SVI("(test):1:39: error: '!' requires scalar type. The type is 'struct S'\n"),
         },
         {
             "subscript float index", __LINE__,
             SVI("int a[10]; int x = a[1.5];\n"),
-            SVI("(test):1:21: error: array subscript requires integer or pointer type\n"),
+            SVI("(test):1:21: error: array subscript requires integer or pointer type. The type is 'double'\n"),
         },
         {
             "inc struct", __LINE__,
             SVI("struct S{int x;}; struct S s; struct S t = s++;\n"),
-            SVI("(test):1:45: error: increment/decrement requires arithmetic or pointer type\n"),
+            SVI("(test):1:45: error: increment/decrement requires arithmetic or pointer type. The type is 'struct S'\n"),
         },
         {
             "increment rejects metadata values", __LINE__,
             SVI("_Type t=int;\nt++;\n"),
-            SVI("(test):2:2: error: increment/decrement requires arithmetic or pointer type\n"),
+            SVI("(test):2:2: error: increment/decrement requires arithmetic or pointer type. The type is '_Type'\n"),
         },
         {
             "prefix decrement rejects nullptr values", __LINE__,
             SVI("typeof(nullptr) n=nullptr;\n--n;\n"),
-            SVI("(test):2:1: error: increment/decrement requires arithmetic or pointer type\n"),
+            SVI("(test):2:1: error: increment/decrement requires arithmetic or pointer type. The type is 'nullptr_t'\n"),
         },
         {
             "pointer addition requires completeness at the expression", __LINE__,
             SVI("struct S; struct S* p;\np+1;\nstruct S {int x;};\n"),
-            SVI("(test):2:2: error: pointer arithmetic requires a complete pointee type\n"),
+            SVI("(test):2:2: error: type has no size. The type is 'struct S'\n"),
         },
         {
             "pointer subtraction requires completeness at the expression", __LINE__,
             SVI("struct S; struct S* p;\np-p;\nstruct S {int x;};\n"),
-            SVI("(test):2:2: error: pointer arithmetic requires a complete pointee type\n"),
+            SVI("(test):2:2: error: type has no size. The type is 'struct S'\n"),
         },
         {
             "pointer compound assignment requires completeness", __LINE__,
             SVI("enum E; enum E* p;\np+=1;\nenum E {A=1};\n"),
-            SVI("(test):2:2: error: pointer arithmetic requires a complete pointee type\n"),
+            SVI("(test):2:2: error: type has no size. The type is 'enum E'\n"),
         },
         {
             "pointer increment requires completeness", __LINE__,
             SVI("union U; union U* p;\n++p;\nunion U {int x;};\n"),
-            SVI("(test):2:1: error: pointer arithmetic requires a complete pointee type\n"),
+            SVI("(test):2:1: error: type has no size. The type is 'union U *'\n"),
         },
         {
             "pointer postfix decrement requires completeness", __LINE__,
             SVI("int (*p)[];\np--;\n"),
-            SVI("(test):2:2: error: pointer arithmetic requires a complete pointee type\n"),
+            SVI("(test):2:2: error: type has no size. The type is 'int (*)[]'\n"),
         },
         {
             "pointer subscript requires complete elements", __LINE__,
             SVI("struct S; struct S* p;\np[1];\nstruct S {int x;};\n"),
-            SVI("(test):2:2: error: pointer arithmetic requires a complete pointee type\n"),
+            SVI("(test):2:2: error: type has no size. The type is 'struct S'\n"),
         },
         {
             "pointer slices require complete elements", __LINE__,
             SVI("struct S; struct S* p;\np[0:1];\nstruct S {int x;};\n"),
-            SVI("(test):2:2: error: pointer arithmetic requires a complete pointee type\n"),
+            SVI("(test):2:2: error: type has no size. The type is 'struct S'\n"),
         },
         {
             "prefixless pointer slices require complete elements", __LINE__,
             SVI("struct S; struct S* p;\np[:1];\nstruct S {int x;};\n"),
-            SVI("(test):2:2: error: pointer arithmetic requires a complete pointee type\n"),
+            SVI("(test):2:2: error: type has no size. The type is 'struct S'\n"),
         },
         {
             "dec struct", __LINE__,
             SVI("struct S{int x;}; struct S s; struct S t = --s;\n"),
-            SVI("(test):1:44: error: increment/decrement requires arithmetic or pointer type\n"),
+            SVI("(test):1:44: error: increment/decrement requires arithmetic or pointer type. The type is 'struct S'\n"),
         },
         {
             "ptr sub incompatible", __LINE__,
             SVI("int* a; char* b; long d = a - b;\n"),
-            SVI("(test):1:29: error: pointer subtraction with incompatible types\n"),
+            SVI("(test):1:29: error: pointer subtraction with incompatible types. The types are 'int *' and 'char *'\n"),
         },
         {
             "ptr cmp incompatible", __LINE__,
             SVI("int* a; char* b; int c = a < b;\n"),
-            SVI("(test):1:28: error: comparison of incompatible pointer types\n"),
+            SVI("(test):1:28: error: comparison of incompatible pointer types. The types are 'int *' and 'char *'\n"),
         },
         {
             "modassign float", __LINE__,
             SVI("float x = 3.0f; float y = (x %= 2);\n"),
-            SVI("(test):1:30: error: operator requires integer operands\n"),
+            SVI("(test):1:30: error: operator '%=' requires integer operands. The types are 'float' and 'int'\n"),
         },
         {
             "bitandassign float", __LINE__,
             SVI("float x = 3.0f; float y = (x &= 1);\n"),
-            SVI("(test):1:30: error: operator requires integer operands\n"),
+            SVI("(test):1:30: error: operator '&=' requires integer operands. The types are 'float' and 'int'\n"),
         },
         {
             "bitorassign float", __LINE__,
             SVI("float x = 3.0f; float y = (x |= 1);\n"),
-            SVI("(test):1:30: error: operator requires integer operands\n"),
+            SVI("(test):1:30: error: operator '|=' requires integer operands. The types are 'float' and 'int'\n"),
         },
         {
             "bitxorassign float", __LINE__,
             SVI("float x = 3.0f; float y = (x ^= 1);\n"),
-            SVI("(test):1:30: error: operator requires integer operands\n"),
+            SVI("(test):1:30: error: operator '^=' requires integer operands. The types are 'float' and 'int'\n"),
         },
         {
             "lshiftassign float", __LINE__,
             SVI("float x = 3.0f; float y = (x <<= 1);\n"),
-            SVI("(test):1:30: error: operator requires integer operands\n"),
+            SVI("(test):1:30: error: operator '<<=' requires integer operands. The types are 'float' and 'int'\n"),
         },
         {
             "rshiftassign float", __LINE__,
             SVI("float x = 3.0f; float y = (x >>= 1);\n"),
-            SVI("(test):1:30: error: operator requires integer operands\n"),
+            SVI("(test):1:30: error: operator '>>=' requires integer operands. The types are 'float' and 'int'\n"),
         },
         {
             "duplicate local var", __LINE__,
@@ -10081,52 +12166,52 @@ TestFunction(test_parse_errors){
         {
             "array of void", __LINE__,
             SVI("void a[10];\n"),
-            SVI("(test):1:1: error: array of void is not allowed\n"),
+            SVI("(test):1:1: error: array of void is not allowed. The type is 'void[10]'\n"),
         },
         {
             "func returning array", __LINE__,
             SVI("int f(void)[10];\n"),
-            SVI("(test):1:1: error: function cannot return array type\n"),
+            SVI("(test):1:1: error: function cannot return array type. The type is 'int(void)[10]'\n"),
         },
         {
             "func returning function", __LINE__,
             SVI("int f(void)(int);\n"),
-            SVI("(test):1:1: error: function cannot return function type\n"),
+            SVI("(test):1:1: error: function cannot return function type. The type is 'int(void)(int)'\n"),
         },
         {
             "ptr < float", __LINE__,
             SVI("int *p; float f; int x = p < f;\n"),
-            SVI("(test):1:30: error: cannot implicitly convert from 'float' to 'int *'\n"),
+            SVI("(test):1:28: error: ordered pointer comparison requires two object pointers. The types are 'int *' and 'float'\n"),
         },
         {
             "ptr > int", __LINE__,
             SVI("int *p; int x = p > 42;\n"),
-            SVI("(test):1:21: error: cannot implicitly convert from 'int' to 'int *'\n"),
+            SVI("(test):1:19: error: ordered pointer comparison requires two object pointers. The types are 'int *' and 'int'\n"),
         },
         {
             "ptr + float", __LINE__,
             SVI("int *p; int *q = p + 3.14f;\n"),
-            SVI("(test):1:20: error: pointer arithmetic requires integer operand\n"),
+            SVI("(test):1:20: error: pointer arithmetic requires integer operand. The types are 'int *' and 'float'\n"),
         },
         {
             "ptr - float", __LINE__,
             SVI("int *p; int *q = p - 3.14f;\n"),
-            SVI("(test):1:20: error: pointer arithmetic requires integer operand\n"),
+            SVI("(test):1:20: error: pointer arithmetic requires integer operand. The types are 'int *' and 'float'\n"),
         },
         {
             "float lshift", __LINE__,
             SVI("int x = 3.0 << 2;\n"),
-            SVI("(test):1:13: error: shift operands require integer type\n"),
+            SVI("(test):1:13: error: shift operands require integer type. The types are 'double' and 'int'\n"),
         },
         {
             "rshift float", __LINE__,
             SVI("int x = 1 >> 2.0;\n"),
-            SVI("(test):1:11: error: shift operands require integer type\n"),
+            SVI("(test):1:11: error: shift operands require integer type. The types are 'int' and 'double'\n"),
         },
         {
             "ternary struct condition", __LINE__,
             SVI("struct S{int x;}; struct S s; int x = s ? 1 : 0;\n"),
-            SVI("(test):1:41: error: '?:' requires scalar type\n"),
+            SVI("(test):1:41: error: '?:' requires scalar type. The type is 'struct S'\n"),
         },
         {
             "void func assigned to int", __LINE__,
@@ -10137,32 +12222,32 @@ TestFunction(test_parse_errors){
         {
             "ternary ptr and float", __LINE__,
             SVI("int *p; int cond; void* q = cond ? p : 3.14;\n"),
-            SVI("(test):1:34: error: incompatible operand types for ternary\n"),
+            SVI("(test):1:34: error: incompatible operand types for ternary. The types are 'int *' and 'double'\n"),
         },
         {
             "ptr mulassign", __LINE__,
             SVI("int *p; p *= 0;\n"),
-            SVI("(test):1:11: error: compound assignment requires arithmetic operands\n"),
+            SVI("(test):1:11: error: compound assignment requires arithmetic operands. The types are 'int *' and 'int'\n"),
         },
         {
             "compound modulo rejects floating rhs", __LINE__,
             SVI("int x; x %= 0.5;\n"),
-            SVI("(test):1:10: error: operator requires integer operands\n"),
+            SVI("(test):1:10: error: operator '%=' requires integer operands. The types are 'int' and 'double'\n"),
         },
         {
             "compound bitwise rejects floating rhs", __LINE__,
             SVI("int x; x &= 0.5;\n"),
-            SVI("(test):1:10: error: operator requires integer operands\n"),
+            SVI("(test):1:10: error: operator '&=' requires integer operands. The types are 'int' and 'double'\n"),
         },
         {
             "compound shift rejects floating rhs", __LINE__,
             SVI("int x; x <<= 0.5;\n"),
-            SVI("(test):1:10: error: operator requires integer operands\n"),
+            SVI("(test):1:10: error: operator '<<=' requires integer operands. The types are 'int' and 'double'\n"),
         },
         {
             "ptr divassign", __LINE__,
             SVI("int *p; p /= 0;\n"),
-            SVI("(test):1:11: error: compound assignment requires arithmetic operands\n"),
+            SVI("(test):1:11: error: compound assignment requires arithmetic operands. The types are 'int *' and 'int'\n"),
         },
         {
             "global var redef", __LINE__,
@@ -10191,6 +12276,71 @@ TestFunction(test_parse_errors){
             SVI("(test):1:15: error: duplicate parameter name 'x'\n"),
         },
         {
+            "hotswap rejects different return types", __LINE__,
+            SVI("int f(int x);\n"
+                "long g(int x);\n"
+                "__hotswap(f, g);\n"),
+            SVI("(test):3:14: error: __hotswap function pointer types must match. The types are 'int (*)(int)' and 'long (*)(int)'\n"),
+        },
+        {
+            "hotswap rejects different parameter pointee qualifiers", __LINE__,
+            SVI("int f(int *x);\n"
+                "int g(const int *x);\n"
+                "__hotswap(f, g);\n"),
+            SVI("(test):3:14: error: __hotswap function pointer types must match. The types are 'int (*)(int *)' and 'int (*)(const int *)'\n"),
+        },
+        {
+            "hotswap requires matching prototypes", __LINE__,
+            SVI("int f();\n"
+                "int g(int x);\n"
+                "__hotswap(f, g);\n"),
+            SVI("(test):3:14: error: __hotswap function pointer types must match. The types are 'int (*)()' and 'int (*)(int)'\n"),
+        },
+        {
+            "typedef function redeclaration cannot complete nested array bounds", __LINE__,
+            SVI("typedef void F(int (*)[]);\n"
+                "typedef void F(int (*)[3]);\n"),
+            SVI("(test):2:27: error: redefinition of typedef 'F' as 'void(int (*)[3])'; previously defined as 'void(int (*)[])'\n"),
+        },
+        {
+            "typedef redeclaration cannot complete an array", __LINE__,
+            SVI("typedef int A[];\n"
+                "typedef int A[3];\n"),
+            SVI("(test):2:17: error: redefinition of typedef 'A' as 'int[3]'; previously defined as 'int[]'\n"),
+        },
+        {
+            "typedef function redeclaration preserves pointee qualifiers", __LINE__,
+            SVI("typedef void F(int *);\n"
+                "typedef void F(const int *);\n"),
+            SVI("(test):2:28: error: redefinition of typedef 'F' as 'void(const int *)'; previously defined as 'void(int *)'\n"),
+        },
+        {
+            "typedef redeclaration preserves nominal record identity", __LINE__,
+            SVI("struct S { int x; }; typedef struct S Original;\n"
+                "void f(void) {\n"
+                " struct S { int x; };\n"
+                " typedef Original T;\n"
+                " typedef struct S T;\n"
+                "}\n"),
+            SVI("(test):5:20: error: redefinition of typedef 'T' as 'struct S'; previously defined as 'struct S'\n"),
+        },
+        {
+            "variably modified typedef cannot be redeclared", __LINE__,
+            SVI("void f(int n) {\n"
+                " typedef int A[n];\n"
+                " typedef A A;\n"
+                "}\n"),
+            SVI("(test):3:13: error: redefinition of variably modified typedef 'A'\n"),
+        },
+        {
+            "variably modified pointer typedef cannot be redeclared", __LINE__,
+            SVI("void f(int n) {\n"
+                " typedef int (*P)[n];\n"
+                " typedef P P;\n"
+                "}\n"),
+            SVI("(test):3:13: error: redefinition of variably modified typedef 'P'\n"),
+        },
+        {
             "typedef redef diff type", __LINE__,
             SVI("typedef int foo;\n"
                "typedef float foo;\n"),
@@ -10199,12 +12349,12 @@ TestFunction(test_parse_errors){
         {
             "ptr addassign float", __LINE__,
             SVI("int *p; p += 3.14;\n"),
-            SVI("(test):1:11: error: pointer arithmetic requires integer operand\n"),
+            SVI("(test):1:11: error: pointer arithmetic requires integer operand. The types are 'int *' and 'double'\n"),
         },
         {
             "ptr subassign float", __LINE__,
             SVI("int *p; p -= 3.14;\n"),
-            SVI("(test):1:11: error: pointer arithmetic requires integer operand\n"),
+            SVI("(test):1:11: error: pointer arithmetic requires integer operand. The types are 'int *' and 'double'\n"),
         },
         {
             "bare qualifier in expression", __LINE__,
@@ -10302,13 +12452,13 @@ TestFunction(test_parse_errors){
             "VLA rejects static storage", __LINE__,
             SVI("int n = 10;\n"
                "static int arr[n];\n"),
-            SVI("(test):2:12: error: VLA object requires automatic storage duration\n"),
+            SVI("(test):2:12: error: VLA object requires automatic storage duration. The type is 'int[*]'\n"),
         },
         {
             "VM declaration rejects external linkage", __LINE__,
             SVI("int f(void);\n"
                "extern int arr[f()];\n"),
-            SVI("(test):2:12: error: variably modified declaration cannot have external linkage\n"),
+            SVI("(test):2:12: error: variably modified declaration cannot have external linkage. The type is 'int[*]'\n"),
         },
         {
             "constexpr: post-increment", __LINE__,
@@ -10321,6 +12471,12 @@ TestFunction(test_parse_errors){
             SVI("void f(void){int x;\n"
                "constexpr int* p = &x;}\n"),
             SVI("(test):2:20: error: address of automatic variable in constant expression\n"),
+        },
+        {
+            "static local rejects the address of an automatic constexpr object", __LINE__,
+            SVI("void f(void){constexpr int x=7;\n"
+                "static const int* p=&x;}\n"),
+            SVI("(test):2:21: error: address of automatic variable in constant expression\n"),
         },
         {
             "static local: automatic variable", __LINE__,
@@ -10447,59 +12603,59 @@ TestFunction(test_parse_errors){
         {
             "bool bitfield width cannot exceed its value width", __LINE__,
             SVI("struct B {_Bool flag:2;};\n"),
-            SVI("(test):1:21: error: bitfield width (2) exceeds size of type (1 bits)\n"),
+            SVI("(test):1:21: error: bitfield width (2) exceeds size of type (1 bits). The type is '_Bool'\n"),
         },
         {
             "bool enum bitfield width cannot exceed its value width", __LINE__,
             SVI("enum E:_Bool {ZERO}; struct B {enum E flag:2;};\n"),
-            SVI("(test):1:43: error: bitfield width (2) exceeds size of type (1 bits)\n"),
+            SVI("(test):1:43: error: bitfield width (2) exceeds size of type (1 bits). The type is 'enum E'\n"),
         },
         {
             "fixed enum redeclarations reject different underlying types", __LINE__,
             SVI("enum E:unsigned char;\n"
                 "enum E:unsigned long long;\n"),
-            SVI("(test):2:1: error: Redefinition of enum 'E' with differing underlying types\n"),
+            SVI("(test):2:1: error: Redefinition of enum 'E' with differing underlying types. The types are 'unsigned char' and 'unsigned long long'\n"),
         },
         {
             "defined fixed enum redeclarations reject different underlying types", __LINE__,
             SVI("enum E:unsigned char {A};\n"
                 "enum E:unsigned long long;\n"),
-            SVI("(test):2:1: error: Redefinition of enum 'E' with differing underlying types\n"),
+            SVI("(test):2:1: error: Redefinition of enum 'E' with differing underlying types. The types are 'unsigned char' and 'unsigned long long'\n"),
         },
         {
             "incomplete enum cannot contribute a provisional struct layout", __LINE__,
             SVI("enum E;\n"
                 "struct S {enum E value; int tail;};\n"
                 "enum E {HIGH=(unsigned __int128)1<<100};\n"),
-            SVI("(test):2:23: error: sizeof applied to incomplete enum type\n"),
+            SVI("(test):2:23: error: member requires a complete object type. The type is 'enum E'\n"),
         },
         {
             "unfixed enum body cannot query its provisional size", __LINE__,
             SVI("enum E {SIZE=sizeof(enum E),HIGH=(unsigned __int128)1<<100};\n"),
-            SVI("(test):1:14: error: sizeof applied to incomplete enum type\n"),
+            SVI("(test):1:14: error: sizeof applied to incomplete enum type. The type is 'enum E'\n"),
         },
         {
             "incomplete enum has no alignment", __LINE__,
             SVI("enum E;\n"
                 "_Static_assert(alignof(enum E));\n"),
-            SVI("(test):2:16: error: alignof applied to incomplete enum type\n"),
+            SVI("(test):2:16: error: alignof applied to incomplete enum type. The type is 'enum E'\n"),
         },
         {
             "incomplete struct has no alignment", __LINE__,
             SVI("struct S;\n"
                 "_Static_assert(alignof(struct S));\n"),
-            SVI("(test):2:16: error: alignof applied to incomplete struct type\n"),
+            SVI("(test):2:16: error: alignof applied to incomplete struct type. The type is 'struct S'\n"),
         },
         {
             "incomplete union has no alignment", __LINE__,
             SVI("union U;\n"
                 "_Static_assert(alignof(union U));\n"),
-            SVI("(test):2:16: error: alignof applied to incomplete union type\n"),
+            SVI("(test):2:16: error: alignof applied to incomplete union type. The type is 'union U'\n"),
         },
         {
             "function type has no alignment", __LINE__,
             SVI("_Static_assert(alignof(int(void)));\n"),
-            SVI("(test):1:16: error: alignof applied to function type\n"),
+            SVI("(test):1:16: error: alignof applied to function type. The type is 'int(void)'\n"),
         },
         {
             "fixed unsigned enum rejects negative value", __LINE__,
@@ -10607,6 +12763,21 @@ TestFunction(test_parse_errors){
             SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
         },
         {
+            "constant float casts reject signed byte overflow", __LINE__,
+            SVI("_Static_assert((signed char)128.0 == -128);\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "constant float casts reject unsigned byte overflow", __LINE__,
+            SVI("_Static_assert((unsigned char)256.0f == 0);\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
+            "constant float casts reject signed int overflow", __LINE__,
+            SVI("_Static_assert((int)2147483648.0 == (-2147483647-1));\n"),
+            SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
+        },
+        {
             "wide float to integer overflow", __LINE__,
             SVI("_Static_assert((unsigned __int128)(_Float128)0x1p128L);\n"),
             SVI("(test):1:1: error: static_assert expression is not a constant expression\n"),
@@ -10641,6 +12812,26 @@ TestFunction(test_parse_errors){
             "printf: too many args", __LINE__,
             SVI("void f(void) { printf(\"%d\", 1, 2); }\n"),
             SVI("(test):1:23: error: format specifies 1 argument, but 2 provided\n"),
+        },
+        {
+            "printf: %n requires an output pointer", __LINE__,
+            SVI("void f(void) { printf(\"%n\", 42); }\n"),
+            SVI("(test):1:23: error: format specifier '%n' (argument 1) expects 'int *', but argument has type 'int'\n"),
+        },
+        {
+            "printf: %n rejects const output", __LINE__,
+            SVI("void f(const int* p) { printf(\"%n\", p); }\n"),
+            SVI("(test):1:31: error: format specifier '%n' (argument 1) expects 'int *', but argument has type 'const int *'\n"),
+        },
+        {
+            "printf: %hhn rejects int storage", __LINE__,
+            SVI("void f(int* p) { printf(\"%hhn\", p); }\n"),
+            SVI("(test):1:25: error: format specifier '%hhn' (argument 1) expects 'signed char *', but argument has type 'int *'\n"),
+        },
+        {
+            "printf: %n rejects unsigned storage", __LINE__,
+            SVI("void f(unsigned* p) { printf(\"%n\", p); }\n"),
+            SVI("(test):1:30: error: format specifier '%n' (argument 1) expects 'int *', but argument has type 'unsigned int *'\n"),
         },
         {
             "printf: %p expects pointer", __LINE__,
@@ -10791,6 +12982,45 @@ TestFunction(test_parse_errors){
             "printf: %Lf with double", __LINE__,
             SVI("void f(double x) { printf(\"%Lf\", x); }\n"),
             SVI("(test):1:27: error: format specifier '%Lf' (argument 1) expects 'long double', but argument has type 'double'\n"),
+        },
+        {
+            "printf attr: all declared format contracts are checked", __LINE__,
+            SVI("void log(const char*,const char*,...) __attribute__((format(printf,1,3),format(printf,2,3)));\n"
+                "void f(void){log(\"%d\",\"%f\",1.5);}\n"),
+            SVI("(test):2:18: error: format specifier '%d' (argument 1) expects 'int', but argument has type 'double'\n"),
+        },
+        {
+            "printf attr: method arguments include the receiver", __LINE__,
+            SVI("struct S{void log(_Self*,const char*,int,...) __attribute__((format(printf,2,4)));};\n"
+                "void f(struct S* s){s.log(\"%d\",0,1.5);}\n"),
+            SVI("(test):2:27: error: format specifier '%d' (argument 1) expects 'int', but argument has type 'double'\n"),
+        },
+        {
+            "printf attr: string index names a declared parameter", __LINE__,
+            SVI("__attribute__((format(printf,3,0)))\nvoid log(const char*);\n"),
+            SVI("(test):1:16: error: format string index is outside the parameter list\n"),
+        },
+        {
+            "printf attr: string parameter has character pointer type", __LINE__,
+            SVI("__attribute__((format(printf,1,2)))\nvoid log(int,...);\n"),
+            SVI("(test):1:16: error: format string parameter must be a char pointer. The type is 'int'\n"),
+        },
+        {
+            "printf attr: checked arguments must start at the ellipsis", __LINE__,
+            SVI("__attribute__((format(printf,1,2)))\nvoid log(const char*,int,...);\n"),
+            SVI("(test):1:16: error: format first argument must name the first variadic argument or be zero\n"),
+        },
+        {
+            "printf attr: nonlast format parameter checks actual variadic types", __LINE__,
+            SVI("void log(const char*,int,...) __attribute__((format(printf,1,3)));\n"
+                "void f(void){log(\"%d\",0,1.5);}\n"),
+            SVI("(test):2:18: error: format specifier '%d' (argument 1) expects 'int', but argument has type 'double'\n"),
+        },
+        {
+            "printf attr: va-list style declaration still validates syntax", __LINE__,
+            SVI("void log(const char*,void*) __attribute__((format(printf,1,0)));\n"
+                "void f(void){log(\"%\",0);}\n"),
+            SVI("(test):2:18: error: incomplete format specifier at end of string\n"),
         },
         {
             "printf attr: udf wrong type", __LINE__,
@@ -10958,6 +13188,26 @@ TestFunction(test_parse_errors){
             SVI("(test):1:7: error: char after short\n"),
         },
         {
+            "duplicate signed specifier", __LINE__,
+            SVI("signed signed x;\n"),
+            SVI("(test):1:8: error: Duplicate signed in declaration\n"),
+        },
+        {
+            "duplicate unsigned specifier", __LINE__,
+            SVI("unsigned unsigned x;\n"),
+            SVI("(test):1:10: error: Duplicate unsigned in declaration\n"),
+        },
+        {
+            "duplicate signed specifier separated by base type", __LINE__,
+            SVI("signed char signed x;\n"),
+            SVI("(test):1:13: error: Duplicate signed in declaration\n"),
+        },
+        {
+            "duplicate unsigned specifier in parameter", __LINE__,
+            SVI("void f(unsigned int unsigned x);\n"),
+            SVI("(test):1:21: error: Duplicate unsigned in declaration\n"),
+        },
+        {
             "unsigned after signed", __LINE__,
             SVI("signed unsigned x;\n"),
             SVI("(test):1:8: error: unsigned after signed\n"),
@@ -11015,59 +13265,90 @@ TestFunction(test_parse_errors){
         {
             "_Atomic type specifier with array type name", __LINE__,
             SVI("_Atomic(int[4]) x;\n"),
-            SVI("(test):1:1: error: _Atomic type name shall not refer to an array type\n"),
+            SVI("(test):1:1: error: _Atomic type name shall not refer to an array type. The type is 'int[4]'\n"),
         },
         {
             "_Atomic type specifier with function type name", __LINE__,
             SVI("typedef int F(void);\n"
                "_Atomic(F) x;\n"),
-            SVI("(test):2:1: error: _Atomic type name shall not refer to a function type\n"),
+            SVI("(test):2:1: error: _Atomic type name shall not refer to a function type. The type is 'int(void)'\n"),
         },
         {
             "_Atomic type specifier with atomic type name", __LINE__,
             SVI("typedef _Atomic int AI;\n"
                "_Atomic(AI) x;\n"),
-            SVI("(test):2:1: error: _Atomic type name shall not refer to an atomic type\n"),
+            SVI("(test):2:1: error: _Atomic type name shall not refer to an atomic type. The type is '_Atomic int'\n"),
         },
         {
             "_Atomic type specifier with const type name", __LINE__,
             SVI("_Atomic(const int) x;\n"),
-            SVI("(test):1:1: error: _Atomic type name shall not refer to a qualified type\n"),
+            SVI("(test):1:1: error: _Atomic type name shall not refer to a qualified type. The type is 'const int'\n"),
         },
         {
             "_Atomic type specifier with volatile type name", __LINE__,
             SVI("_Atomic(volatile int) x;\n"),
-            SVI("(test):1:1: error: _Atomic type name shall not refer to a qualified type\n"),
+            SVI("(test):1:1: error: _Atomic type name shall not refer to a qualified type. The type is 'volatile int'\n"),
         },
         {
             "_Atomic type specifier with const typedef type name", __LINE__,
             SVI("typedef const int CI;\n"
                "_Atomic(CI) x;\n"),
-            SVI("(test):2:1: error: _Atomic type name shall not refer to a qualified type\n"),
+            SVI("(test):2:1: error: _Atomic type name shall not refer to a qualified type. The type is 'const int'\n"),
         },
         {
             "_Atomic type specifier with volatile typedef type name", __LINE__,
             SVI("typedef volatile int VI;\n"
                "_Atomic(VI) x;\n"),
-            SVI("(test):2:1: error: _Atomic type name shall not refer to a qualified type\n"),
+            SVI("(test):2:1: error: _Atomic type name shall not refer to a qualified type. The type is 'volatile int'\n"),
         },
         {
             "_Atomic type specifier with typedef array type name", __LINE__,
             SVI("typedef int A[4];\n"
                "_Atomic(A) x;\n"),
-            SVI("(test):2:1: error: _Atomic type name shall not refer to an array type\n"),
+            SVI("(test):2:1: error: _Atomic type name shall not refer to an array type. The type is 'int[4]'\n"),
+        },
+        {
+            "inferred restrict still requires pointer type", __LINE__,
+            SVI("void f(void){restrict auto x=1;}"),
+            SVI("(test):1:14: error: restrict requires a pointer type. The type is 'int'\n"),
+        },
+        {
+            "vector parameter attributes enforce atomic constraints", __LINE__,
+            SVI("void f(_Atomic int x __attribute__((vector_size(16))));"),
+            SVI("(test):1:8: error: _Atomic qualifier shall not modify an array type. The type is '_Atomic int __attribute__((vector_size(16)))'\n"),
+        },
+        {
+            "vector field attributes enforce atomic constraints", __LINE__,
+            SVI("struct S { _Atomic int x __attribute__((vector_size(16))); };"),
+            SVI("(test):1:12: error: _Atomic qualifier shall not modify an array type. The type is '_Atomic int __attribute__((vector_size(16)))'\n"),
+        },
+        {
+            "vector attribute cannot introduce atomic vector typedef", __LINE__,
+            SVI("typedef _Atomic int V __attribute__((vector_size(16)));"),
+            SVI("(test):1:1: error: _Atomic qualifier shall not modify an array type. The type is '_Atomic int __attribute__((vector_size(16)))'\n"),
+        },
+        {
+            "vector attribute cannot introduce atomic vector object", __LINE__,
+            SVI("_Atomic int v __attribute__((vector_size(16)));"),
+            SVI("(test):1:1: error: _Atomic qualifier shall not modify an array type. The type is '_Atomic int __attribute__((vector_size(16)))'\n"),
+        },
+        {
+            "inferred atomic vector follows explicit type constraints", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));\n"
+                "void f(void){V v={}; _Atomic auto a=v;}"),
+            SVI("(test):2:22: error: _Atomic qualifier shall not modify an array type. The type is '_Atomic int __attribute__((vector_size(16)))'\n"),
         },
         {
             "_Atomic qualifier with typedef array type", __LINE__,
             SVI("typedef int A[4];\n"
                "_Atomic A x;\n"),
-            SVI("(test):2:1: error: _Atomic qualifier shall not modify an array type\n"),
+            SVI("(test):2:1: error: _Atomic qualifier shall not modify an array type. The type is '_Atomic int[4]'\n"),
         },
         {
             "_Atomic qualifier with typedef function type", __LINE__,
             SVI("typedef int F(void);\n"
                "_Atomic F x;\n"),
-            SVI("(test):2:1: error: _Atomic qualifier shall not modify a function type\n"),
+            SVI("(test):2:1: error: _Atomic qualifier shall not modify a function type. The type is 'int(void)'\n"),
         },
         {
             "_Atomic void object", __LINE__,
@@ -11110,50 +13391,98 @@ TestFunction(test_parse_errors){
         {
             "atomic bitfield", __LINE__,
             SVI("struct S { _Atomic int x: 3; };\n"),
-            SVI("(test):1:25: error: atomic bitfields are not supported\n"),
+            SVI("(test):1:25: error: atomic bitfields are not supported. The type is '_Atomic int'\n"),
         },
         {
             "anonymous atomic bitfield", __LINE__,
             SVI("struct S { _Atomic int : 3; };\n"),
-            SVI("(test):1:24: error: atomic bitfields are not supported\n"),
+            SVI("(test):1:24: error: atomic bitfields are not supported. The type is '_Atomic int'\n"),
+        },
+        {
+            "odd-size atomic cast", __LINE__,
+            SVI("struct S {char bytes[3];};\n"
+                "_Alignas(16) _Atomic(struct S) x;\n"
+                "(struct S)x;"),
+            SVI("(test):3:11: error: atomic operand size 3 is not a power of 2. The type is '_Atomic struct S'\n"),
+        },
+        {
+            "odd-size atomic argument", __LINE__,
+            SVI("struct S {char bytes[3];};\n"
+                "_Alignas(16) _Atomic(struct S) x;\n"
+                "void use(struct S s){}\nuse(x);"),
+            SVI("(test):4:5: error: atomic operand size 3 is not a power of 2. The type is '_Atomic struct S'\n"),
+        },
+        {
+            "oversized atomic return", __LINE__,
+            SVI("struct S {char bytes[32];};\n"
+                "_Alignas(64) _Atomic(struct S) x;\n"
+                "struct S read(void){return x;}\nread();"),
+            SVI("(test):3:28: error: atomic operand size 32 exceeds target's maximum lock-free size 16. The type is '_Atomic struct S'\n"),
+        },
+        {
+            "odd-size discarded atomic value", __LINE__,
+            SVI("struct S {char bytes[3];};\n"
+                "_Alignas(16) _Atomic(struct S) x;\nx;"),
+            SVI("(test):3:1: error: atomic operand size 3 is not a power of 2. The type is '_Atomic struct S'\n"),
+        },
+        {
+            "odd-size atomic variadic argument", __LINE__,
+            SVI("struct S {char bytes[3];};\n_Atomic(struct S) x;\n"
+                "void use(int,...);use(0,\nx);"),
+            SVI("(test):4:1: error: atomic operand size 3 is not a power of 2. The type is '_Atomic struct S'\n"),
+        },
+        {
+            "odd-size atomic comma operand", __LINE__,
+            SVI("struct S {char bytes[3];};\n_Atomic(struct S) x;\n(x,0);"),
+            SVI("(test):3:2: error: atomic operand size 3 is not a power of 2. The type is '_Atomic struct S'\n"),
+        },
+        {
+            "odd-size atomic for initializer", __LINE__,
+            SVI("struct S {char bytes[3];};\n_Atomic(struct S) x;\nfor(x;0;);"),
+            SVI("(test):3:5: error: atomic operand size 3 is not a power of 2. The type is '_Atomic struct S'\n"),
+        },
+        {
+            "odd-size atomic for increment", __LINE__,
+            SVI("struct S {char bytes[3];};\n_Atomic(struct S) x;\nfor(;0;x);"),
+            SVI("(test):3:8: error: atomic operand size 3 is not a power of 2. The type is '_Atomic struct S'\n"),
         },
         {
             "odd-size atomic aggregate load", __LINE__,
             SVI("_Atomic(struct S { char x[3]; }) a;\n"
                "struct S s = a;\n"),
-            SVI("(test):2:14: error: atomic operand size 3 is not a power of 2\n"),
+            SVI("(test):2:14: error: atomic operand size 3 is not a power of 2. The type is '_Atomic struct S'\n"),
         },
         {
             "oversize atomic aggregate load", __LINE__,
             SVI("_Atomic(struct S { long long a, b, c; }) x;\n"
                "struct S s = x;\n"),
-            SVI("(test):2:14: error: atomic operand size 24 is not a power of 2\n"),
+            SVI("(test):2:14: error: atomic operand size 24 is not a power of 2. The type is '_Atomic struct S'\n"),
         },
         {
             "odd-size atomic aggregate store", __LINE__,
             SVI("_Atomic(struct S { char x[3]; }) a;\n"
                "struct S s;\n"
                "void f(void){ a = s; }\n"),
-            SVI("(test):3:17: error: atomic operand size 3 is not a power of 2\n"),
+            SVI("(test):3:17: error: atomic operand size 3 is not a power of 2. The type is '_Atomic struct S'\n"),
         },
         {
             "compound assignment atomic struct", __LINE__,
             SVI("_Atomic(struct S { int x; }) s;\n"
                "void g(void){ s += s; }\n"),
-            SVI("(test):2:17: error: atomic read-modify-write requires scalar atomic type\n"),
+            SVI("(test):2:17: error: atomic read-modify-write requires scalar atomic type. The type is '_Atomic struct S'\n"),
         },
         {
             "atomic fetch add on aggregate", __LINE__,
             SVI("struct S { int x; } s;\n"
                "int f(void){ return __atomic_fetch_add(&s, s, __ATOMIC_SEQ_CST).x; }\n"),
-            SVI("(test):2:21: error: atomic fetch add/sub requires integer or pointer type\n"),
+            SVI("(test):2:21: error: atomic fetch add/sub requires integer or pointer type. The type is 'struct S'\n"),
         },
         {
             "atomic fetch bitwise on pointer", __LINE__,
             SVI("int x;\n"
                "int *p = &x;\n"
                "int *f(void){ return __atomic_fetch_or(&p, 1, __ATOMIC_SEQ_CST); }\n"),
-            SVI("(test):3:22: error: atomic fetch bitwise operation requires integer type\n"),
+            SVI("(test):3:22: error: atomic fetch bitwise operation requires integer type. The type is 'int *'\n"),
         },
         {
             "atomic load with release memory order", __LINE__,
@@ -11196,6 +13525,51 @@ TestFunction(test_parse_errors){
             SVI("int x;\n"
                "int f(void){ int e = 0; return __atomic_compare_exchange_n(&x, &e, 1, 0, __ATOMIC_SEQ_CST, __ATOMIC_ACQ_REL); }\n"),
             SVI("(test):2:32: error: atomic compare-exchange failure order cannot be release or acq_rel\n"),
+        },
+        {
+            "compare exchange failure cannot acquire after relaxed success", __LINE__,
+            SVI("int x,e;\n__atomic_compare_exchange_n(&x,&e,1,0,0,2);"),
+            SVI("(test):2:1: error: atomic compare-exchange failure order is stronger than success order\n"),
+        },
+        {
+            "compare exchange release success does not permit acquire failure", __LINE__,
+            SVI("int x,e;\n__atomic_compare_exchange_n(&x,&e,1,0,3,2);"),
+            SVI("(test):2:1: error: atomic compare-exchange failure order is stronger than success order\n"),
+        },
+        {
+            "compare exchange consume success does not permit acquire failure", __LINE__,
+            SVI("int x,e;\n__atomic_compare_exchange_n(&x,&e,1,0,1,2);"),
+            SVI("(test):2:1: error: atomic compare-exchange failure order is stronger than success order\n"),
+        },
+        {
+            "compare exchange acq_rel success does not permit seq_cst failure", __LINE__,
+            SVI("int x,e;\n__atomic_compare_exchange_n(&x,&e,1,0,4,5);"),
+            SVI("(test):2:1: error: atomic compare-exchange failure order is stronger than success order\n"),
+        },
+        {
+            "generic compare exchange validates the memory-order pair", __LINE__,
+            SVI("int x,e,v;\n__atomic_compare_exchange(&x,&e,&v,0,0,1);"),
+            SVI("(test):2:1: error: atomic compare-exchange failure order is stronger than success order\n"),
+        },
+        {
+            "atomic memory orders cannot wrap through unsigned int", __LINE__,
+            SVI("int x;\n__atomic_load_n(&x,4294967296ll);"),
+            SVI("(test):2:20: error: invalid memory order value 4294967296\n"),
+        },
+        {
+            "atomic memory orders cannot wrap negative integers", __LINE__,
+            SVI("int x;\n__atomic_load_n(&x,-4294967296ll);"),
+            SVI("(test):2:20: error: invalid memory order value -4294967296\n"),
+        },
+        {
+            "atomic fence memory orders cannot wrap through unsigned int", __LINE__,
+            SVI("__atomic_thread_fence(4294967296ll);"),
+            SVI("(test):1:23: error: invalid memory order value 4294967296\n"),
+        },
+        {
+            "atomic signal fence memory orders cannot wrap negative integers", __LINE__,
+            SVI("__atomic_signal_fence(-4294967296ll);"),
+            SVI("(test):1:23: error: invalid memory order value -4294967296\n"),
         },
         {
             "atomic load with invalid memory order value", __LINE__,
@@ -11400,67 +13774,177 @@ TestFunction(test_parse_errors){
         {
             "arithmetic with _Type", __LINE__,
             SVI("int x = int + 1;\n"),
-            SVI("(test):1:13: error: integer promotion requires integer type\n"),
+            SVI("(test):1:13: error: integer promotion requires integer type. The types are '_Type' and 'int'\n"),
         },
         {
             "arithmetic with void", __LINE__,
             SVI("int x = (void)1 + 1;\n"),
-            SVI("(test):1:17: error: usual arithmetic conversions on void\n"),
+            SVI("(test):1:17: error: usual arithmetic conversions on void. The types are 'void' and 'int'\n"),
+        },
+        {
+            "calling a function returning incomplete type without arguments", __LINE__,
+            SVI("struct S;struct S f(void);\nvoid g(void){f();}"),
+            SVI("(test):2:15: error: function call requires a complete return type. The type is 'struct S'\n"),
+        },
+        {
+            "calling a function returning incomplete type with arguments", __LINE__,
+            SVI("struct S;struct S f(int);\nvoid g(void){f(1);}"),
+            SVI("(test):2:15: error: function call requires a complete return type. The type is 'struct S'\n"),
+        },
+        {
+            "cast to identical incomplete struct type", __LINE__,
+            SVI("struct S;\nvoid f(struct S* p){(struct S)*p;}"),
+            SVI("(test):2:21: error: cannot cast to incomplete type. The types are 'struct S' and 'struct S'\n"),
+        },
+        {
+            "cast from incomplete enum value", __LINE__,
+            SVI("enum E;\nvoid f(enum E* p){(int)*p;}"),
+            SVI("(test):2:19: error: cannot cast from incomplete type. The types are 'enum E' and 'int'\n"),
+        },
+        {
+            "assignment cannot copy incomplete arrays", __LINE__,
+            SVI("extern int a[],b[];\na=b;"),
+            SVI("(test):2:2: error: assignment requires a complete object type. The type is 'int[]'\n"),
+        },
+        {
+            "compound assignment cannot modify incomplete enum", __LINE__,
+            SVI("enum E;enum E* p;\n*p+=1;"),
+            SVI("(test):2:3: error: assignment requires a complete object type. The type is 'enum E'\n"),
+        },
+        {
+            "condition cannot read incomplete enum value", __LINE__,
+            SVI("enum E;enum E* p;\nif(*p){}"),
+            SVI("(test):2:1: error: 'if' condition requires scalar type. The type is 'enum E'\n"),
+        },
+        {
+            "logical negation cannot read incomplete enum value", __LINE__,
+            SVI("enum E;enum E* p;\n!*p;"),
+            SVI("(test):2:1: error: '!' requires scalar type. The type is 'enum E'\n"),
+        },
+        {
+            "prefix increment cannot read incomplete enum value", __LINE__,
+            SVI("enum E;enum E* p;\n++*p;"),
+            SVI("(test):2:1: error: increment/decrement requires a complete object type. The type is 'enum E'\n"),
+        },
+        {
+            "postfix increment cannot read incomplete enum value", __LINE__,
+            SVI("enum E;enum E* p;\n(*p)++;"),
+            SVI("(test):2:5: error: increment/decrement requires a complete object type. The type is 'enum E'\n"),
+        },
+        {
+            "implicit conversion from incomplete enum value", __LINE__,
+            SVI("enum E;\nvoid f(enum E* p){int x=*p;}"),
+            SVI("(test):2:25: error: cannot implicitly convert from 'enum E' to 'int'\n"),
+        },
+        {
+            "cast to identical array type", __LINE__,
+            SVI("int a[2];\nvoid f(void){(int[2])a;}"),
+            SVI("(test):2:14: error: cannot cast to array type. The types are 'int[2]' and 'int[2]'\n"),
+        },
+        {
+            "array copy cannot assume independently captured VLA bounds match", __LINE__,
+            SVI("void f(int n,int m){\nconst int a[n]={};int b[m];\nb=a;}"),
+            SVI("(test):3:3: error: cannot implicitly convert from 'const int[*]' to 'int[*]'\n"),
+        },
+        {
+            "array copy cannot discard pointer pointee qualifiers", __LINE__,
+            SVI("const int* src[2]={};int* dst[2];\ndst=src;"),
+            SVI("(test):2:5: error: cannot implicitly convert from 'const int *[2]' to 'int *[2]'\n"),
+        },
+        {
+            "array copy cannot change element atomicity", __LINE__,
+            SVI("_Atomic int src[2]={};int dst[2];\ndst=src;"),
+            SVI("(test):2:5: error: cannot implicitly convert from '_Atomic int[2]' to 'int[2]'\n"),
+        },
+        {
+            "array copy requires equal outer extents", __LINE__,
+            SVI("const int src[3]={};int dst[2];\ndst=src;"),
+            SVI("(test):2:5: error: cannot implicitly convert from 'const int[3]' to 'int[2]'\n"),
+        },
+        {
+            "array copy requires equal inner extents", __LINE__,
+            SVI("const int src[2][3]={};int dst[2][2];\ndst=src;"),
+            SVI("(test):2:5: error: cannot implicitly convert from 'const int[2][3]' to 'int[2][2]'\n"),
+        },
+        {
+            "static array copy cannot read volatile elements", __LINE__,
+            SVI("const volatile int src[2]={1,2};\nstatic int dst[2]=src;"),
+            SVI("(test):2:19: error: static initializer requires a link-time constant\n"),
+        },
+        {
+            "const array copy assignment is rejected", __LINE__,
+            SVI("const int a[2]={},b[2]={};\nvoid f(void){a=b;}"),
+            SVI("(test):2:15: error: cannot assign to variable with const-qualified type. The type is 'const int[2]'\n"),
+        },
+        {
+            "const multidimensional array copy assignment is rejected", __LINE__,
+            SVI("typedef int Row[2];const Row a[3]={},b[3]={};\nvoid f(void){a=b;}"),
+            SVI("(test):2:15: error: cannot assign to variable with const-qualified type. The type is 'const int[3][2]'\n"),
+        },
+        {
+            "array of const pointers copy assignment is rejected", __LINE__,
+            SVI("int* const a[2]={},*const b[2]={};\nvoid f(void){a=b;}"),
+            SVI("(test):2:15: error: cannot assign to variable with const-qualified type. The type is 'int *const [2]'\n"),
+        },
+        {
+            "cast to identical function type", __LINE__,
+            SVI("int f(void);\nvoid g(void){(int(void))f;}"),
+            SVI("(test):2:14: error: cannot cast to function type. The types are 'int(void)' and 'int(void)'\n"),
         },
         {
             "arithmetic with _Type", __LINE__,
             SVI("int x = 1 << int;\n"),
-            SVI("(test):1:11: error: integer promotion requires integer type\n"),
+            SVI("(test):1:11: error: integer promotion requires integer type. The type is '_Type'\n"),
         },
         {
             "arithmetic with struct", __LINE__,
             SVI("int x = 1 << (struct {}){};\n"),
-            SVI("(test):1:11: error: integer promotion requires arithmetic type\n"),
+            SVI("(test):1:11: error: integer promotion requires arithmetic type. The type is 'struct <anon>'\n"),
         },
         {
             "arithmetic with void", __LINE__,
             SVI("int x = (void)1 << 1;\n"),
-            SVI("(test):1:17: error: integer promotion of void\n"),
+            SVI("(test):1:17: error: integer promotion of void. The type is 'void'\n"),
         },
         {
             "array cast", __LINE__,
             SVI("(int[2])1;\n"),
-            SVI("(test):1:1: error: cannot cast to array type\n"),
+            SVI("(test):1:1: error: cannot cast to array type. The types are 'int' and 'int[2]'\n"),
         },
         {
             "func cast", __LINE__,
             SVI("(int(int))1;\n"),
-            SVI("(test):1:1: error: cannot cast to function type\n"),
+            SVI("(test):1:1: error: cannot cast to function type. The types are 'int' and 'int(int)'\n"),
         },
         {
             "struct cast", __LINE__,
             SVI("(struct{int x;})1;\n"),
-            SVI("(test):1:1: error: cannot cast to struct or union type\n"),
+            SVI("(test):1:1: error: cannot cast to struct or union type. The types are 'int' and 'struct <anon>'\n"),
         },
         {
             "union cast", __LINE__,
             SVI("(union{int x;})1;\n"),
-            SVI("(test):1:1: error: cannot cast to struct or union type\n"),
+            SVI("(test):1:1: error: cannot cast to struct or union type. The types are 'int' and 'union <anon>'\n"),
         },
         {
             "void cast", __LINE__,
             SVI("(int)(void)1;\n"),
-            SVI("(test):1:1: error: cannot cast from void\n"),
+            SVI("(test):1:1: error: cannot cast from void. The types are 'void' and 'int'\n"),
         },
         {
             "int from struct cast", __LINE__,
             SVI("(int)(struct {int x;}){1};\n"),
-            SVI("(test):1:1: error: cannot cast from struct or union type\n"),
+            SVI("(test):1:1: error: cannot cast from struct or union type. The types are 'struct <anon>' and 'int'\n"),
         },
         {
             "int from union cast", __LINE__,
             SVI("(int)(union {int x;}){1};\n"),
-            SVI("(test):1:1: error: cannot cast from struct or union type\n"),
+            SVI("(test):1:1: error: cannot cast from struct or union type. The types are 'union <anon>' and 'int'\n"),
         },
         {
             "pointer from float", __LINE__,
             SVI("(int*)1.f;\n"),
-            SVI("(test):1:1: error: invalid cast\n"),
+            SVI("(test):1:1: error: invalid cast. The types are 'float' and 'int *'\n"),
         },
         {
             "redecl as static", __LINE__,
@@ -11514,27 +13998,27 @@ TestFunction(test_parse_errors){
             "redecl diff return", __LINE__,
             SVI("int f(void);\n"
                 "float f(void);\n"),
-            SVI("(test):2:14: error: conflicting return type for 'f'\n"),
+            SVI("(test):2:14: error: conflicting return type for 'f'. The types are 'int' and 'float'\n"),
         },
         {
             "unprototyped declaration does not hide conflicting return", __LINE__,
             SVI("int f();\nfloat f(void);\n"),
-            SVI("(test):2:14: error: conflicting return type for 'f'\n"),
+            SVI("(test):2:14: error: conflicting return type for 'f'. The types are 'int' and 'float'\n"),
         },
         {
             "unprototyped redeclaration does not hide conflicting return", __LINE__,
             SVI("int f(void);\nfloat f();\n"),
-            SVI("(test):2:10: error: conflicting return type for 'f'\n"),
+            SVI("(test):2:10: error: conflicting return type for 'f'. The types are 'int' and 'float'\n"),
         },
         {
             "unprototyped definition does not hide conflicting return", __LINE__,
             SVI("int f(void);\nfloat f(){return 1;}\n"),
-            SVI("(test):2:10: error: conflicting return type for 'f'\n"),
+            SVI("(test):2:10: error: conflicting return type for 'f'. The types are 'int' and 'float'\n"),
         },
         {
             "definition after unprototyped declaration checks return", __LINE__,
             SVI("int f();\nvoid f(void){}\n"),
-            SVI("(test):2:13: error: conflicting return type for 'f'\n"),
+            SVI("(test):2:13: error: conflicting return type for 'f'. The types are 'int' and 'void'\n"),
         },
         {
             "static variable redecl without storage class", __LINE__,
@@ -11564,49 +14048,49 @@ TestFunction(test_parse_errors){
             "redecl diff variadic", __LINE__,
             SVI("int f(int);\n"
                 "int f(int, ...);\n"),
-            SVI("(test):2:16: error: conflicting variadic specifier for 'f'\n"),
+            SVI("(test):2:16: error: conflicting variadic specifier for 'f'. The types are 'int(int)' and 'int(int, ...)'\n"),
         },
         {
             "unprototyped declaration conflicts with variadic prototype", __LINE__,
             SVI("int f();\nint f(int, ...);\n"),
-            SVI("(test):2:16: error: conflicting variadic specifier for 'f'\n"),
+            SVI("(test):2:16: error: conflicting variadic specifier for 'f'. The types are 'int()' and 'int(int, ...)'\n"),
         },
         {
             "unprototyped redeclaration conflicts with variadic prototype", __LINE__,
             SVI("int f(int, ...);\nint f();\n"),
-            SVI("(test):2:8: error: conflicting variadic specifier for 'f'\n"),
+            SVI("(test):2:8: error: conflicting variadic specifier for 'f'. The types are 'int(int, ...)' and 'int()'\n"),
         },
         {
             "unprototyped declaration conflicts with float parameter", __LINE__,
             SVI("int f();\nint f(float);\n"),
-            SVI("(test):2:13: error: conflicting type for parameter 1 of 'f'\n"),
+            SVI("(test):2:13: error: conflicting type for parameter 1 of 'f'. The types are 'int()' and 'int(float)'\n"),
         },
         {
             "unprototyped redeclaration conflicts with narrow parameter", __LINE__,
             SVI("int f(unsigned char);\nint f();\n"),
-            SVI("(test):2:8: error: conflicting type for parameter 1 of 'f'\n"),
+            SVI("(test):2:8: error: conflicting type for parameter 1 of 'f'. The types are 'int(unsigned char)' and 'int()'\n"),
         },
         {
             "empty-list definition conflicts with nonempty prototype", __LINE__,
             SVI("int f(int);\nint f(){return 7;}\n"),
-            SVI("(test):2:8: error: conflicting number of parameters for 'f'\n"),
+            SVI("(test):2:8: error: conflicting number of parameters for 'f'. The types are 'int(int)' and 'int()'\n"),
         },
         {
             "nonempty prototype conflicts with empty-list definition", __LINE__,
             SVI("int f(){return 7;}\nint f(int);\n"),
-            SVI("(test):2:11: error: conflicting number of parameters for 'f'\n"),
+            SVI("(test):2:11: error: conflicting number of parameters for 'f'. The types are 'int()' and 'int(int)'\n"),
         },
         {
             "redecl diff arity", __LINE__,
             SVI("int f(int);\n"
                 "int f(int, int);\n"),
-            SVI("(test):2:16: error: conflicting number of parameters for 'f'\n"),
+            SVI("(test):2:16: error: conflicting number of parameters for 'f'. The types are 'int(int)' and 'int(int, int)'\n"),
         },
         {
             "redecl diff param type", __LINE__,
             SVI("int f(int);\n"
                 "int f(float);\n"),
-            SVI("(test):2:13: error: conflicting type for parameter 1 of 'f'\n"),
+            SVI("(test):2:13: error: conflicting type for parameter 1 of 'f'. The types are 'int' and 'float'\n"),
         },
         {
             "slice pointer expressions both", __LINE__,
@@ -11649,6 +14133,22 @@ TestFunction(test_parse_errors){
             SVI("(test):2:32: error: cannot implicitly convert from 'int' to 'const char[:]'\n"),
         },
         {
+            "va_list object must remain writable", __LINE__,
+            SVI("void f(int n,...){\n"
+                " const __builtin_va_list ap=0;\n"
+                " __builtin_va_start(ap,n);\n"
+                "}\n"),
+            SVI("(test):3:2: error: expression does not have type va_list. The type is 'void *const '\n"),
+        },
+        {
+            "va_list object cannot use atomic storage", __LINE__,
+            SVI("void f(int n,...){\n"
+                " _Atomic __builtin_va_list ap;\n"
+                " __builtin_va_start(ap,n);\n"
+                "}\n"),
+            SVI("(test):3:2: error: expression does not have type va_list. The type is 'void *_Atomic '\n"),
+        },
+        {
             "Plan 9 pointer conversion preserves const", __LINE__,
             SVI("struct B { int x; }; struct D { int prefix; struct B; };\n"
                 "const struct D* d;\n"
@@ -11678,27 +14178,27 @@ TestFunction(test_parse_errors){
             "explicit array to slice different type", __LINE__,
             SVI("int a[3];\n"
                 "char s[:] = (char[:])a;\n"),
-            SVI("(test):2:13: error: cannot cast to slice of different type\n"),
+            SVI("(test):2:13: error: cannot cast to slice of different type. The types are 'int[3]' and 'char[:]'\n"),
         },
         {
             "invalid slice cast", __LINE__,
             SVI("const int s[:];\n"
                 "char cs[:] = (char[:])s;\n"),
-            SVI("(test):2:14: error: cannot cast to slice of different type\n"),
+            SVI("(test):2:14: error: cannot cast to slice of different type. The types are 'const int[:]' and 'char[:]'\n"),
         },
         {
             "slice dereference", __LINE__,
             SVI("int a[2];\n"
                 "int s[:] = a[:];\n"
                 "int x = *s;\n"),
-            SVI("(test):3:9: error: dereferencing non-pointer type\n"),
+            SVI("(test):3:9: error: dereferencing non-pointer type. The type is 'int[:]'\n"),
         },
         {
             "slice ternary incompatible element type", __LINE__,
             SVI("int a[2];\n"
                 "char b[2];\n"
                 "int s[:] = 0 ? a[:] : b[:];\n"),
-            SVI("(test):3:14: error: incompatible operand types for ternary\n"),
+            SVI("(test):3:14: error: incompatible operand types for ternary. The types are 'int[:]' and 'char[:]'\n"),
         },
         {
             "goto nowhere", __LINE__,
@@ -11753,12 +14253,12 @@ TestFunction(test_parse_errors){
         {
             "floating static switch condition", __LINE__,
             SVI("static switch(1.5){}"),
-            SVI("(test):1:15: error: static switch requires integer or _Type expressions\n"),
+            SVI("(test):1:15: error: static switch requires integer or _Type expressions. The type is 'double'\n"),
         },
         {
             "mismatched static case type", __LINE__,
             SVI("static switch(1){\nstatic case\nint:;\n}"),
-            SVI("(test):3:1: error: static case type does not match static switch expression\n"),
+            SVI("(test):3:1: error: static case type does not match static switch expression. The types are '_Type' and 'int'\n"),
         },
         {
             "static case outside switch", __LINE__,
@@ -11843,7 +14343,7 @@ TestFunction(test_parse_errors){
         {
             "static header variables are implicitly const", __LINE__,
             SVI("static if(int x=1){\nx=2;}"),
-            SVI("(test):2:2: error: cannot assign to variable with const-qualified type\n"),
+            SVI("(test):2:2: error: cannot assign to variable with const-qualified type. The type is 'const int'\n"),
         },
         {
             "static header tags do not leak", __LINE__,
@@ -12031,8 +14531,10 @@ TestFunction(test_parse_errors){
         },
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < countof(cases); i = test_atomic_increment(&idx)){
-        struct ErrorCase* c = &cases[i];
+    for(size_t i = test_atomic_increment(&idx); i < CC_TARGET_COUNT * countof(cases); i = test_atomic_increment(&idx)){
+        struct ErrorCase* c = &cases[i / CC_TARGET_COUNT];
+        const CcTargetConfig* target = cc_targets[i % CC_TARGET_COUNT];
+        if(!c->all_targets && target != &cc_target_test) continue;
         if(c->skip){
             TEST_stats.skipped++;
             continue;
@@ -12052,7 +14554,7 @@ TestFunction(test_parse_errors){
                 .at = &at,
                 .logger = logger,
                 .env = &env,
-                .target = &cc_target_test,
+                .target = target,
             },
             .current = &cc.global,
             .eager_parsing = 1,
@@ -12068,6 +14570,8 @@ TestFunction(test_parse_errors){
         }
         err = cc_define_builtin_types(&cc);
         if(err) {TestPrintf("%s:%d: failed to define builtin types\n", __FILE__, c->line); goto fin;}
+        err = cc_register_pragmas(&cc);
+        if(err) {TestPrintf("%s:%d: failed to register pragmas\n", __FILE__, c->line); goto fin;}
         err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
         if(err) {TestPrintf("%s:%d: failed to include\n", __FILE__, c->line); goto fin;}
         err = cc_parse_all(&cc);
@@ -12081,7 +14585,9 @@ TestFunction(test_parse_errors){
         }
         if(1){
             StringView log = msb_borrow_sv(&log_sb);
-            test_expect_equals_sv(c->expected_msg, log, "expected error", "actual error", &TEST_stats, __FILE__, __func__, c->line);
+            StringView expected = c->target_expect[target->target];
+            if(!expected.length) expected = c->expected_msg;
+            test_expect_equals_sv(expected, log, "expected error", "actual error", &TEST_stats, __FILE__, __func__, c->line);
         }
         fin:
         ArenaAllocator_free_all(&at.arena);
@@ -12776,14 +15282,43 @@ TestFunction(test_bitfield_abi){
             },
         },
         {
-            "msvc: different types don't share", __LINE__,
+            "msvc: same-size signed and unsigned types share", __LINE__,
             SVI("struct S { int a : 3; unsigned b : 5; };\n"),
             SVI("S"), CC_BITFIELD_MSVC,
-            .size = 8, .alignment = 4,
+            .size = 4, .alignment = 4,
             .fields = {
                 { SVI("a"), .offset = 0, .bitwidth = 3, .bitoffset = 0 },
-                { SVI("b"), .offset = 4, .bitwidth = 5, .bitoffset = 0 },
+                { SVI("b"), .offset = 0, .bitwidth = 5, .bitoffset = 3 },
             },
+        },
+        {
+            "msvc: qualifiers do not split allocation units", __LINE__,
+            SVI("struct S { const unsigned a:3; volatile unsigned b:5; unsigned c:8; };"),
+            SVI("S"), CC_BITFIELD_MSVC,
+            .size=4, .alignment=4,
+            .fields={{SVI("a"), .bitwidth=3}, {SVI("b"), .bitwidth=5, .bitoffset=3},
+                {SVI("c"), .bitwidth=8, .bitoffset=8}},
+        },
+        {
+            "msvc: zero-width field aligns after a bitfield", __LINE__,
+            SVI("struct S {char a:4; short:0; char b;};"),
+            SVI("S"), CC_BITFIELD_MSVC,
+            .size=4, .alignment=2,
+            .fields={{SVI("a"), .bitwidth=4}, {{0}}, {SVI("b"), .offset=2}},
+        },
+        {
+            "msvc: trailing zero-width field contributes alignment", __LINE__,
+            SVI("struct S {char a:4; int:0;};"),
+            SVI("S"), CC_BITFIELD_MSVC,
+            .size=4, .alignment=4,
+            .fields={{SVI("a"), .bitwidth=4}},
+        },
+        {
+            "msvc: zero-width field after ordinary member is ignored", __LINE__,
+            SVI("struct S {char a; int:0; char b;};"),
+            SVI("S"), CC_BITFIELD_MSVC,
+            .size=2, .alignment=1,
+            .fields={{SVI("a")}, {{0}}, {SVI("b"), .offset=1}},
         },
         {
             "msvc: same type shares", __LINE__,
@@ -12819,11 +15354,11 @@ TestFunction(test_bitfield_abi){
             "msvc: three fields, type changes", __LINE__,
             SVI("struct S { int a : 3; int b : 5; unsigned c : 8; };\n"),
             SVI("S"), CC_BITFIELD_MSVC,
-            .size = 8, .alignment = 4,
+            .size = 4, .alignment = 4,
             .fields = {
                 { SVI("a"), .offset = 0, .bitwidth = 3, .bitoffset = 0 },
                 { SVI("b"), .offset = 0, .bitwidth = 5, .bitoffset = 3 },
-                { SVI("c"), .offset = 4, .bitwidth = 8, .bitoffset = 0 },
+                { SVI("c"), .offset = 0, .bitwidth = 8, .bitoffset = 8 },
             },
         },
         {
@@ -12937,7 +15472,7 @@ TestFunction(test_bitfield_abi){
             }
             for(size_t n = 0; n < MAXFIELDS; n++){
                 struct FieldExpect* fe = &c->fields[n];
-                if(!fe->name.length) break;
+                if(!fe->name.length) continue;
                 TEST_stats.executed++;
                 if(n >= s->field_count){
                     TEST_stats.failures++;
@@ -13148,6 +15683,20 @@ TestFunction(test_record_call_abi){
         CcWindowsAggregate win64;
         _Bool has_wide_vector;
     } cases[] = {
+        {CC_TARGET_X86_64_LINUX, SVI("union S { unsigned x:9 __attribute__((packed)); };"), 1, 2,
+            .sysv={.classes=CC_SYSV_INTEGER, .eightbyte_count=1, .gp_count=1}},
+        {CC_TARGET_AARCH64_LINUX, SVI("union S { unsigned x:9 __attribute__((packed)); };"), 1, 2,
+            .arm64={.gp_count=1, .natural_alignment=1, .copy_alignment=8}},
+        {CC_TARGET_X86_64_WINDOWS_MSVC, SVI("union S { unsigned x:9 __attribute__((packed)); };"), 1, 4,
+            .win64={.gp_count=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("union __attribute__((packed)) S { unsigned x:1; };"), 1, 1,
+            .sysv={.classes=CC_SYSV_INTEGER, .eightbyte_count=1, .gp_count=1}},
+        {CC_TARGET_X86_64_LINUX, SVI("#pragma pack(1)\nunion S { unsigned x:1; };"), 1, 1,
+            .sysv={.classes=CC_SYSV_INTEGER, .eightbyte_count=1, .gp_count=1}},
+        {CC_TARGET_AARCH64_LINUX, SVI("union __attribute__((packed)) S { unsigned x:9; };"), 1, 2,
+            .arm64={.gp_count=1, .natural_alignment=1, .copy_alignment=8}},
+        {CC_TARGET_X86_64_WINDOWS_MSVC, SVI("union __attribute__((packed)) S { unsigned x:1; };"), 1, 4,
+            .win64={.gp_count=1}},
         {CC_TARGET_X86_64_LINUX, SVI("struct S { double x; int y; };"), 0, 16,
             .sysv={.classes=CC_SYSV_SSE | (CC_SYSV_INTEGER << 3), .eightbyte_count=2, .gp_count=1, .fp_count=1, .vector_size=8}},
         {CC_TARGET_X86_64_MACOS, SVI("struct S { int x; double y; };"), 0, 16,
@@ -13503,9 +16052,6 @@ int main(int argc, char** argv){
 #endif
     RegisterTestFlags(test_parse_decls, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_feature_queries, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
-    RegisterTestFlags(test_field_paths, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
-    RegisterTestFlags(test_call_abi_types, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
-    RegisterTestFlags(test_runtime_bitfields, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_parse_errors, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_struct_layout, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);
     RegisterTestFlags(test_record_call_abi, TEST_CASE_FLAGS_DUPLICATE_FOR_EACH_THREAD);

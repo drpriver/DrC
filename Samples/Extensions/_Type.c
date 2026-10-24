@@ -10,8 +10,8 @@ log("%s.is_integer: %s\n", t.name.data, t.is_integer?"true":"false");
 log("%s.is_callable: %s\n", t.name.data, t.is_callable?"true":"false");
 // special methods
 log("%s.is_callable_with(int): %s\n", t.name.data, t.is_callable_with(int)?"true":"false");
-// this one is type-or-expression
-log("%s.is_callable_with(1): %s\n", t.name.data, t.is_callable_with(1)?"true":"false");
+// Use typeof to include an expression's type in the argument list.
+log("%s.is_callable_with(typeof(1)): %s\n", t.name.data, t.is_callable_with(typeof(1))?"true":"false");
 t = int[4];
 log("%s.count: %zu\n", t.name.data, t.count);
 log("%s.is_castable_to(int*): %s\n", t.name.data, t.is_castable_to(int*)?"true":"false");

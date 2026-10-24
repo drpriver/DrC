@@ -25,7 +25,7 @@
 force_inline
 uint64_t
 fast_reduce64(uint64_t x, uint64_t y){
-    #ifdef __SIZEOF_INT128__
+    #if defined __SIZEOF_INT128__ && !defined __wasm__
     return (uint64_t)(((__uint128_t)x * (__uint128_t)y) >> 64);
     #elif defined _MSC_VER
     _umul128(x,y,&y);

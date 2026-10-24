@@ -7,6 +7,38 @@
 // types for ctfe and interpreter, etc.
 //
 
+static inline _Bool ci_narrow_float_nonzero(uint16_t bits){
+    return (bits & UINT16_C(0x7fff)) != 0;
+}
+
+static inline
+uint64_t
+ci_int64_divrem(int64_t a, int64_t b, _Bool remainder){
+    uint64_t au = (uint64_t)a, bu = (uint64_t)b;
+    if(a < 0) au = (uint64_t)0 - au;
+    if(b < 0) bu = (uint64_t)0 - bu;
+    if(!bu) return 0;
+    uint64_t result = remainder ? au % bu : au / bu;
+    return ((a < 0) != (!remainder && b < 0)) ? (uint64_t)0 - result : result;
+}
+
+static inline
+uint64_t
+ci_lsl64(uint64_t v, uint64_t amount){
+    return amount < 64 ? v << amount : 0;
+}
+static inline
+uint64_t
+ci_lsr64(uint64_t v, uint64_t amount){
+    return amount < 64 ? v >> amount : 0;
+}
+static inline
+int64_t
+ci_asr64(int64_t v, uint64_t amount){
+    if(v >= 0) return (int64_t)ci_lsr64((uint64_t)v, amount);
+    return (int64_t)~ci_lsr64(~(uint64_t)v, amount);
+}
+
 // 128-bit unsigned integer
 #ifdef __SIZEOF_INT128__
 typedef unsigned __int128 CiUint128;
@@ -22,8 +54,8 @@ static inline CiUint128 ci_uint128_mod(CiUint128 a, CiUint128 b){ return b ? a %
 static inline CiUint128 ci_uint128_and(CiUint128 a, CiUint128 b){ return a & b; }
 static inline CiUint128 ci_uint128_or(CiUint128 a, CiUint128 b){ return a | b; }
 static inline CiUint128 ci_uint128_xor(CiUint128 a, CiUint128 b){ return a ^ b; }
-static inline CiUint128 ci_uint128_shl(CiUint128 a, uint64_t b){ return a << b; }
-static inline CiUint128 ci_uint128_shr(CiUint128 a, uint64_t b){ return a >> b; }
+static inline CiUint128 ci_uint128_shl(CiUint128 a, uint64_t b){ return b < 128 ? a << b : 0; }
+static inline CiUint128 ci_uint128_shr(CiUint128 a, uint64_t b){ return b < 128 ? a >> b : 0; }
 static inline CiUint128 ci_uint128_not(CiUint128 a){ return ~a; }
 static inline _Bool ci_uint128_eq(CiUint128 a, CiUint128 b){ return a == b; }
 static inline _Bool ci_uint128_ne(CiUint128 a, CiUint128 b){ return a != b; }
@@ -117,6 +149,7 @@ static inline CiUint128 ci_uint128_div(CiUint128 a, CiUint128 b){
     return q;
 }
 static inline CiUint128 ci_uint128_mod(CiUint128 a, CiUint128 b){
+    if(!ci_uint128_nonzero(b)) return ci_uint128_from_uint64(0);
     CiUint128 q = ci_uint128_div(a, b);
     return ci_uint128_sub(a, ci_uint128_mul(q, b));
 }
@@ -129,23 +162,54 @@ static inline void ci_uint128_write(void* buf, uint32_t sz, CiUint128 v){
 }
 #endif
 
-static inline float ci_uint128_to_float(CiUint128 v, _Bool is_unsigned){
+static inline
+_Bool
+ci_uint128_fits_integer(CiUint128 v, unsigned width, _Bool is_unsigned){
+    if(width >= 128) return 1;
+    CiUint128 mask = ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), width), ci_uint128_from_uint64(1));
+    CiUint128 narrowed = ci_uint128_and(v, mask);
+    if(!is_unsigned && ci_uint128_nonzero(ci_uint128_shr(narrowed, width-1)))
+        narrowed = ci_uint128_or(narrowed, ci_uint128_not(mask));
+    return ci_uint128_eq(v, narrowed);
+}
+
+static inline
+_Bool
+ci_uint128_magnitude_fits_integer(CiUint128 magnitude, _Bool negative, unsigned width, _Bool is_unsigned){
+    if(is_unsigned){
+        if(negative && ci_uint128_nonzero(magnitude)) return 0;
+        return width >= 128 || !ci_uint128_nonzero(ci_uint128_shr(magnitude, width));
+    }
+    CiUint128 limit = ci_uint128_shl(ci_uint128_from_uint64(1), width-1);
+    return negative ? ci_uint128_le(magnitude, limit) : ci_uint128_lt(magnitude, limit);
+}
+
+#ifndef __SIZEOF_INT128__
+static inline int64_t ci_uint128_float_significand(CiUint128 v, _Bool is_unsigned, uint32_t* shift){
+    _Bool negative = !is_unsigned && (ci_uint128_hi(v) >> 63);
+    if(negative) v = ci_uint128_sub(ci_uint128_from_uint64(0), v);
+    *shift = 0;
+    CiUint128 reduced = v;
+    // Retain 63 significant bits plus a sticky bit. A float or double cast
+    // then rounds once. Separately rounding the high and low words loses ties.
+    while(ci_uint128_hi(reduced) || (ci_uint128_lo(reduced) >> 63)){
+        reduced = ci_uint128_shr(reduced, 1);
+        (*shift)++;
+    }
+    uint64_t n = ci_uint128_lo(reduced);
+    if(!ci_uint128_eq(v, ci_uint128_shl(reduced, *shift))) n |= 1;
+    return negative ? -(int64_t)n : (int64_t)n;
+}
+#endif
+
+static inline
+float
+ci_uint128_to_float(CiUint128 v, _Bool is_unsigned){
 #ifdef __SIZEOF_INT128__
     return is_unsigned ? (float)v : (float)(__int128)v;
 #else
-    _Bool negative = !is_unsigned && (ci_uint128_hi(v) >> 63);
-    if(negative) v = ci_uint128_sub(ci_uint128_from_uint64(0), v);
-    uint32_t shift = 0;
-    CiUint128 reduced = v;
-    // Retain 63 significant bits plus a sticky bit. The following float cast
-    // then rounds once, including under a directed rounding mode.
-    while(ci_uint128_hi(reduced) || (ci_uint128_lo(reduced) >> 63)){
-        reduced = ci_uint128_shr(reduced, 1);
-        shift++;
-    }
-    uint64_t n = ci_uint128_lo(reduced);
-    if(!ci_uint128_eq(v, ci_uint128_shl(reduced, shift))) n |= 1;
-    float f = (float)(negative ? -(int64_t)n : (int64_t)n);
+    uint32_t shift;
+    float f = (float)ci_uint128_float_significand(v, is_unsigned, &shift);
     uint32_t scale_bits = (127u + shift) << 23;
     float scale;
     memcpy(&scale, &scale_bits, sizeof scale);
@@ -157,16 +221,27 @@ static inline double ci_uint128_to_double(CiUint128 v, _Bool is_unsigned){
 #ifdef __SIZEOF_INT128__
     return is_unsigned ? (double)v : (double)(__int128)v;
 #else
-    _Bool negative = !is_unsigned && (ci_uint128_hi(v) >> 63);
-    if(negative)
-        v = ci_uint128_sub(ci_uint128_from_uint64(0), v);
-    double d = (double)ci_uint128_hi(v) * 18446744073709551616.0
-             + (double)ci_uint128_lo(v);
-    return negative ? -d : d;
+    uint32_t shift;
+    double d = (double)ci_uint128_float_significand(v, is_unsigned, &shift);
+    uint64_t scale_bits = (uint64_t)(1023u + shift) << 52;
+    double scale;
+    memcpy(&scale, &scale_bits, sizeof scale);
+    return d * scale;
 #endif
 }
 
+static inline 
+_Bool 
+ci_double_integer_fits(double d, double signed_limit, _Bool is_unsigned){
+    return is_unsigned ? d > -1.0 && d < signed_limit * 2.0
+        : (d >= -signed_limit || d > -signed_limit - 1.0) && d < signed_limit;
+}
+static inline uint64_t ci_uint64_from_double(double d, _Bool is_unsigned){
+    if(!ci_double_integer_fits(d, 0x1p63, is_unsigned)) return 0;
+    return is_unsigned ? (uint64_t)d : (uint64_t)(int64_t)d;
+}
 static inline CiUint128 ci_uint128_from_double(double d, _Bool is_unsigned){
+    if(!ci_double_integer_fits(d, 0x1p127, is_unsigned)) return ci_uint128_from_uint64(0);
 #ifdef __SIZEOF_INT128__
     return is_unsigned ? (CiUint128)d : (CiUint128)(__int128)d;
 #else
@@ -187,26 +262,19 @@ typedef __int128 CiInt128;
 static inline CiInt128 ci_int128_from_int64(int64_t v){ return (CiInt128)v; }
 static inline CiInt128 ci_int128_from_uint64(uint64_t v){ return (CiInt128)v; }
 static inline _Bool ci_int128_eq(CiInt128 a, CiInt128 b){ return a == b; }
-static inline CiInt128 ci_int128_add(CiInt128 a, CiInt128 b){ return a + b; }
-static inline CiInt128 ci_int128_sub(CiInt128 a, CiInt128 b){ return a - b; }
-static inline CiInt128 ci_int128_mul(CiInt128 a, CiInt128 b){ return a * b; }
 static inline uint64_t ci_int128_lo(CiInt128 a){ return (uint64_t)a; }
-static inline CiInt128 ci_int128_neg(CiInt128 a){ return -a; }
-static inline CiInt128 ci_int128_div(CiInt128 a, CiInt128 b){ return b ? a / b : 0; }
-static inline CiInt128 ci_int128_mod(CiInt128 a, CiInt128 b){ return b ? a % b : 0; }
 static inline _Bool ci_int128_lt(CiInt128 a, CiInt128 b){ return a < b; }
 static inline _Bool ci_int128_gt(CiInt128 a, CiInt128 b){ return a > b; }
 static inline _Bool ci_int128_le(CiInt128 a, CiInt128 b){ return a <= b; }
 static inline _Bool ci_int128_ge(CiInt128 a, CiInt128 b){ return a >= b; }
-static inline CiInt128 ci_int128_shr(CiInt128 a, uint64_t b){ return a >> b; }
+static inline CiInt128 ci_int128_shr(CiInt128 a, uint64_t b){
+    if(a >= 0) return (CiInt128)ci_uint128_shr((CiUint128)a, b);
+    return (CiInt128)~ci_uint128_shr(~(CiUint128)a, b);
+}
 static inline CiInt128 ci_int128_from_uint128(CiUint128 a){ return (CiInt128)a; }
 static inline CiUint128 ci_uint128_from_int128(CiInt128 a){ return (CiUint128)a; }
 #else
 typedef struct { _Alignas(16) uint64_t lo; int64_t hi; } CiInt128;
-static inline int64_t ci_asr64(int64_t v, uint64_t amount){
-    if(v >= 0) return (int64_t)((uint64_t)v >> amount);
-    return (int64_t)~(~(uint64_t)v >> amount);
-}
 static inline CiInt128 ci_int128_from_int64(int64_t v){
     return (CiInt128){.lo = (uint64_t)v, .hi = v < 0 ? (int64_t)-1 : (int64_t)0};
 }
@@ -215,40 +283,6 @@ static inline CiInt128 ci_int128_from_uint64(uint64_t v){
 }
 static inline _Bool ci_int128_eq(CiInt128 a, CiInt128 b){
     return a.lo == b.lo && a.hi == b.hi;
-}
-static inline CiInt128 ci_int128_add(CiInt128 a, CiInt128 b){
-    uint64_t lo = a.lo + b.lo;
-    int64_t hi = a.hi + b.hi + (lo < a.lo);
-    return (CiInt128){lo, hi};
-}
-static inline CiInt128 ci_int128_sub(CiInt128 a, CiInt128 b){
-    uint64_t lo = a.lo - b.lo;
-    int64_t hi = a.hi - b.hi - (a.lo < b.lo);
-    return (CiInt128){lo, hi};
-}
-static CiInt128 ci_int128_neg(CiInt128 a){
-    uint64_t lo = ~a.lo + 1;
-    int64_t hi = ~a.hi + (lo == 0);
-    return (CiInt128){lo, hi};
-}
-static CiInt128 ci_int128_mul(CiInt128 a, CiInt128 b){
-    _Bool a_neg = a.hi < 0;
-    _Bool b_neg = b.hi < 0;
-    uint64_t au = a_neg ? (~a.lo + 1) : a.lo;
-    uint64_t bu = b_neg ? (~b.lo + 1) : b.lo;
-    uint64_t al = au & 0xFFFFFFFF, ah = au >> 32;
-    uint64_t bl = bu & 0xFFFFFFFF, bh = bu >> 32;
-    uint64_t ll = al * bl;
-    uint64_t lh = al * bh;
-    uint64_t hl = ah * bl;
-    uint64_t hh = ah * bh;
-    uint64_t mid = (ll >> 32) + (lh & 0xFFFFFFFF) + (hl & 0xFFFFFFFF);
-    CiInt128 r = {
-        .lo = (ll & 0xFFFFFFFF) | (mid << 32),
-        .hi = (int64_t)(hh + (lh >> 32) + (hl >> 32) + (mid >> 32)),
-    };
-    if(a_neg != b_neg) r = ci_int128_neg(r);
-    return r;
 }
 static inline uint64_t ci_int128_lo(CiInt128 a){ return a.lo; }
 static inline CiInt128 ci_int128_from_uint128(CiUint128 a){
@@ -270,26 +304,34 @@ static inline CiInt128 ci_int128_shr(CiInt128 a, uint64_t b){
     if(b == 0) return a;
     return (CiInt128){(a.lo >> b) | ((uint64_t)a.hi << (64 - b)), ci_asr64(a.hi, b)};
 }
-static CiInt128 ci_int128_div(CiInt128 a, CiInt128 b){
-    if(!b.lo && !b.hi) return (CiInt128){0, 0};
-    _Bool a_neg = a.hi < 0;
-    _Bool b_neg = b.hi < 0;
+#endif
+
+static inline CiInt128 ci_int128_add(CiInt128 a, CiInt128 b){
+    return ci_int128_from_uint128(ci_uint128_add(ci_uint128_from_int128(a), ci_uint128_from_int128(b)));
+}
+static inline CiInt128 ci_int128_sub(CiInt128 a, CiInt128 b){
+    return ci_int128_from_uint128(ci_uint128_sub(ci_uint128_from_int128(a), ci_uint128_from_int128(b)));
+}
+static inline CiInt128 ci_int128_neg(CiInt128 a){
+    return ci_int128_from_uint128(ci_uint128_sub(ci_uint128_from_uint64(0), ci_uint128_from_int128(a)));
+}
+
+static inline CiInt128 ci_int128_divrem(CiInt128 a, CiInt128 b, _Bool remainder){
+    CiInt128 zero = ci_int128_from_int64(0);
+    if(ci_int128_eq(b, zero)) return zero;
+    _Bool a_neg = ci_int128_lt(a, zero);
+    _Bool b_neg = ci_int128_lt(b, zero);
     CiUint128 au = a_neg ? ci_uint128_from_int128(ci_int128_neg(a)) : ci_uint128_from_int128(a);
     CiUint128 bu = b_neg ? ci_uint128_from_int128(ci_int128_neg(b)) : ci_uint128_from_int128(b);
-    CiInt128 q = ci_int128_from_uint128(ci_uint128_div(au, bu));
-    if(a_neg != b_neg) q = ci_int128_neg(q);
-    return q;
+    CiInt128 result = ci_int128_from_uint128(remainder ? ci_uint128_mod(au, bu) : ci_uint128_div(au, bu));
+    return (a_neg != (!remainder && b_neg)) ? ci_int128_neg(result) : result;
 }
-static CiInt128 ci_int128_mod(CiInt128 a, CiInt128 b){
-    if(!b.lo && !b.hi) return (CiInt128){0, 0};
-    _Bool a_neg = a.hi < 0;
-    CiUint128 au = a_neg ? ci_uint128_from_int128(ci_int128_neg(a)) : ci_uint128_from_int128(a);
-    CiUint128 bu = b.hi < 0 ? ci_uint128_from_int128(ci_int128_neg(b)) : ci_uint128_from_int128(b);
-    CiInt128 r = ci_int128_from_uint128(ci_uint128_mod(au, bu));
-    if(a_neg) r = ci_int128_neg(r);
-    return r;
+static inline CiInt128 ci_int128_div(CiInt128 a, CiInt128 b){
+    return ci_int128_divrem(a, b, 0);
 }
-#endif
+static inline CiInt128 ci_int128_mod(CiInt128 a, CiInt128 b){
+    return ci_int128_divrem(a, b, 1);
+}
 
 typedef union CiIEE754Float16 CiIEE754Float16;
 union CiIEE754Float16 {
@@ -679,26 +721,49 @@ static inline CiFloat80 ci_float80_from_float128(CiFloat128 v){
     return ci_float80_read(&b);
 }
 
+static inline 
+CiUint128 
+ci_uint128_round_float(CiUint128 v, _Bool negative, unsigned precision, int* top){
+    *top = 127;
+    while(*top && !ci_uint128_nonzero(ci_uint128_shr(v, *top))) (*top)--;
+    int shift = *top - ((int)precision - 1);
+    if(shift <= 0) return ci_uint128_shl(v, -shift);
+    CiUint128 sig = ci_uint128_shr(v, shift);
+    CiUint128 rem = ci_uint128_sub(v, ci_uint128_shl(sig, shift));
+    if(!ci_uint128_nonzero(rem)) return sig;
+    softfloat_exceptionFlags |= softfloat_flag_inexact;
+    CiUint128 half = ci_uint128_shl(ci_uint128_from_uint64(1), shift - 1);
+    _Bool increment = 0;
+    switch(softfloat_roundingMode){
+        case softfloat_round_near_even:
+            increment = ci_uint128_gt(rem, half) || (ci_uint128_eq(rem, half) && (ci_uint128_lo(sig) & 1));
+            break;
+        case softfloat_round_near_maxMag: increment = ci_uint128_ge(rem, half); break;
+        case softfloat_round_min: increment = negative; break;
+        case softfloat_round_max: increment = !negative; break;
+        case softfloat_round_odd: return ci_uint128_or(sig, ci_uint128_from_uint64(1));
+        default: break;
+    }
+    if(increment){
+        sig = ci_uint128_add(sig, ci_uint128_from_uint64(1));
+        if(ci_uint128_nonzero(ci_uint128_shr(sig, precision))){
+            sig = ci_uint128_shr(sig, 1);
+            (*top)++;
+        }
+    }
+    return sig;
+}
+
 static inline CiFloat80 ci_float80_from_uint128(CiUint128 v, _Bool uns){
 #if defined CI_NATIVE_FLOAT80 && defined __SIZEOF_INT128__
     return uns ? (CiFloat80)v : (CiFloat80)(__int128)v;
 #else
     _Bool neg = !uns && (ci_uint128_hi(v) >> 63);
     if(neg) v = ci_uint128_sub(ci_uint128_from_uint64(0), v);
-    int top = 127;
-    while(top && !ci_uint128_nonzero(ci_uint128_shr(v, top))) top--;
     uint64_t raw[2] = {0, 0};
     if(ci_uint128_nonzero(v)){
-        int shift = top - 63;
-        CiUint128 sig = shift > 0 ? ci_uint128_shr(v, shift) : ci_uint128_shl(v, -shift);
-        if(shift > 0){
-            CiUint128 rem = ci_uint128_sub(v, ci_uint128_shl(sig, shift));
-            CiUint128 half = ci_uint128_shl(ci_uint128_from_uint64(1), shift - 1);
-            if(ci_uint128_gt(rem, half) || (ci_uint128_eq(rem, half) && (ci_uint128_lo(sig) & 1))){
-                sig = ci_uint128_add(sig, ci_uint128_from_uint64(1));
-                if(ci_uint128_nonzero(ci_uint128_shr(sig, 64))){ sig = ci_uint128_shr(sig, 1); top++; }
-            }
-        }
+        int top;
+        CiUint128 sig = ci_uint128_round_float(v, neg, 64, &top);
         raw[0] = ci_uint128_lo(sig);
         raw[1] = (uint64_t)(top + 16383);
     }
@@ -723,20 +788,10 @@ static inline CiFloat128 ci_float128_from_uint128(CiUint128 v, _Bool uns){
 #else
     _Bool neg = !uns && (ci_uint128_hi(v) >> 63);
     if(neg) v = ci_uint128_sub(ci_uint128_from_uint64(0), v);
-    int top = 127;
-    while(top && !ci_uint128_nonzero(ci_uint128_shr(v, top))) top--;
     uint64_t raw[2] = {0, 0};
     if(ci_uint128_nonzero(v)){
-        int shift = top - 112;
-        CiUint128 sig = shift > 0 ? ci_uint128_shr(v, shift) : ci_uint128_shl(v, -shift);
-        if(shift > 0){
-            CiUint128 rem = ci_uint128_sub(v, ci_uint128_shl(sig, shift));
-            CiUint128 half = ci_uint128_shl(ci_uint128_from_uint64(1), shift - 1);
-            if(ci_uint128_gt(rem, half) || (ci_uint128_eq(rem, half) && (ci_uint128_lo(sig) & 1))){
-                sig = ci_uint128_add(sig, ci_uint128_from_uint64(1));
-                if(ci_uint128_nonzero(ci_uint128_shr(sig, 113))){ sig = ci_uint128_shr(sig, 1); top++; }
-            }
-        }
+        int top;
+        CiUint128 sig = ci_uint128_round_float(v, neg, 113, &top);
         raw[0] = ci_uint128_lo(sig);
         raw[1] = (ci_uint128_hi(sig) & UINT64_C(0x0000ffffffffffff)) | ((uint64_t)(top + 16383) << 48);
     }

@@ -57,6 +57,15 @@ static int test_fp_callback(int (*f)(void)){
 }
 static void test_fp_clear(void){ feclearexcept(FE_ALL_EXCEPT); }
 static int test_fp_inexact(void){ return fetestexcept(FE_INEXACT) != 0; }
+static int test_fp_downward(void){ return fegetround() == FE_DOWNWARD; }
+static int test_fp_exception_bits(void){
+    int flags = fetestexcept(FE_ALL_EXCEPT);
+    return ((flags & FE_INEXACT) ? 1 : 0)
+        | ((flags & FE_UNDERFLOW) ? 2 : 0)
+        | ((flags & FE_OVERFLOW) ? 4 : 0)
+        | ((flags & FE_DIVBYZERO) ? 8 : 0)
+        | ((flags & FE_INVALID) ? 16 : 0);
+}
 static int test_fp_rounding_modes(int (*f)(int)){
     fenv_t saved;
     if(feholdexcept(&saved)) return -1;
@@ -863,6 +872,60 @@ TestFunction(test_interop){
             .exit_code = 1,
         },
 #if !(defined __DRC__ && defined __GLIBC__)
+        {
+            "negative wide integer to quad conversion follows directed rounding", __LINE__,
+            SV("int fp_modes(int(*)(int));void fp_clear(void);int fp_inexact(void);int fp_downward(void);\n"
+               "int f(int up){fp_clear();"
+               "_Float128 x=-(((__int128)1<<113)+1);\n"
+               "return x+(_Float128)((unsigned __int128)1<<113)==(fp_downward()?-2:0)&&fp_inexact();}\n"
+               "return fp_modes(f);\n"),
+            {{SV("fp_modes"), (void*)test_fp_rounding_modes},
+             {SV("fp_clear"), (void*)test_fp_clear},
+             {SV("fp_inexact"), (void*)test_fp_inexact},
+             {SV("fp_downward"), (void*)test_fp_downward}},
+            .exit_code = 1, .skip = 1, // Known defect: SoftFloat does not synchronize with host fenv.
+        },
+        {
+            "quad exceptions propagate individually to the host environment", __LINE__,
+            SV("int fp_callback(int(*)(void));void fp_clear(void);int fp_flags(void);\n"
+               "int f(void){volatile _Float128 one=1,zero=0;fp_clear();\n"
+               "_Float128 q=one/zero;if(fp_flags()!=8)return 0;\n"
+               "fp_clear();q=zero/zero;if(fp_flags()!=16 || q==q)return 0;\n"
+               "union Q {_Float128 q;unsigned long long bits[2];};\n"
+               "union Q large={.bits={0,0x7ffe000000000000ull}},small={.bits={1,0}};\n"
+               "volatile _Float128 a=large.q,b=small.q;\n"
+               "fp_clear();q=a*2;if(fp_flags()!=5)return 0;\n"
+               "fp_clear();q=b/2;return fp_flags()==3&&q==0;}\n"
+               "return fp_callback(f);\n"),
+            {{SV("fp_callback"), (void*)test_fp_callback},
+             {SV("fp_clear"), (void*)test_fp_clear},
+             {SV("fp_flags"), (void*)test_fp_exception_bits}},
+            .exit_code = 1, .skip = 1, // Known defect: SoftFloat does not synchronize with host fenv.
+        },
+        {
+            "wide integer to quad conversion honors runtime rounding", __LINE__,
+            SV("int fp_modes(int(*)(int));void fp_clear(void);int fp_inexact(void);\n"
+               "int f(int up){fp_clear();"
+               "_Float128 x=((unsigned __int128)1<<113)+1;\n"
+               "return x-(_Float128)((unsigned __int128)1<<113)==(up?2:0)&&fp_inexact();}\n"
+               "return fp_modes(f);\n"),
+            {{SV("fp_modes"), (void*)test_fp_rounding_modes},
+             {SV("fp_clear"), (void*)test_fp_clear},
+             {SV("fp_inexact"), (void*)test_fp_inexact}},
+            .exit_code = 1, .skip = 1, // Known defect: SoftFloat does not synchronize with host fenv.
+        },
+        {
+            "quad floating expressions honor runtime rounding and exceptions", __LINE__,
+            SV("int fp_modes(int(*)(int));void fp_clear(void);int fp_inexact(void);\n"
+               "int f(int up){fp_clear();"
+               "_Float128 x=(_Float128)1+(_Float128)0x1p-113;\n"
+               "return x-1==(up?(_Float128)0x1p-112:(_Float128)0)&&fp_inexact();}\n"
+               "return fp_modes(f);\n"),
+            {{SV("fp_modes"), (void*)test_fp_rounding_modes},
+             {SV("fp_clear"), (void*)test_fp_clear},
+             {SV("fp_inexact"), (void*)test_fp_inexact}},
+            .exit_code = 1, .skip = 1, // Known defect: SoftFloat does not synchronize with host fenv.
+        },
         {
             "floating expressions honor each rounding mode at runtime", __LINE__,
             SV("int fp_modes(int(*)(int));void fp_clear(void);int fp_inexact(void);\n"

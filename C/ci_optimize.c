@@ -109,6 +109,9 @@ ci_inline_relocate(CiOp* op, const CiInlineSlots* slots, const uint32_t* map){
             CI_REMAP(op->checked.src);
             CI_REMAP(op->checked.src2);
             break;
+        case CI_OP_CHECK:
+            CI_REMAP(op->check.src);
+            break;
         case CI_OP_BIT_BUILTIN:
             CI_REMAP(op->bit_builtin.slot);
             CI_REMAP(op->bit_builtin.src);
@@ -150,6 +153,7 @@ ci_inline_relocate(CiOp* op, const CiInlineSlots* slots, const uint32_t* map){
         case CI_OP_MEMCOPY:
             CI_REMAP(op->memcopy.slot);
             CI_REMAP(op->memcopy.src);
+            if(op->memcopy.dynamic_size) CI_REMAP(op->memcopy.size);
             break;
         case CI_OP_ZERO:
             CI_REMAP(op->zero.slot);

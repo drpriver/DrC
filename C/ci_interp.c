@@ -17,6 +17,7 @@
 #include "ci_optimize.h"
 #include "cc_memory_order.h"
 #include "cc_errors.h"
+#include "cc_type_check.h"
 #include "cc_var.h"
 #include "cc_expr.h"
 #include "cc_target.h"
@@ -117,12 +118,7 @@ static void ci_unlock_resolver(CiInterpreter*);
 static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static inline int cc_align_to(CcParser* p, SrcLoc loc, uint32_t offset, uint32_t alignment, uint32_t* out);
-static CcQualType cc_array_element_type(CcQualType array);
-static _Bool cc_any_payload_type(CcParser* p, CcQualType t);
-static _Bool cc_implicit_convertible(CcParser* p, CcQualType from, CcQualType to);
 static int cc_lookup_field_offset(CcParser*, CcQualType, Atom, uint64_t*, CcQualType*, CcField*_Nullable*_Nonnull);
-static _Bool cc_explicit_castable(CcParser* p, CcQualType from, CcQualType to);
-static _Bool cc_is_callable_through(CcParser* p, CcQualType from, CcQualType through);
 static int ci_eval_lowered_expr(CiInterpreter*, CiInterpFrame*_Nullable, CcExpr*, void*, size_t);
 static int cc_parse_expr(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out);
 static void cc_release_expr(CcParser* p, CcExpr* e);
@@ -691,8 +687,7 @@ ci_type_reflect_validate(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op
         return ci_finish_error(ci, loc);
     }
     if(op == CC_TYPE_PARAM_TYPE){
-        if(ccqt_kind(qt) == CC_POINTER) qt = ccqt_as_ptr(qt)->pointee;
-        if(ccqt_kind(qt) != CC_FUNCTION){
+        if(!ccqt_callable_function(qt)){
             MStringBuilder* sb = ci_start_error(ci, loc, "_Type.param_type: not a function type: ");
             cc_print_type(sb, qt);
             return ci_finish_error(ci, loc);
@@ -740,70 +735,26 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
         }
         case CC_TYPE_IS_VALID:
         case CC_TYPE_IS_INVALID:
-            *(_Bool*)result = (qt.bits != 0) == (op == CC_TYPE_IS_VALID);
-            return 0;
-        case CC_TYPE_IS_INTEGER: {
-            *(_Bool*)result = ccqt_is_integer(qt);
-            return 0;
-        }
-        case CC_TYPE_IS_FLOAT: {
-            *(_Bool*)result = ccqt_is_basic(qt) && ccbt_is_float(ccqt_basic_kind(qt));
-            return 0;
-        }
-        case CC_TYPE_IS_ARITHMETIC: {
-            *(_Bool*)result = (ccqt_is_basic(qt) && ccbt_is_arithmetic(ccqt_basic_kind(qt))) || ccqt_kind(qt) == CC_ENUM;
-            return 0;
-        }
-        case CC_TYPE_IS_POINTER: {
-            *(_Bool*)result = ccqt_kind(qt) == CC_POINTER;
-            return 0;
-        }
-        case CC_TYPE_IS_STRUCT: {
-            *(_Bool*)result = ccqt_kind(qt) == CC_STRUCT;
-            return 0;
-        }
-        case CC_TYPE_IS_UNION: {
-            *(_Bool*)result = ccqt_kind(qt) == CC_UNION;
-            return 0;
-        }
-        case CC_TYPE_IS_ARRAY: {
-            *(_Bool*)result = ccqt_is_array(qt);
-            return 0;
-        }
-        case CC_TYPE_IS_VECTOR: {
-            *(_Bool*)result = ccqt_kind(qt) == CC_VECTOR;
-            return 0;
-        }
-        case CC_TYPE_IS_SLICE: {
-            *(_Bool*)result = ccqt_kind(qt) == CC_SLICE;
-            return 0;
-        }
-        case CC_TYPE_IS_FUNCTION: {
-            *(_Bool*)result = ccqt_kind(qt) == CC_FUNCTION;
-            return 0;
-        }
-        case CC_TYPE_IS_ENUM: {
-            *(_Bool*)result = ccqt_kind(qt) == CC_ENUM;
-            return 0;
-        }
-        case CC_TYPE_IS_CONST: {
-            *(_Bool*)result = qt.is_const;
-            return 0;
-        }
-        case CC_TYPE_IS_VOLATILE: {
-            *(_Bool*)result = qt.is_volatile;
-            return 0;
-        }
-        case CC_TYPE_IS_ATOMIC: {
-            *(_Bool*)result = qt.is_atomic;
-            return 0;
-        }
-        case CC_TYPE_IS_UNSIGNED: {
-            *(_Bool*)result = ccqt_is_unsigned(qt, !ci_target(ci)->char_is_signed);
-            return 0;
-        }
-        case CC_TYPE_IS_SIGNED: {
-            *(_Bool*)result = ccqt_is_integer(qt) && !ccqt_is_unsigned(qt, !ci_target(ci)->char_is_signed);
+        case CC_TYPE_IS_INTEGER:
+        case CC_TYPE_IS_FLOAT:
+        case CC_TYPE_IS_ARITHMETIC:
+        case CC_TYPE_IS_POINTER:
+        case CC_TYPE_IS_STRUCT:
+        case CC_TYPE_IS_UNION:
+        case CC_TYPE_IS_ARRAY:
+        case CC_TYPE_IS_VECTOR:
+        case CC_TYPE_IS_SLICE:
+        case CC_TYPE_IS_FUNCTION:
+        case CC_TYPE_IS_ENUM:
+        case CC_TYPE_IS_CONST:
+        case CC_TYPE_IS_VOLATILE:
+        case CC_TYPE_IS_ATOMIC:
+        case CC_TYPE_IS_UNSIGNED:
+        case CC_TYPE_IS_SIGNED:
+        case CC_TYPE_IS_CALLABLE:
+        case CC_TYPE_IS_INCOMPLETE:
+        case CC_TYPE_IS_VARIADIC: {
+            *(_Bool*)result = cc_type_predicate(ci_target(ci), op, qt);
             return 0;
         }
         case CC_TYPE_SIZEOF: {
@@ -830,45 +781,6 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             }
             CcPointer* ptr = ccqt_as_ptr(qt);
             *(uintptr_t*)result = ptr->pointee.bits;
-            return 0;
-        }
-        case CC_TYPE_IS_CALLABLE: {
-            CcTypeKind k = ccqt_kind(qt);
-            *(_Bool*)result = k == CC_FUNCTION || (k == CC_POINTER && ccqt_kind(ccqt_as_ptr(qt)->pointee) == CC_FUNCTION);
-            return 0;
-        }
-        case CC_TYPE_IS_INCOMPLETE: {
-            CcTypeKind k = ccqt_kind(qt);
-            switch(k){
-                case CC_VECTOR:
-                case CC_VLA: *(_Bool*)result = 0; break;
-                case CC_ALIGNED: ci_unsafe_unreachable();
-                DRP_CASES_EXHAUSTED;
-                case CC_STRUCT:
-                    *(_Bool*)result = ccqt_as_struct(qt)->is_incomplete;
-                    break;
-                case CC_UNION:
-                    *(_Bool*)result = ccqt_as_union(qt)->is_incomplete;
-                    break;
-                case CC_ARRAY:
-                    *(_Bool*)result = ccqt_as_array(qt)->is_incomplete;
-                    break;
-                case CC_ENUM:
-                    *(_Bool*)result = ccqt_as_enum(qt)->is_incomplete;
-                    break;
-                case CC_FUNCTION:
-                case CC_BASIC:
-                case CC_POINTER:
-                case CC_BLOCK_POINTER:
-                case CC_SLICE:
-                    *(_Bool*)result = 0;
-            }
-            return 0;
-        }
-        case CC_TYPE_IS_VARIADIC: {
-            CcQualType ft = qt;
-            if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-            *(_Bool*)result = ccqt_kind(ft) == CC_FUNCTION && ccqt_as_function(ft)->is_variadic;
             return 0;
         }
         case CC_TYPE_UNQUAL: {
@@ -919,35 +831,26 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             return 0;
         }
         case CC_TYPE_IS_CALLABLE_WITH: {
-            uintptr_t arg_bits = arg;
-            CcQualType arg_type = {.bits = arg_bits};
-            CcQualType ft = qt;
-            if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-            _Bool v = 0;
-            if(ccqt_kind(ft) == CC_FUNCTION){
-                CcFunction* f = ccqt_as_function(ft);
-                if(f->param_count == 1)
-                    v = cc_implicit_convertible(&ci->parser, arg_type, f->params[0]);
-            }
-            *(_Bool*)result = v;
+            CiRtSlice types;
+            memcpy(&types, (const void*)arg, sizeof types);
+            *(_Bool*)result = types.count <= UINT32_MAX && cc_is_callable_with(ci_target(ci), qt, types.data, (uint32_t)types.count);
             return 0;
         }
         case CC_TYPE_IS_CALLABLE_THROUGH:
         case CC_TYPE_CASTABLE_TO: {
             uintptr_t arg_bits = arg;
             CcQualType target = {.bits = arg_bits};
-            *(_Bool*)result = op == CC_TYPE_IS_CALLABLE_THROUGH ? cc_is_callable_through(&ci->parser, qt, target) : cc_explicit_castable(&ci->parser, qt, target);
+            *(_Bool*)result = op == CC_TYPE_IS_CALLABLE_THROUGH ? cc_is_callable_through(ci_target(ci), qt, target) : cc_explicit_castable(ci_target(ci), qt, target);
             return 0;
         }
         case CC_TYPE_MAKE_ANY:{
+            if(!cc_any_payload_type(ci_target(ci), qt))
+                return ci_error(ci, loc, "_Type.make_any requires a complete, non-array object type fitting its payload");
             CiRtAny* any = result;
             memset(any, 0, sizeof *any);
             uint32_t sz;
             err = cc_sizeof_as_uint(&ci->parser, qt, loc, &sz);
             if(err) return err;
-            if(sz > sizeof any->payload){
-                return ci_error(ci, loc, "Type doesn't fit in an _Any");
-            }
             if(sz && !arg){
                 return ci_error(ci, loc, "Null pointer as arg to make_any");
             }
@@ -983,6 +886,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
                     if(f && f->is_method != method) f = NULL;
                     if(f){
                         named_field = *f;
+                        named_field.type = type;
                         named_field.offset = (uint32_t)offset;
                         f = &named_field;
                     }
@@ -1049,27 +953,23 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
             return 0;
         }
         case CC_TYPE_RETURN_TYPE: {
-            CcQualType ft = qt;
-            if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-            if(ccqt_kind(ft) != CC_FUNCTION)
+            CcFunction* f = ccqt_callable_function(qt);
+            if(!f)
                 return ci_error(ci, loc, "_Type.return_type: not a function type");
-            *(uintptr_t*)result = ccqt_as_function(ft)->return_type.bits;
+            *(uintptr_t*)result = f->return_type.bits;
             return 0;
         }
         case CC_TYPE_PARAM_COUNT: {
-            CcQualType ft = qt;
-            if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-            if(ccqt_kind(ft) != CC_FUNCTION)
+            CcFunction* f = ccqt_callable_function(qt);
+            if(!f)
                 return ci_error(ci, loc, "_Type.param_count: not a function type");
-            *(size_t*)result = ccqt_as_function(ft)->param_count;
+            *(size_t*)result = f->param_count;
             return 0;
         }
         case CC_TYPE_PARAM_TYPE: {
-            CcQualType ft = qt;
-            if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-            if(ccqt_kind(ft) != CC_FUNCTION)
+            CcFunction* f = ccqt_callable_function(qt);
+            if(!f)
                 return ci_error(ci, loc, "_Type.param_type: not a function type");
-            CcFunction* f = ccqt_as_function(ft);
             uintptr_t idx = arg;
             if(idx >= f->param_count)
                 return ci_error(ci, loc, "_Type.param_type: index out of range");
@@ -1079,7 +979,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
         case CC_TYPE_ELEMENT_TYPE: {
             CcTypeKind k = ccqt_kind(qt);
             if(k == CC_ARRAY || k == CC_VECTOR || k == CC_VLA){
-                *(uintptr_t*)result = cc_array_element_type(qt).bits;
+                *(uintptr_t*)result = ccqt_qualified_array_element(qt).bits;
                 return 0;
             }
             if(k == CC_SLICE){
@@ -1242,8 +1142,11 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                         err = ci_type_reflect_validate(ci, op->rt_call.loc, op->rt_call.reflect_op, qt);
                     else if(op->rt_call.op == CI_RT_MODULE_VALIDATE)
                         err = ci_module_reflect_validate(ci, op->rt_call.loc, (CiModule*)receiver);
-                    else if(op->rt_call.op == CI_RT_TYPE_REFLECT)
+                    else if(op->rt_call.op == CI_RT_TYPE_REFLECT){
+                        if(op->rt_call.reflect_op == CC_TYPE_IS_CALLABLE_WITH)
+                            arg = (uintptr_t)((char*)frame->slots + op->rt_call.args[1]);
                         err = ci_type_reflect(ci, op->rt_call.loc, op->rt_call.reflect_op, qt, arg, op->rt_call.member_by_name ? (const CiRtSlice*)((char*)frame->slots + op->rt_call.args[1]) : NULL, result);
+                    }
                     else {
                         if(op->rt_call.member_by_name)
                             arg = (uintptr_t)((char*)frame->slots + op->rt_call.args[1]);
@@ -1323,8 +1226,15 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     CcFunc* old_func = BPM_rget(&ci->closure_map, (void*)old_ptr);
                     CcFunc* new_func = BPM_rget(&ci->closure_map, (void*)new_ptr);
                     if(!old_func || !(old_func->inline_ || old_func->always_inline)){
-                        if(old_func == new_func) ret = 0;
-                        else if(old_func && new_func && old_func->type == new_func->type){
+                        if(old_func == new_func)
+                            ret = 0;
+                        else if(old_func
+                            && new_func
+                            && cc_types_same(
+                                (CcQualType){.bits=(uintptr_t)old_func->type},
+                                (CcQualType){.bits=(uintptr_t)new_func->type}
+                            )
+                        ){
                             drp_atomic_ptr_store(&old_func->hotswap, new_func);
                             ret = 0;
                         }
@@ -1504,25 +1414,25 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     if(is_unsigned)
                         res = ru ? lu / ru : 0;
                     else
-                        res = ru ? (uint8_t)((int8_t)lu / (int8_t)ru) : 0;
+                        res = ci_int64_divrem((int8_t)lu, (int8_t)ru, 0);
                     break;
                 case CI_ALU_MOD:
                     if(is_unsigned)
                         res = ru ? lu % ru : 0;
                     else
-                        res = ru ? (uint8_t)((int8_t)lu % (int8_t)ru) : 0;
+                        res = ci_int64_divrem((int8_t)lu, (int8_t)ru, 1);
                     break;
                 case CI_ALU_AND: res = lu & ru; break;
                 case CI_ALU_OR:  res = lu | ru; break;
                 case CI_ALU_XOR: res = lu ^ ru; break;
-                case CI_ALU_SHL: res = lu << ru; break;
+                case CI_ALU_SHL: res = ci_lsl64(lu, ru); break;
                 case CI_ALU_SHR:
                     if(is_unsigned)
-                        res = lu >> ru;
+                        res = ci_lsr64(lu, ru);
                     else
-                        res = (uint8_t)((int8_t)lu >> ru);
+                        res = (uint8_t)ci_asr64((int8_t)lu, ru);
                     break;
-                case CI_ALU_NEG: res = (uint8_t)-(int8_t)lu; break;
+                case CI_ALU_NEG: res = 0u - lu; break;
                 case CI_ALU_NOT: res = (uint8_t)~lu; break;
                 DRP_CASES_EXHAUSTED;
             }
@@ -1552,25 +1462,25 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     if(is_unsigned)
                         res = ru ? lu / ru : 0;
                     else
-                        res = ru ? (uint16_t)((int16_t)lu / (int16_t)ru) : 0;
+                        res = ci_int64_divrem((int16_t)lu, (int16_t)ru, 0);
                     break;
                 case CI_ALU_MOD:
                     if(is_unsigned)
                         res = ru ? lu % ru : 0;
                     else
-                        res = ru ? (uint16_t)((int16_t)lu % (int16_t)ru) : 0;
+                        res = ci_int64_divrem((int16_t)lu, (int16_t)ru, 1);
                     break;
                 case CI_ALU_AND: res = lu & ru; break;
                 case CI_ALU_OR:  res = lu | ru; break;
                 case CI_ALU_XOR: res = lu ^ ru; break;
-                case CI_ALU_SHL: res = lu << ru; break;
+                case CI_ALU_SHL: res = ci_lsl64(lu, ru); break;
                 case CI_ALU_SHR:
                     if(is_unsigned)
-                        res = lu >> ru;
+                        res = ci_lsr64(lu, ru);
                     else
-                        res = (uint16_t)((int16_t)lu >> ru);
+                        res = (uint16_t)ci_asr64((int16_t)lu, ru);
                     break;
-                case CI_ALU_NEG: res = (uint16_t)-(int16_t)lu; break;
+                case CI_ALU_NEG: res = 0u - lu; break;
                 case CI_ALU_NOT: res = (uint16_t)~lu; break;
                 DRP_CASES_EXHAUSTED;
             }
@@ -1599,25 +1509,25 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     if(is_unsigned)
                         res = ru ? lu / ru : 0;
                     else
-                        res = ru ? (uint32_t)((int32_t)lu / (int32_t)ru) : 0;
+                        res = ci_int64_divrem((int32_t)lu, (int32_t)ru, 0);
                     break;
                 case CI_ALU_MOD:
                     if(is_unsigned)
                         res = ru ? lu % ru : 0;
                     else
-                        res = ru ? (uint32_t)((int32_t)lu % (int32_t)ru) : 0;
+                        res = ci_int64_divrem((int32_t)lu, (int32_t)ru, 1);
                     break;
                 case CI_ALU_AND: res = lu & ru; break;
                 case CI_ALU_OR:  res = lu | ru; break;
                 case CI_ALU_XOR: res = lu ^ ru; break;
-                case CI_ALU_SHL: res = lu << ru; break;
+                case CI_ALU_SHL: res = ci_lsl64(lu, ru); break;
                 case CI_ALU_SHR:
                     if(is_unsigned)
-                        res = lu >> ru;
+                        res = ci_lsr64(lu, ru);
                     else
-                        res = (uint32_t)((int32_t)lu >> ru);
+                        res = (uint32_t)ci_asr64((int32_t)lu, ru);
                     break;
-                case CI_ALU_NEG: res = (uint32_t)-(int32_t)lu; break;
+                case CI_ALU_NEG: res = 0u - lu; break;
                 case CI_ALU_NOT: res = ~lu; break;
                 DRP_CASES_EXHAUSTED;
             }
@@ -1646,25 +1556,25 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     if(is_unsigned)
                         res = ru ? lu / ru : 0;
                     else
-                        res = ru ? (uint64_t)((int64_t)lu / (int64_t)ru) : 0;
+                        res = ci_int64_divrem((int64_t)lu, (int64_t)ru, 0);
                     break;
                 case CI_ALU_MOD:
                     if(is_unsigned)
                         res = ru ? lu % ru : 0;
                     else
-                        res = ru ? (uint64_t)((int64_t)lu % (int64_t)ru) : 0;
+                        res = ci_int64_divrem((int64_t)lu, (int64_t)ru, 1);
                     break;
                 case CI_ALU_AND: res = lu & ru; break;
                 case CI_ALU_OR:  res = lu | ru; break;
                 case CI_ALU_XOR: res = lu ^ ru; break;
-                case CI_ALU_SHL: res = lu << ru; break;
+                case CI_ALU_SHL: res = ci_lsl64(lu, ru); break;
                 case CI_ALU_SHR:
                     if(is_unsigned)
-                        res = lu >> ru;
+                        res = ci_lsr64(lu, ru);
                     else
-                        res = (uint64_t)((int64_t)lu >> ru);
+                        res = (uint64_t)ci_asr64((int64_t)lu, ru);
                     break;
-                case CI_ALU_NEG: res = (uint64_t)-(int64_t)lu; break;
+                case CI_ALU_NEG: res = (uint64_t)0 - lu; break;
                 case CI_ALU_NOT: res = ~lu; break;
                 DRP_CASES_EXHAUSTED;
             }
@@ -1699,13 +1609,16 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 case CI_ALU_AND: res = ci_uint128_and(lu, ru); break;
                 case CI_ALU_OR:  res = ci_uint128_or(lu, ru); break;
                 case CI_ALU_XOR: res = ci_uint128_xor(lu, ru); break;
-                case CI_ALU_SHL: res = ci_uint128_shl(lu, ci_uint128_lo(ru)); break;
-                case CI_ALU_SHR:
-                    if(is_unsigned)
-                        res = ci_uint128_shr(lu, ci_uint128_lo(ru));
+                case CI_ALU_SHL: case CI_ALU_SHR: {
+                    uint64_t count = ci_uint128_hi(ru) ? UINT64_MAX : ci_uint128_lo(ru);
+                    if(op->alu.op == CI_ALU_SHL)
+                        res = ci_uint128_shl(lu, count);
+                    else if(is_unsigned)
+                        res = ci_uint128_shr(lu, count);
                     else
-                        res = ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(lu), ci_uint128_lo(ru)));
+                        res = ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(lu), count));
                     break;
+                }
                 case CI_ALU_NEG: res = ci_uint128_sub(ci_uint128_from_uint64(0), lu); break;
                 case CI_ALU_NOT: res = ci_uint128_xor(lu, ci_uint128_from_int64(-1)); break;
                 DRP_CASES_EXHAUSTED;
@@ -1862,36 +1775,22 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             switch((CiCheckedOp)op->checked.op){
                 case CI_CHK_ADD: r = ci_int128_add(a, b); break;
                 case CI_CHK_SUB: r = ci_int128_sub(a, b); break;
-                case CI_CHK_MUL: r = ci_int128_mul(a, b); break;
+                case CI_CHK_MUL: r = ci_int128_from_uint128(ci_uint128_mul(ci_uint128_from_int128(a), ci_uint128_from_int128(b))); break;
                 DRP_CASES_EXHAUSTED;
             }
             uint32_t dsz = op->checked.res_size;
             uint64_t truncated = ci_int128_lo(r);
             ci_write_uint((char*)frame->slots + op->checked.result, dsz, truncated);
-            // re-extend the truncated value per the destination signedness and
-            // compare to the exact result
-            CiInt128 back;
-            if(op->checked.res_unsigned){
-                if(dsz >= 8)
-                    back = ci_int128_from_uint64(truncated);
-                else
-                    back = ci_int128_from_uint64(truncated & (((uint64_t)1 << (dsz * 8)) - 1));
-            }
-            else {
-                int64_t sval;
-                switch(dsz){
-                    case 1: sval = (int8_t)truncated; break;
-                    case 2: sval = (int16_t)truncated; break;
-                    case 4: sval = (int32_t)truncated; break;
-                    default: sval = (int64_t)truncated; break;
-                }
-                back = ci_int128_from_int64(sval);
-            }
-            _Bool overflowed = !ci_int128_eq(r, back);
+            _Bool overflowed = !ci_uint128_fits_integer(ci_uint128_from_int128(r), dsz * 8, op->checked.res_unsigned);
             *((char*)frame->slots + op->checked.overflow) = (char)overflowed;
             frame->pc++;
             return 0;
         }
+        case CI_OP_CHECK:
+            if(!*((unsigned char*)frame->slots + op->check.src))
+                return ci_error(ci, op->loc, "%s", op->check.message);
+            frame->pc++;
+            return 0;
         case CI_OP_BIT_BUILTIN: {
             if(op->bit_builtin.op >= CC_BIT_CRC32C8 && op->bit_builtin.op <= CC_BIT_CRC32C64){
                 uint32_t seed = (uint32_t)ci_read_uint((char*)frame->slots + op->bit_builtin.src, 4);
@@ -1996,7 +1895,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 ci_uint128_write(dest, op->ftoi.slot_size, v);
             }
             else {
-                uint64_t v = op->ftoi.is_unsigned ? (uint64_t)d : (uint64_t)(int64_t)d;
+                uint64_t v = ci_uint64_from_double(d, op->ftoi.is_unsigned);
                 ci_write_uint(dest, op->ftoi.slot_size, v);
             }
             frame->pc++;
@@ -2221,7 +2120,10 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             char* src;
             CI_INLINE_MEMCPY(&dst, (char*)frame->slots + op->memcopy.slot, sizeof dst);
             CI_INLINE_MEMCPY(&src, (char*)frame->slots + op->memcopy.src, sizeof src);
-            memmove(dst + op->memcopy.offset, src + op->memcopy.src_offset, op->memcopy.size);
+            size_t size = op->memcopy.size;
+            if(op->memcopy.dynamic_size)
+                CI_INLINE_MEMCPY(&size, (char*)frame->slots + op->memcopy.size, sizeof size);
+            memmove(dst + op->memcopy.offset, src + op->memcopy.src_offset, size);
             frame->pc++;
             return 0;
         }
@@ -2279,6 +2181,9 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                     v = ci_uint128_from_uint64(ci_read_uint(src, op->convert.src_size));
                 else
                     v = ci_uint128_from_int64(ci_read_int(src, op->convert.src_size));
+                if((op->convert.checked_index || op->convert.checked_bound)
+                    && !ci_uint128_fits_integer(v, op->convert.slot_size*8, op->convert.checked_bound || op->convert.is_unsigned))
+                    return ci_error(ci, op->loc, "%s", op->convert.checked_bound ? "VLA bound is outside the size_t range" : "index is outside the pointer-sized integer range");
                 if(op->convert.slot_size <= 8)
                     ci_write_uint(dest, op->convert.slot_size, ci_uint128_lo(v));
                 else
@@ -2291,6 +2196,10 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 v = ci_read_uint(src, op->convert.src_size);
             else
                 v = (uint64_t)ci_read_int(src, op->convert.src_size);
+            if((op->convert.checked_index || op->convert.checked_bound)
+                && !ci_uint128_fits_integer(op->convert.is_unsigned ? ci_uint128_from_uint64(v)
+                    : ci_uint128_from_int64((int64_t)v), op->convert.slot_size*8, op->convert.checked_bound || op->convert.is_unsigned))
+                return ci_error(ci, op->loc, "%s", op->convert.checked_bound ? "VLA bound is outside the size_t range" : "index is outside the pointer-sized integer range");
             ci_write_uint(dest, op->convert.slot_size, v);
             frame->pc++;
             return 0;
@@ -2303,6 +2212,8 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 v = ci_float128_nonzero(ci_float128_read(src));
             else if(float_width == 80)
                 v = ci_float80_nonzero(ci_float80_read(src));
+            else if(float_width == 16)
+                v = ci_narrow_float_nonzero((uint16_t)ci_read_uint(src, 2));
             else if(float_width)
                 v = ci_read_float(src, float_width) != 0.0;
             else if(op->istrue.src_size > 8){
@@ -2879,18 +2790,17 @@ ci_call_by_name(CiInterpreter* ci, StringView name, const CiArg* _Nullable args,
     if(!func->parsed || !func->interp_ops)
         return CI_SYMBOL_UNRESOLVED;
     CcFunction* ftype = func->interp_ops->native_type;
-    // Check arg count.
     if(nargs != ftype->param_count)
         return ci_error(ci, func->loc, "ci_call_by_name '%.*s': expected %u args, got %u",
             (int)name.length, name.text, ftype->param_count, nargs);
-    // Type-check args against parameter types.
+    // Ignore top-level qualifiers and alignment when comparing value types.
     for(uint32_t i = 0; i < nargs; i++){
-        if(args[i].type.bits != ftype->params[i].bits)
+        CcQualType argument = cc_parameter_value_type(args[i].type);
+        CcQualType parameter = cc_parameter_value_type(ftype->params[i]);
+        if(!cc_types_same(argument, parameter))
             return ci_error(ci, func->loc, "ci_call_by_name '%.*s': arg %u type mismatch",
                 (int)name.length, name.text, i);
     }
-    // The caller's buffers are the argument values; hand ci_call_argv
-    // pointers to them.
     for(uint32_t i = 0; i < nargs; i++){
         uint32_t param_sz;
         int err = cc_sizeof_as_uint(&ci->parser, ftype->params[i], func->loc, &param_sz);
@@ -3339,7 +3249,7 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const
                 CcFunc* func = sym.func;
                 CcQualType func_type = {.bits = (uintptr_t)func->type};
                 symbol_type = func_type;
-                if(expected.bits && func_type.bits != expected.bits)
+                if(expected.bits && !cc_types_same(func_type, expected))
                     goto done;
                 CiRtModuleMember member;
                 ret = ci_reflect_func_unlocked(ci, loc, func, &member, 1);
@@ -3352,7 +3262,7 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const
             case CC_SYM_VAR: {
                 CcVariable* var = sym.var;
                 symbol_type = var->type;
-                if(expected.bits && var->type.bits != expected.bits)
+                if(expected.bits && !cc_types_same(var->type, expected))
                     goto done;
                 CiRtModuleMember member;
                 ret = ci_reflect_var_unlocked(ci, loc, var, &member);
@@ -4235,7 +4145,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
                 case CCBT__Any:{
                     CiRtAny any;
                     CI_INLINE_MEMCPY(&any, result, sizeof any);
-                    if(!cc_any_payload_type(p, any.type)){
+                    if(!cc_any_payload_type(ci_target(ci), any.type)){
                         err = ci_error(ci, loc, "Invalid _Any payload type in procedural macro result");
                         goto cleanup;
                     }

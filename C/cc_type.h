@@ -158,10 +158,11 @@ struct CC_ALIGN(8) CcArray {
     union {
         uint32_t _bits;
         struct {
-            CcTypeKind kind:        4; // CC_ARRAY
-            uint32_t is_static:     1;
-            uint32_t is_incomplete: 1;
-            uint32_t _padding:      26;
+            CcTypeKind kind:          4; // CC_ARRAY
+            uint32_t is_static:       1,
+                     is_incomplete:   1,
+                     parameter_quals: 3,
+                     _padding:        23; // free real estate
         };
     };
     CcQualType element;
@@ -186,7 +187,8 @@ struct CC_ALIGN(8) CcVla {
         struct {
             CcTypeKind kind:   4; // CC_VLA
             uint32_t unspecified: 1,
-                     _padding: 27; // Free real estate
+                     parameter_quals: 3,
+                     _padding: 24; // Free real estate
         };
     };
     uint32_t _pad; // free real estate
@@ -228,8 +230,10 @@ struct CcField {
              bitoffset: 7, // bit offset within storage unit
              is_method: 1,
              is_bitfield: 1,
-             _padding: 15;
+             packed: 1,
+             _padding: 14;
     uint32_t alignment; // from _Alignas, 0 means default
+    uint32_t layout_alignment; // effective member alignment after record packing
     SrcLoc loc;
 };
 
@@ -436,6 +440,7 @@ ccqt_unaligned(CcQualType t){
     return t;
 }
 static inline CcBasicTypeKind ccqt_basic_kind(CcQualType t){ return ccqt_unaligned(t).basic.kind; }
+
 
 static inline
 _Bool
@@ -710,27 +715,12 @@ ccqt_basic(CcBasicTypeKind k){
     return (CcQualType){.basic.kind = k};
 }
 
-// Check if a type is pointer-like (pointer or array) for arithmetic purposes
-static inline
-_Bool
-ccqt_is_pointer_like(CcQualType t){
-    CcTypeKind k = ccqt_kind(t);
-    return k == CC_POINTER || (k == CC_BASIC && ccqt_basic_kind(t) == CCBT_nullptr_t) || k == CC_ARRAY || k == CC_VLA;
-}
 
 static inline
 _Bool
 ccqt_is_some_kind_of_pointer(CcQualType t){
-    t = ccqt_unaligned(t);
-    switch(ccqt_raw_kind(t)){
-        case CC_BLOCK_POINTER:
-        case CC_POINTER:
-            return 1;
-        case CC_BASIC:
-            return t.basic.kind == CCBT_nullptr_t;
-        default:
-            return 0;
-    }
+    CcTypeKind kind = ccqt_kind(t);
+    return kind == CC_POINTER || kind == CC_BLOCK_POINTER;
 }
 
 static inline
@@ -783,6 +773,25 @@ ccqt_array_object_type(CcQualType t){
         t = ccqt_unaligned(ccqt_qualified_array_element(t));
     return t;
 }
+static inline
+uintptr_t
+cc_object_quals(CcQualType type){
+    return ccqt_array_object_type(type).quals;
+}
+// cc_object_quals()
+// -----------------
+// Gets the qualifiers of the stored object, descending through array layers
+// and accumulating array qualification. This is different than `.quals`
+// as arrays have a qualifed element type, the array itself is not qualified.
+//
+// Returns:
+// --------
+// The object's qualifier bits, in the CcQualType.quals representation.
+//
+// Arguments:
+// ----------
+// type: Object or array type.
+//
 static inline _Bool ccqt_is_vm(CcQualType t){
     for(;;){
         switch(ccqt_kind(t)){
@@ -795,27 +804,83 @@ static inline _Bool ccqt_is_vm(CcQualType t){
     }
 }
 static inline CcAligned*  ccqt_as_aligned (CcQualType t){ return (void*)(t.bits & ~(uintptr_t)7); }
+static inline uint32_t ccqt_explicit_alignment(CcQualType t){
+    return ccqt_raw_kind(t) == CC_ALIGNED ? ccqt_as_aligned(t)->alignment : 0;
+}
 
 static inline _Bool ccqt_bt_eq(CcQualType t, CcBasicTypeKind bt){return ccqt_is_basic(t) && ccqt_basic_kind(t) == bt;}
 static inline
 _Bool
+ccqt_has_pointer_representation(CcQualType t){
+    return ccqt_kind(t) == CC_POINTER
+        || ccqt_kind(t) == CC_BLOCK_POINTER
+        || ccqt_bt_eq(t, CCBT_nullptr_t);
+}
+
+static inline
+_Bool
+ccqt_is_narrow_float(CcQualType t){
+    return ccqt_bt_eq(t, CCBT_float16) || ccqt_bt_eq(t, CCBT_bfloat16);
+}
+
+static inline
+CcQualType
+ccqt_enum_underlying(CcQualType t){
+    while(ccqt_kind(t) == CC_ENUM) t = ccqt_as_enum(t)->underlying;
+    return t;
+}
+
+static inline
+_Bool
+ccqt_is_complete_object(CcQualType type){
+    for(;;){
+        switch(ccqt_kind(type)){
+            case CC_BASIC:
+                return !ccqt_bt_eq(type, CCBT_void) && !ccqt_bt_eq(type, CCBT_INVALID);
+            case CC_ARRAY:
+                if(ccqt_as_array(type)->is_incomplete) return 0;
+                type = ccqt_as_array(type)->element;
+                break;
+            case CC_VLA:
+                type = ccqt_as_vla(type)->element;
+                break;
+            case CC_STRUCT: case CC_UNION:
+                return !ccqt_as_struct(type)->is_incomplete;
+            case CC_ENUM:
+                return !ccqt_as_enum(type)->is_incomplete;
+            case CC_POINTER: case CC_BLOCK_POINTER: case CC_SLICE: case CC_VECTOR:
+                return 1;
+            case CC_FUNCTION: case CC_ALIGNED:
+                return 0;
+            DRP_CASES_EXHAUSTED;
+        }
+    }
+}
+
+static inline
+_Bool
 ccqt_is_bool(CcQualType t){
-    while(ccqt_kind(t) == CC_ENUM)
-        t = ccqt_as_enum(t)->underlying;
+    t = ccqt_enum_underlying(t);
     return ccqt_bt_eq(t, CCBT_bool);
+}
+
+
+static inline
+CcFunction* _Nullable
+ccqt_callable_function(CcQualType t){
+    if(ccqt_kind(t) == CC_POINTER) t = ccqt_as_ptr(t)->pointee;
+    return ccqt_kind(t) == CC_FUNCTION ? ccqt_as_function(t) : NULL;
 }
 static inline
 _Bool
 ccqt_is_unsigned(CcQualType t, _Bool unsigned_char){
-    while(ccqt_kind(t) == CC_ENUM)
-        t = ccqt_as_enum(t)->underlying;
+    t = ccqt_enum_underlying(t);
     return ccqt_is_basic(t) && ccbt_is_unsigned(ccqt_basic_kind(t), unsigned_char);
 }
 static inline
 _Bool
 ccqt_is_integer(CcQualType t){
-    while(ccqt_kind(t) == CC_ENUM)
-        t = ccqt_as_enum(t)->underlying;
+    t = ccqt_enum_underlying(t);
     return ccqt_is_basic(t) && ccbt_is_integer(ccqt_basic_kind(t));
 }
 #undef CC_ALIGN

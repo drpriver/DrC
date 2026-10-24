@@ -15,6 +15,7 @@
 #include "../Drp/countof.h"
 #include "cc_expr.h"
 #include "cc_parser.h"
+#include "cc_type_check.h"
 #include "cpp_preprocessor.h"
 #include "cc_errors.h"
 #include "cc_printer.h"
@@ -42,11 +43,15 @@ struct CcParsedParams {
 static int cc_merge_default_args(CcParser*, CcFunc*, CcParsedParams*, _Bool, SrcLoc);
 static int cc_clone_expr(CcParser*, CcExpr*, unsigned, SrcLoc, _Bool, CcExpr*_Nullable*_Nonnull);
 static int cc_clone_default_arg(CcParser*, CcExpr*, SrcLoc, CcParseFlags, CcExpr*_Nullable*_Nonnull);
+static int cc_prepare_default_arg(CcParser*, CcExpr*, unsigned, Parray*, _Bool);
 static size_t cc_expr_nvalues(CcExpr*);
 static int cc_source_location_expr(CcParser*, CcBuiltinOp, SrcLoc, CcExpr*_Nullable*_Nonnull);
 static int cc_parse_expr(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_assignment_expr(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out, CcQualType);
 static int cc_parse_ternary_expr(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out);
+static int cc_parse_comma_tail(CcParser*, CcParseFlags, CcExpr*, CcExpr* _Nullable* _Nonnull);
+static int cc_parse_assignment_tail(CcParser*, CcParseFlags, CcExpr*, CcExpr* _Nullable* _Nonnull);
+static int cc_parse_ternary_tail(CcParser*, CcParseFlags, CcExpr*, CcExpr* _Nullable* _Nonnull);
 static int cc_parse_infix(CcParser* p, CcParseFlags, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_prefix(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_primary(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out);
@@ -65,8 +70,7 @@ static void cc_release_expr(CcParser* p, CcExpr*);
 static CcExpr*_Nullable _cc_alloc_expr(CcParser* p, size_t nvalues);
 static CcExpr*_Nullable cc_make_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, size_t nvalues);
 warn_unused static int cc_pointer_of(CcParser* p, CcQualType pointee, CcQualType* out);
-warn_unused static int cc_slice_of(CcParser* p, CcQualType pointee, CcQualType* out);
-warn_unused static int cc_block_pointer_of(CcParser* p, CcQualType pointee, CcQualType* out);
+warn_unused static int cc_slice_of(CcParser* p, CcQualType pointee, SrcLoc loc, CcQualType* out);
 LOG_PRINTF(3, 4) static int cc_error(CcParser*, SrcLoc, const char*, ...);
 LOG_PRINTF(3, 4) static MStringBuilder* cc_start_error(CcParser*, SrcLoc, const char*, ...);
 static int cc_finish_error(CcParser*, SrcLoc);
@@ -87,7 +91,7 @@ LOG_PRINTF(3, 4) static void cc_info(CcParser*, SrcLoc, const char*, ...);
 #endif
 #endif
 static _Bool cc_binop_lookup(CcPunct punct, CcExprKind* kind, int* prec);
-static int cc_va_list_to_ptr(CcParser* p, SrcLoc loc, CcExpr*_Nonnull*_Nonnull e);
+static int cc_va_list_to_ptr(CcParser* p, SrcLoc loc, CcExpr*_Nonnull*_Nonnull e, _Bool writable);
 typedef struct CcEvalCtx CcEvalCtx;
 typedef struct CcEvalVisit CcEvalVisit;
 struct CcEvalVisit {
@@ -98,6 +102,7 @@ struct CcEvalVisit {
 struct CcEvalCtx {
     CcParser* parser;
     _Bool allow_const;
+    _Bool allow_inexact_float_casts;
     unsigned variable_depth;
     unsigned evaluation_depth;
     CcEvalVisit* expressions;
@@ -135,7 +140,9 @@ cc_static_rebind_target(CcParser* p, CcExpr* e){
 
 static int cc_eval_expr(CcEvalCtx*, CcExpr*, CcExpr*_Nullable*_Nonnull);
 static int cc_eval_integer(CcEvalCtx*, CcExpr*, int64_t*);
-static CiUint128 cc_eval_u128(CcParser*, CcExpr*);
+static int cc_lvalue_alignment(CcParser*, const CcExpr*, uint32_t*);
+static int cc_pointer_alignment(CcParser*, const CcExpr*, uint32_t*);
+static CiUint128 cc_eval_u128(const CcTargetConfig*, CcExpr*);
 static int cc_eval_case_range(CcParser*, SrcLoc, CcQualType, CcExpr*, CcExpr*, CiUint128*, CiUint128*, _Bool*);
 static int cc_eval_truthy(CcEvalCtx*, CcExpr*, _Bool*);
 static int cc_check_linktime_expr(CcParser*, CcExpr*, _Bool, unsigned);
@@ -146,6 +153,7 @@ static Allocator cc_allocator(CcParser*p);
 static Allocator cc_scratch_allocator(CcParser*p);
 static int cc_parse_declarator(CcParser* p, CcParseFlags flags, CcQualType* out_head, CcQualType*_Nonnull*_Nonnull out_tail, Atom _Nullable * _Nullable out_name, SrcLoc* _Nullable out_name_loc, CcParsedParams *_Nullable out_param_names);
 static CcQualType cc_intern_qualtype(CcParser* p, CcQualType t);
+static int cc_adjust_parameter_type(CcParser*, CcQualType, CcQualType*);
 static _Bool cc_is_type_start(CcParser* p, CcToken* tok);
 static int cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace);
 static int cc_parse_local_methods(CcParser* p);
@@ -157,7 +165,7 @@ static int cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nul
 static int cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
 static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
-static int cc_check_cast(CcParser* _Nullable p, CcQualType from, CcQualType to, SrcLoc loc);
+static int cc_check_cast(CcParser* p, CcQualType from, CcQualType to, SrcLoc loc);
 static CcExpr* _Nullable cc_value_expr(CcParser* p, SrcLoc loc, CcQualType type);
 static CcExpr* _Nullable cc_int64_expr(CcParser* p, SrcLoc loc, CcQualType type, int64_t);
 static CcExpr* _Nullable cc_integer_bits_expr(CcParser*, SrcLoc, CcQualType, CiUint128);
@@ -172,7 +180,7 @@ static int cc_parse_attributes(CcParser* p, CcParseFlags flags, CcAttributes* at
 static _Bool cc_is_c23_attribute_start(CcParser* p);
 static int cc_parse_c23_attributes(CcParser* p, CcParseFlags flags, CcAttributes* attrs);
 static int cc_parse_declspec(CcParser* p, CcParseFlags flags, CcAttributes* attrs);
-static int cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_union, CcQualType* base_type);
+static int cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_union, _Bool member, CcQualType* base_type);
 static int cc_check_anon_member_duplicates(CcParser* p, CcField* existing, uint32_t existing_count, CcQualType anon_type, SrcLoc loc);
 static _Bool cc_has_field(CcParser*, CcField*_Nullable, uint32_t, Atom);
 static int cc_lookup_field(CcParser*, CcField*_Nullable, uint32_t, Atom, CcFieldPath*_Nullable, CcQualType*, CcQualType*_Nullable, CcField*_Nullable*_Nonnull);
@@ -193,7 +201,9 @@ static void cc_pop_stmt_sink(CcParser*, CcStmtSink*);
 static int cc_sink_push(CcParser*, CcStmtNode*);
 static int cc_finalize_stmt_list(CcParser*, SrcLoc, Parray(CcStmtNode)*, _Bool always_compound, CcStmtNode*_Nullable*_Nonnull out);
 static int cc_has_builtin(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)* arg_seps);
-static int cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args, uint32_t nargs, SrcLoc loc);
+static int cc_check_printf_format(CcParser*, const CcPrintfFormat*, CcExpr*_Nonnull*_Nonnull, uint32_t, SrcLoc);
+static int cc_merge_printf_formats(CcParser*, const CcPrintfFormat*_Nullable, const CcPrintfFormat*_Nullable*_Nonnull);
+static int cc_apply_printf_formats(CcParser*, CcFunc*, const CcPrintfFormat*_Nullable);
 
 enum {
     CC_NO_ERROR             = _cc_no_error,
@@ -296,7 +306,7 @@ struct CcSpecifier {
 };
 _Static_assert(sizeof(CcSpecifier) == sizeof(uint32_t), "");
 static int cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base);
-static int cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type);
+static int cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool member, CcQualType* base_type);
 
 typedef struct CcDeclBase CcDeclBase;
 struct CcDeclBase {
@@ -306,7 +316,9 @@ struct CcDeclBase {
     uint16_t alignment; // from _Alignas or prefix __attribute__((aligned))
     uint16_t alignas_alignment;
     _Bool has_alignas;
+    _Bool member;
 };
+static int cc_check_decl_alignment(CcParser*, const CcDeclBase*, CcQualType, _Bool);
 
 typedef struct CcParsedDecls CcParsedDecls;
 struct CcParsedDecls {
@@ -315,6 +327,7 @@ struct CcParsedDecls {
 };
 static int cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcParsedDecls* out);
 static int cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase);
+static int cc_check_decl_type_qualifiers(CcParser*, CcQualType, CcSpecifier, SrcLoc);
 typedef struct CcControlLabel CcControlLabel;
 struct CcControlLabel {
     CcControlLabel* _Nullable prev;
@@ -359,172 +372,133 @@ cc_pop_scope(CcParser* p){
 }
 
 static
-CcQualType
-cc_arithmetic_operand_type(CcParser* p, CcExpr* e){
-    CcQualType type = e->type;
-    while(ccqt_kind(type) == CC_ENUM) type = ccqt_as_enum(type)->underlying;
-    // Array qualifiers also qualify their elements; preserve them until decay.
-    if(!ccqt_is_basic(type) || !ccbt_is_arithmetic(ccqt_basic_kind(type))) return e->type;
-    uint32_t width = cc_expr_field_bit_width(e);
-    if(width && ccqt_is_integer(type)
-        && ccbt_int_rank(ccqt_basic_kind(type)) <= ccbt_int_rank(CCBT_int)
-        && (!ccqt_is_unsigned(type, !cc_target(p)->char_is_signed)
-            || width < cc_target(p)->sizeof_[CCBT_int]*8))
-        return ccqt_basic(CCBT_int);
-    return (CcQualType){.unqual=e->type.unqual};
+int
+cc_type_error(CcParser* p, SrcLoc loc, CcQualType type, const char* fmt, ...){
+    MStringBuilder* sb = cc_start_error(p, loc, "");
+    va_list va;
+    va_start(va, fmt);
+    msb_vsprintf(sb, fmt, va);
+    va_end(va);
+    msb_write_literal(sb, ". The type is '");
+    cc_print_type(sb, type);
+    msb_write_char(sb, '\'');
+    return cc_finish_error(p, loc);
+}
+
+static
+int
+cc_types_error(CcParser* p, SrcLoc loc, CcQualType a, CcQualType b, const char* fmt, ...){
+    MStringBuilder* sb = cc_start_error(p, loc, "");
+    va_list va;
+    va_start(va, fmt);
+    msb_vsprintf(sb, fmt, va);
+    va_end(va);
+    msb_write_literal(sb, ". The types are '");
+    cc_print_type(sb, a);
+    msb_write_literal(sb, "' and '");
+    cc_print_type(sb, b);
+    msb_write_char(sb, '\'');
+    return cc_finish_error(p, loc);
+}
+
+static
+void
+cc_arithmetic_operand_type(const CcTargetConfig* target, CcExpr* e, CcQualType* out){
+    cc_promote_bitfield_operand(target, e->type, cc_expr_field_bit_width(e), out);
 }
 
 static
 int
 cc_integer_promote(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc){
-    t = ccqt_unaligned(t);
-    if(!ccqt_is_basic(t) && ccqt_kind(t) == CC_ENUM)
-        t = ccqt_as_enum(t)->underlying;
-    t = (CcQualType){.unqual=t.unqual};
-    if(!ccqt_is_basic(t))
-        return cc_error(p, loc, "integer promotion requires arithmetic type");
-    CcBasicTypeKind k = ccqt_basic_kind(t);
-    if(k == CCBT_void)
-        return cc_error(p, loc, "integer promotion of void");
-    if(ccbt_is_float(k) || ccbt_is_complex(k)){
-        *out = t;
-        return 0;
+    const char* failure;
+    if(cc_integer_promotion(t, out, &failure)){
+        return cc_type_error(p, loc, t, "%s", failure);
     }
-    if(!ccbt_is_integer(k))
-        return cc_error(p, loc, "integer promotion requires integer type");
-    if(ccbt_int_rank(k) < ccbt_int_rank(CCBT_int))
-        *out = ccqt_basic(CCBT_int);
-    else
-        *out = t;
     return 0;
+}
+
+static
+int
+cc_integer_promote_expr(CcParser* p, CcExpr* e, CcQualType* out, SrcLoc loc){
+    CcQualType type;
+    cc_arithmetic_operand_type(cc_target(p), e, &type);
+    return cc_integer_promote(p, type, out, loc);
 }
 
 static
 int
 cc_usual_arithmetic(CcParser* p, CcExpr* lhs, CcExpr* rhs, CcQualType* out, SrcLoc loc){
-    CcQualType a = cc_arithmetic_operand_type(p, lhs);
-    CcQualType b = cc_arithmetic_operand_type(p, rhs);
-    if(ccqt_kind(a) == CC_ENUM)
-        a = ccqt_as_enum(a)->underlying;
-    if(ccqt_kind(b) == CC_ENUM)
-        b = ccqt_as_enum(b)->underlying;
-    if(!ccqt_is_basic(a) || !ccqt_is_basic(b))
-        return cc_error(p, loc, "usual arithmetic conversions require arithmetic types");
-    CcBasicTypeKind ak = ccqt_basic_kind(a), bk = ccqt_basic_kind(b);
-    if(ccbt_is_complex(ak) || ccbt_is_complex(bk)){
-        CcExpr real_a = {.type = ccqt_basic(ccbt_is_complex(ak) ? ccbt_complex_real(ak) : ak)};
-        CcExpr real_b = {.type = ccqt_basic(ccbt_is_complex(bk) ? ccbt_complex_real(bk) : bk)};
-        CcQualType real;
-        int err = cc_usual_arithmetic(p, &real_a, &real_b, &real, loc);
-        if(err) return err;
-        CcBasicTypeKind complex = ccbt_complex_kind(ccqt_basic_kind(real));
-        if(complex == CCBT_INVALID)
-            return cc_unimplemented(p, loc, "extended precision complex arithmetic");
-        *out = ccqt_basic(complex);
-        return 0;
+    CcQualType a, b;
+    cc_arithmetic_operand_type(cc_target(p), lhs, &a);
+    cc_arithmetic_operand_type(cc_target(p), rhs, &b);
+    const char* failure;
+    if(cc_usual_arithmetic_conversions(cc_target(p), a, b, out, &failure)){
+        return cc_types_error(p, loc, lhs->type, rhs->type, "%s", failure);
     }
-    if(ak == CCBT_void || bk == CCBT_void)
-        return cc_error(p, loc, "usual arithmetic conversions on void");
-    if(ak == CCBT_float128 || bk == CCBT_float128){
-        *out = ccqt_basic(CCBT_float128); return 0;
-    }
-    if(ak == CCBT_long_double || bk == CCBT_long_double){
-        *out = ccqt_basic(CCBT_long_double); return 0;
-    }
-    if(ak == CCBT_double || bk == CCBT_double){
-        *out = ccqt_basic(CCBT_double); return 0;
-    }
-    if(ak == CCBT_float || bk == CCBT_float){
-        *out = ccqt_basic(CCBT_float); return 0;
-    }
-    if(ak == CCBT_float16 || bk == CCBT_float16){
-        *out = ccqt_basic(CCBT_float16); return 0;
-    }
-    if(ak == CCBT_bfloat16 || bk == CCBT_bfloat16){
-        *out = ccqt_basic(CCBT_bfloat16); return 0;
-    }
-    CcQualType ap, bp;
-    int err = cc_integer_promote(p, a, &ap, loc);
-    if(err) return err;
-    err = cc_integer_promote(p, b, &bp, loc);
-    if(err) return err;
-    ak = ccqt_basic_kind(ap);
-    bk = ccqt_basic_kind(bp);
-    if(ak == bk){
-        *out = ap;
-        return 0;
-    }
-    _Bool char_is_unsigned = !cc_target(p)->char_is_signed;
-    _Bool a_unsigned = ccbt_is_unsigned(ak, char_is_unsigned);
-    _Bool b_unsigned = ccbt_is_unsigned(bk, char_is_unsigned);
-    if(a_unsigned == b_unsigned){
-        *out = ccbt_int_rank(ak) >= ccbt_int_rank(bk) ? ap : bp;
-        return 0;
-    }
-    CcBasicTypeKind u = a_unsigned ? ak : bk;
-    CcBasicTypeKind s = a_unsigned ? bk : ak;
-    if(ccbt_int_rank(u) >= ccbt_int_rank(s)){
-        *out = ccqt_basic(u);
-        return 0;
-    }
-    if(cc_target(p)->sizeof_[s] > cc_target(p)->sizeof_[u]){
-        *out = ccqt_basic(s);
-        return 0;
-    }
-    *out = ccqt_basic(ccbt_to_unsigned(s));
     return 0;
 }
 
 static
 int
-cc_check_atomic_size(CcParser* p, uint32_t sz, SrcLoc loc){
-    if(!sz || (sz & (sz - 1)))
-        return cc_error(p, loc, "atomic operand size %u is not a power of 2", sz);
+cc_check_atomic_size(CcParser* p, CcQualType type, uint32_t sz, SrcLoc loc){
+    if(!sz || (sz & (sz-1)))
+        return cc_type_error(p, loc, type, "atomic operand size %u is not a power of 2", sz);
     if(sz > cc_target(p)->atomic_lock_free_max)
-        return cc_error(p, loc, "atomic operand size %u exceeds target's maximum lock-free size %u", sz, cc_target(p)->atomic_lock_free_max);
+        return cc_type_error(p, loc, type, "atomic operand size %u exceeds target's maximum lock-free size %u", sz, cc_target(p)->atomic_lock_free_max);
     switch(sz){
-        case 1: case 2: case 4: case 8: case 16:
-            return 0;
-        default:
-            return cc_error(p, loc, "unsupported atomic operand size %u", sz);
+        case 1: case 2: case 4: case 8: case 16: return 0;
+        default: return cc_type_error(p, loc, type, "unsupported atomic operand size %u", sz);
     }
 }
 
 static
 int
-cc_check_atomic_object_access(CcParser* p, CcQualType type, SrcLoc loc){
+cc_check_atomic_object_type(CcParser* p, CcQualType type, SrcLoc loc){
     if(!type.is_atomic) return 0;
     uint32_t sz;
     int err = cc_sizeof_as_uint(p, type, loc, &sz);
     if(err) return err;
-    return cc_check_atomic_size(p, sz, loc);
+    return cc_check_atomic_size(p, type, sz, loc);
 }
 
 static
 int
-cc_check_atomic_rmw(CcParser* p, CcQualType type, SrcLoc loc){
-    if(!type.is_atomic) return 0;
-    CcQualType base = type;
-    base.is_atomic = 0;
-    if(!ccqt_is_basic(base) && ccqt_kind(base) == CC_ENUM)
-        base = ccqt_as_enum(base)->underlying;
-    if((!ccqt_is_basic(base) || (!ccbt_is_integer(ccqt_basic_kind(base)) && !ccbt_is_float(ccqt_basic_kind(base)))) && ccqt_kind(base) != CC_POINTER)
-        return cc_error(p, loc, "atomic read-modify-write requires scalar atomic type");
-    return cc_check_atomic_object_access(p, type, loc);
+cc_check_atomic_alignment(CcParser* p, const CcExpr* e, _Bool pointer, uint32_t size, SrcLoc loc){
+    uint32_t alignment;
+    int err = pointer ? cc_pointer_alignment(p, e, &alignment)
+        : cc_lvalue_alignment(p, e, &alignment);
+    if(err) return err;
+    if((UINT32_C(1) << alignment) < size)
+        return cc_error(p, loc, "underaligned atomic access requires %u-byte alignment", size);
+    return 0;
+}
+
+static
+int
+cc_check_atomic_object_access(CcParser* p, const CcExpr* e, SrcLoc loc){
+    int err = cc_check_atomic_object_type(p, e->type, loc);
+    if(err || !e->type.is_atomic || !e->is_lvalue) return err;
+    uint32_t size;
+    err = cc_sizeof_as_uint(p, e->type, loc, &size);
+    if(err) return err;
+    return cc_check_atomic_alignment(p, e, 0, size, e->loc);
+}
+
+static
+int
+cc_check_atomic_rmw(CcParser* p, const CcExpr* e, SrcLoc loc){
+    if(!cc_type_supports_atomic_rmw(e->type))
+        return cc_type_error(p, loc, e->type, "atomic read-modify-write requires scalar atomic type");
+    return cc_check_atomic_object_access(p, e, loc);
 }
 
 static
 int
 cc_check_atomic_type_specifier_type(CcParser* p, CcQualType type, SrcLoc loc){
-    CcTypeKind kind = ccqt_kind(type);
-    if(kind == CC_ARRAY || kind == CC_VECTOR || kind == CC_VLA)
-        return cc_error(p, loc, "_Atomic type name shall not refer to an array type");
-    if(kind == CC_FUNCTION)
-        return cc_error(p, loc, "_Atomic type name shall not refer to a function type");
-    if(type.is_atomic)
-        return cc_error(p, loc, "_Atomic type name shall not refer to an atomic type");
-    if(type.is_const || type.is_volatile)
-        return cc_error(p, loc, "_Atomic type name shall not refer to a qualified type");
+    const char* failure;
+    if(cc_check_atomic_specifier(type, &failure)){
+        return cc_type_error(p, loc, type, "%s", failure);
+    }
     return 0;
 }
 
@@ -549,131 +523,35 @@ cc_check_atomic_memory_order(CcParser* p, CcAtomicOp op, unsigned order, SrcLoc 
     return 0;
 }
 
-static
-CcQualType
-cc_array_element_type(CcQualType array){
-    return ccqt_qualified_array_element(array);
-}
-
-static
-uintptr_t
-cc_object_quals(CcQualType type){
-    return ccqt_array_object_type(type).quals;
-}
 
 static
 int
-cc_deref_type(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc, _Bool subscript){
-    if(!ccqt_is_basic(t)){
-        CcTypeKind kind = ccqt_kind(t);
-        if(kind == CC_POINTER){
-            *out = ccqt_as_ptr(t)->pointee;
-            return 0;
-        }
-        if(kind == CC_VLA || kind == CC_ARRAY || (subscript && kind == CC_VECTOR)){
-            *out = cc_array_element_type(t);
-            return 0;
-        }
-        if(kind == CC_SLICE){
-            *out = ccqt_as_slice(t)->pointee;
-            return 0;
-        }
+cc_deref_type_or_error(CcParser* p, CcQualType t, CcQualType* out, SrcLoc loc, _Bool subscript){
+    const char* failure;
+    if(cc_deref_type(t, out, subscript, &failure)){
+        return cc_type_error(p, loc, t, "%s", failure);
     }
-    return cc_error(p, loc, "dereferencing non-pointer type");
-}
-
-static
-int
-cc_check_pointer_arithmetic(CcParser* p, CcQualType type, SrcLoc loc){
-    CcQualType element;
-    int err = cc_deref_type(p, type, &element, loc, 1);
-    if(err) return err;
-    while(ccqt_kind(element) == CC_ARRAY){
-        CcArray* array = ccqt_as_array(element);
-        if(array->is_incomplete)
-            return cc_error(p, loc, "pointer arithmetic requires a complete pointee type");
-        element = array->element;
-    }
-    CcTypeKind kind = ccqt_kind(element);
-    if(((kind == CC_STRUCT || kind == CC_UNION) && ccqt_as_struct(element)->is_incomplete)
-        || (kind == CC_ENUM && ccqt_as_enum(element)->is_incomplete))
-        return cc_error(p, loc, "pointer arithmetic requires a complete pointee type");
     return 0;
 }
 
 static
 int
-cc_check_incdec_type(CcParser* p, CcQualType type, SrcLoc loc){
-    CcQualType value = type;
-    if(ccqt_kind(value) == CC_ENUM) value = ccqt_as_enum(value)->underlying;
-    if(ccqt_kind(value) == CC_POINTER){
-        int err = cc_check_pointer_arithmetic(p, value, loc);
-        if(err) return err;
-    }
-    else if(!ccqt_is_basic(value) || !ccbt_is_arithmetic(ccqt_basic_kind(value)))
-        return cc_error(p, loc, "increment/decrement requires arithmetic or pointer type");
-    return cc_check_atomic_rmw(p, type, loc);
-}
-
-static
-_Bool
-cc_any_payload_type(CcParser* p, CcQualType t){
-    switch(ccqt_kind(t)){
-        case CC_VLA: return 0;
-        case CC_ALIGNED: cc_unsafe_unreachable();
-        case CC_BASIC:
-            if(ccqt_basic_kind(t) == CCBT_INVALID || ccqt_basic_kind(t) == CCBT_void) return 0;
-            return cc_target(p)->sizeof_[ccqt_basic_kind(t)] <= sizeof(((CiRtAny*)0)->payload);
-        case CC_POINTER: case CC_BLOCK_POINTER:
-            return 1;
-        case CC_STRUCT:
-            return !ccqt_as_struct(t)->is_incomplete && ccqt_as_struct(t)->size <= sizeof(((CiRtAny*)0)->payload);
-        case CC_UNION:
-            return !ccqt_as_union(t)->is_incomplete && ccqt_as_union(t)->size <= sizeof(((CiRtAny*)0)->payload);
-        case CC_ENUM:
-            return !ccqt_as_enum(t)->is_incomplete && cc_any_payload_type(p, ccqt_as_enum(t)->underlying);
-        case CC_ARRAY: return 0;
-        case CC_VECTOR: {
-            CcVector* a = ccqt_as_vector(t);
-            return a->vector_size <= sizeof ((CiRtAny*)0)->payload;
-        }
-        case CC_FUNCTION: case CC_SLICE:
-            return 0;
-    }
+cc_check_type_has_size_or_error(CcParser* p, CcQualType type, SrcLoc loc){
+    if(!cc_type_has_size(type)) return cc_type_error(p, loc, type, "type has no size");
     return 0;
 }
 
 static
-_Bool
-cc_any_convertible(CcParser* p, CcQualType from){
-    CcTypeKind k = ccqt_kind(from);
-    if(k == CC_FUNCTION || k == CC_VLA) return 1;
-    if(k == CC_ARRAY) return 1;
-    return cc_any_payload_type(p, from);
+int
+cc_check_incdec(CcParser* p, const CcExpr* e, SrcLoc loc){
+    const char* failure;
+    if(cc_check_incdec_operand(e->type, &failure)) return cc_type_error(p, loc, e->type, "%s", failure);
+    return cc_check_atomic_rmw(p, e, loc);
 }
 
-static
-_Bool
-cc_plan9_base(CcQualType from, CcQualType to){
-    CcTypeKind fk = ccqt_kind(from), tk = ccqt_kind(to);
-    if((fk != CC_STRUCT && fk != CC_UNION) || (tk != CC_STRUCT && tk != CC_UNION)) return 0;
-    if(from.unqual == to.unqual){
-        if(from.quals & ~to.quals)
-            return 0;
-        return 1;
-    }
-    CcStruct* s = ccqt_as_struct(from);
-    for(uint32_t i = 0; i < s->field_count; i++){
-        CcField* f = &s->fields[i];
-        if(f->name || f->is_bitfield) continue;
-        CcQualType sub = f->type;
-        sub.quals |= from.quals;
-        if(cc_plan9_base(sub, to)){
-            return 1;
-        }
-    }
-    return 0;
-}
+
+
+
 
 static
 int
@@ -696,7 +574,9 @@ cc_member_path(CcParser* p, CcStruct* s, Atom name, _Bool owner, CcFieldPath* ou
 static
 int
 cc_base_path(CcParser* p, CcQualType from, CcQualType to, CcFieldPath* out){
-    if(from.unqual == to.unqual){
+    from = ccqt_unaligned(from);
+    to = ccqt_unaligned(to);
+    if(cc_qualification_convertible(from, to)){
         *out = (CcFieldPath){0};
         return 0;
     }
@@ -731,292 +611,6 @@ cc_set_member_path(CcParser* p, CcExpr* e, CcQualType owner_type, Atom name, _Bo
     return 0;
 }
 
-typedef struct CcTypePair CcTypePair;
-struct CcTypePair {
-    CcQualType a, b;
-    const CcTypePair* _Nullable previous;
-};
-
-
-typedef struct CcTypesMatchFlags CcTypesMatchFlags;
-struct CcTypesMatchFlags {
-    union {
-        uint32_t _bits;
-        struct {
-            uint32_t same: 1,
-                     anon: 1,
-                     unqual: 1,
-                     _padding: 29; // free real estate
-        };
-    };
-};
-static _Bool cc_types_match(CcQualType, CcQualType, unsigned, const CcTypePair* _Nullable, CcTypesMatchFlags);
-
-static
-_Bool
-cc_record_members_match(CcStruct* a, CcStruct* b, unsigned depth, const CcTypePair* _Nullable pairs, _Bool same){
-    if(a->field_count != b->field_count) return 0;
-    if(a->packed != b->packed) return 0;
-    if(a->size != b->size) return 0;
-    if(a->alignment != b->alignment) return 0;
-    for(uint32_t i = 0; i < a->field_count; i++){
-        CcField* x = &a->fields[i];
-        CcField* y = &b->fields[i];
-        if(x->name != y->name) return 0;
-        if(x->alignment != y->alignment) return 0;
-        if(x->is_bitfield != y->is_bitfield) return 0;
-        if(x->bitwidth != y->bitwidth) return 0;
-        if(ccqt_kind(x->type) == CC_ARRAY && ccqt_kind(y->type) == CC_ARRAY
-        && ccqt_as_array(x->type)->is_incomplete != ccqt_as_array(y->type)->is_incomplete)
-            return 0;
-        if(!cc_types_match(x->type, y->type, depth+1, pairs, (CcTypesMatchFlags){.same=same, .anon=!x->name && !x->is_bitfield}))
-            return 0;
-    }
-    return 1;
-}
-
-static
-_Bool
-cc_types_match(CcQualType a, CcQualType b, unsigned depth, const CcTypePair* _Nullable pairs, CcTypesMatchFlags flags){
-    a = ccqt_unaligned(a);
-    b = ccqt_unaligned(b);
-    if(flags.unqual) a.quals = b.quals = 0;
-    if(a.bits == b.bits) return 1;
-    if(depth < 256 && ccqt_is_array(a) && ccqt_is_array(b)){
-        if(ccqt_kind(a) == CC_ARRAY && ccqt_kind(b) == CC_ARRAY){
-            CcArray* x = ccqt_as_array(a);
-            CcArray* y = ccqt_as_array(b);
-            if(!x->is_incomplete && !y->is_incomplete && x->length != y->length)
-                return 0;
-        }
-        return cc_types_match(cc_array_element_type(a), cc_array_element_type(b), depth+1, pairs, (CcTypesMatchFlags){.unqual=flags.unqual});
-    }
-    if(depth >= 256 || a.quals != b.quals || ccqt_kind(a) != ccqt_kind(b)) return 0;
-    if(flags.same && !flags.anon) return 0;
-    CcTypePair pair = {a, b, pairs};
-    switch(ccqt_kind(a)){
-        case CC_VLA: return 0;
-        case CC_ALIGNED: cc_unsafe_unreachable();
-        case CC_POINTER: case CC_BLOCK_POINTER:
-            return ccqt_as_ptr(a)->restrict_ == ccqt_as_ptr(b)->restrict_
-                && cc_types_match(ccqt_as_ptr(a)->pointee, ccqt_as_ptr(b)->pointee, depth+1, pairs, (CcTypesMatchFlags){0});
-        case CC_SLICE:
-            return ccqt_as_slice(a)->restrict_ == ccqt_as_slice(b)->restrict_
-                && cc_types_match(ccqt_as_slice(a)->pointee, ccqt_as_slice(b)->pointee, depth+1, pairs, (CcTypesMatchFlags){0});
-        case CC_VECTOR: {
-            CcVector* x = ccqt_as_vector(a);
-            CcVector* y = ccqt_as_vector(b);
-            return x->vector_size == y->vector_size
-                && x->length == y->length
-                && cc_types_match(x->element, y->element, depth+1, pairs, (CcTypesMatchFlags){.unqual=flags.unqual});
-        }
-        case CC_ARRAY: return 0; // Handled above
-        case CC_FUNCTION: {
-            CcFunction* x = ccqt_as_function(a);
-            CcFunction* y = ccqt_as_function(b);
-            if(!cc_types_match(x->return_type, y->return_type, depth+1, pairs, (CcTypesMatchFlags){0})) return 0;
-            if(x->no_prototype || y->no_prototype){
-                CcFunction* proto = x->no_prototype ? y : x;
-                if(proto->is_variadic) return 0;
-                for(uint32_t i = 0; i < proto->param_count; i++){
-                    CcQualType t = proto->params[i];
-                    if(ccqt_kind(t) == CC_ENUM) t = ccqt_as_enum(t)->underlying;
-                    if(ccqt_is_basic(t) && (ccqt_basic_kind(t) == CCBT_float
-                        || (ccbt_is_integer(ccqt_basic_kind(t)) && ccbt_int_rank(ccqt_basic_kind(t)) < ccbt_int_rank(CCBT_int))))
-                        return 0;
-                }
-                return 1;
-            }
-            if(x->param_count != y->param_count || x->is_variadic != y->is_variadic) return 0;
-            for(uint32_t i = 0; i < x->param_count; i++){
-                CcQualType at = {.unqual=x->params[i].unqual};
-                CcQualType bt = {.unqual=y->params[i].unqual};
-                if(!cc_types_match(at, bt, depth+1, pairs, (CcTypesMatchFlags){0}))
-                    return 0;
-            }
-            return 1;
-        }
-        case CC_STRUCT:
-        case CC_UNION: {
-            CcStruct* x = ccqt_as_struct(a);
-            CcStruct* y = ccqt_as_struct(b);
-            for(const CcTypePair* prev = pairs; prev; prev = prev->previous)
-                if(prev->a.unqual == a.unqual && prev->b.unqual == b.unqual)
-                    return 1;
-            if(x->is_incomplete || y->is_incomplete || x->name != y->name || (!x->name && !flags.anon))
-                return 0;
-            return cc_record_members_match(x, y, depth, &pair, flags.same);
-        }
-        case CC_ENUM: {
-            CcEnum* x = ccqt_as_enum(a);
-            CcEnum* y = ccqt_as_enum(b);
-            if(x->is_incomplete || y->is_incomplete) return 0;
-            if(!x->name || x->name != y->name) return 0;
-            if(x->has_fixed_underlying != y->has_fixed_underlying) return 0;
-            if(x->underlying.bits != y->underlying.bits) return 0;
-            if(x->enumerator_count != y->enumerator_count) return 0;
-            for(size_t i = 0; i < x->enumerator_count; i++){
-                CcEnumerator* en = x->enumerators[i];
-                size_t j;
-                for(j = 0; j < y->enumerator_count; j++)
-                    if(en->name == y->enumerators[j]->name)
-                        break;
-                if(j == y->enumerator_count || !ci_uint128_eq(en->value, y->enumerators[j]->value))
-                    return 0;
-            }
-            return 1;
-        }
-        case CC_BASIC: return 0;
-        DRP_CASES_EXHAUSTED;
-    }
-}
-
-static
-_Bool
-cc_types_compatible(CcQualType a, CcQualType b, unsigned depth){
-    return cc_types_match(a, b, depth, NULL, (CcTypesMatchFlags){0});
-}
-
-static
-_Bool
-cc_types_compatible_unqualified(CcQualType a, CcQualType b){
-    return cc_types_match(a, b, 0, NULL, (CcTypesMatchFlags){.unqual=1});
-}
-
-static
-_Bool
-cc_qualification_convertible(CcQualType from, CcQualType to){
-    return cc_types_compatible_unqualified(from, to) && (cc_object_quals(from) & ~cc_object_quals(to)) == 0;
-}
-
-static
-_Bool
-cc_pointer_pointee_convertible(CcQualType from, CcQualType to){
-    if(ccqt_bt_eq(from, CCBT_void) || ccqt_bt_eq(to, CCBT_void))
-        return (cc_object_quals(from) & ~cc_object_quals(to)) == 0;
-    if(cc_qualification_convertible(from, to))
-        return 1;
-    return cc_plan9_base(from, to);
-}
-
-static
-_Bool
-cc_implicit_convertible(CcParser* p, CcQualType from, CcQualType to){
-    from = ccqt_unaligned(from);
-    to = ccqt_unaligned(to);
-
-    if(from.bits == to.bits) return 1;
-    if(ccqt_bt_eq(to, CCBT__Any))
-        return ccqt_bt_eq(from, CCBT__Any) || cc_any_convertible(p, from);
-    CcTypeKind fk = ccqt_kind(from), tk = ccqt_kind(to);
-    if(fk == CC_BASIC && tk == CC_BASIC && ccqt_basic_kind(from) == ccqt_basic_kind(to)) return 1;
-    _Bool f_arith = (fk == CC_BASIC && ccbt_is_arithmetic(ccqt_basic_kind(from))) || fk == CC_ENUM;
-    _Bool t_arith = (tk == CC_BASIC && ccbt_is_arithmetic(ccqt_basic_kind(to))) || tk == CC_ENUM;
-    if(f_arith && t_arith) return 1;
-    if((fk == CC_STRUCT || fk == CC_UNION) && fk == tk)
-        return cc_types_compatible((CcQualType){.unqual=from.unqual}, (CcQualType){.unqual=to.unqual}, 0);
-    if(fk == CC_POINTER && tk == CC_POINTER){
-        CcQualType fp = ccqt_as_ptr(from)->pointee;
-        CcQualType tp = ccqt_as_ptr(to)->pointee;
-        return cc_pointer_pointee_convertible(fp, tp);
-    }
-    if(fk == CC_SLICE && tk == CC_SLICE){
-        CcQualType fp = ccqt_as_slice(from)->pointee;
-        CcQualType tp = ccqt_as_slice(to)->pointee;
-        return cc_qualification_convertible(fp, tp);
-    }
-    // Complete array decays to a slice of its element type, like x[:].
-    if(ccqt_is_array(from) && tk == CC_SLICE){
-        if(fk == CC_ARRAY && ccqt_as_array(from)->is_incomplete) return 0;
-        CcQualType ep = cc_array_element_type(from);
-        CcQualType tp = ccqt_as_slice(to)->pointee;
-        return cc_qualification_convertible(ep, tp);
-    }
-    if(ccqt_is_array(from) && tk == CC_POINTER){
-        CcQualType ep = cc_array_element_type(from);
-        CcQualType tp = ccqt_as_ptr(to)->pointee;
-        return cc_pointer_pointee_convertible(ep, tp);
-    }
-    if(fk == CC_FUNCTION && tk == CC_POINTER)
-        return cc_pointer_pointee_convertible(from, ccqt_as_ptr(to)->pointee);
-    if(fk == CC_BASIC && ccqt_basic_kind(from) == CCBT_nullptr_t && tk == CC_POINTER) return 1;
-    if(fk == CC_BASIC && ccqt_basic_kind(from) == CCBT_nullptr_t && tk == CC_BASIC && ccqt_basic_kind(to) == CCBT_nullptr_t) return 1;
-    if(tk == CC_BASIC && ccqt_basic_kind(to) == CCBT_bool){
-        if(fk == CC_POINTER) return 1;
-        if(ccqt_is_array(from)) return 1;
-        if(fk == CC_FUNCTION) return 1;
-        if(fk == CC_BASIC && ccqt_basic_kind(from) == CCBT_nullptr_t) return 1;
-    }
-    if(fk == CC_VECTOR && tk == CC_VECTOR)
-        return from.unqual == to.unqual;
-    return 0;
-}
-
-static
-_Bool
-cc_explicit_castable(CcParser* p, CcQualType from, CcQualType to){
-    if(ccqt_bt_eq(to, CCBT__Any))
-        return ccqt_bt_eq(from, CCBT__Any) || cc_any_convertible(p, from);
-    return cc_check_cast(0, from, to, (SrcLoc){0}) == 0;
-}
-
-// Compare ABI representations, not C assignment compatibility. In particular,
-// do not infer aggregate register classification from size and alignment alone.
-static
-_Bool
-cc_call_abi_type_equal(const CcTargetConfig* target, CcQualType a, CcQualType b){
-    a = ccqt_unaligned(a);
-    b = ccqt_unaligned(b);
-    while(ccqt_kind(a) == CC_ENUM) a = ccqt_as_enum(a)->underlying;
-    while(ccqt_kind(b) == CC_ENUM) b = ccqt_as_enum(b)->underlying;
-    if(a.unqual == b.unqual) return 1;
-    // All supported targets use the same representation for pointer types.
-    if(ccqt_kind(a) == CC_POINTER) a = ccqt_basic(CCBT_nullptr_t);
-    if(ccqt_kind(b) == CC_POINTER) b = ccqt_basic(CCBT_nullptr_t);
-    if(a.unqual == b.unqual) return 1;
-    if(!ccqt_is_basic(a) || !ccqt_is_basic(b)) return 0;
-    CcBasicTypeKind ak = ccqt_basic_kind(a), bk = ccqt_basic_kind(b);
-    if(ak == CCBT_bool || bk == CCBT_bool) return 0;
-    if((ccbt_is_integer(ak) || ak == CCBT_nullptr_t)
-        && (ccbt_is_integer(bk) || bk == CCBT_nullptr_t)){
-        unsigned size = target->sizeof_[ak];
-        if(size != target->sizeof_[bk]) return 0;
-        // Narrow arguments/returns can require sign or zero extension.
-        return size >= target->sizeof_[CCBT_int]
-            || ccbt_is_unsigned(ak, !target->char_is_signed)
-                == ccbt_is_unsigned(bk, !target->char_is_signed);
-    }
-    // Long double is an alias for double on some targets, binary128 on others.
-    if(target->long_double_format == CC_LONG_DOUBLE_BINARY64){
-        if(ak == CCBT_long_double) ak = CCBT_double;
-        if(bk == CCBT_long_double) bk = CCBT_double;
-        if(ak == CCBT_long_double_complex) ak = CCBT_double_complex;
-        if(bk == CCBT_long_double_complex) bk = CCBT_double_complex;
-    }
-    else if(target->long_double_format == CC_LONG_DOUBLE_BINARY128){
-        if(ak == CCBT_long_double) ak = CCBT_float128;
-        if(bk == CCBT_long_double) bk = CCBT_float128;
-    }
-    return ak == bk;
-}
-
-static
-_Bool
-cc_is_callable_through(CcParser* p, CcQualType from, CcQualType through){
-    if(ccqt_kind(from) == CC_POINTER) from = ccqt_as_ptr(from)->pointee;
-    if(ccqt_kind(from) != CC_FUNCTION || ccqt_kind(through) != CC_FUNCTION) return 0;
-    CcFunction* f = ccqt_as_function(from);
-    CcFunction* t = ccqt_as_function(through);
-    if(f == t) return 1;
-    if(f->no_prototype || t->no_prototype
-        || f->is_variadic != t->is_variadic || f->param_count != t->param_count) return 0;
-    const CcTargetConfig* target = cc_target(p);
-    if(!cc_call_abi_type_equal(target, f->return_type, t->return_type)) return 0;
-    for(uint32_t i = 0; i < f->param_count; i++)
-        if(!cc_call_abi_type_equal(target, f->params[i], t->params[i])) return 0;
-    return 1;
-}
-
 static
 int
 cc_is_null_pointer_constant(CcParser* p, CcExpr* e, _Bool* out){
@@ -1025,9 +619,12 @@ cc_is_null_pointer_constant(CcParser* p, CcExpr* e, _Bool* out){
         return 0;
     }
     if(e->kind == CC_EXPR_CAST
-    && ccqt_is_some_kind_of_pointer(e->type)
-    && ccqt_is_integer(e->lhs->type))
-        return cc_is_null_pointer_constant(p, e->lhs, out);
+    && ccqt_kind(e->type) == CC_POINTER
+    && ccqt_is_integer(e->lhs->type)){
+        CcQualType pointee = ccqt_unaligned(ccqt_as_ptr(e->type)->pointee);
+        if(ccqt_bt_eq(pointee, CCBT_void) && !pointee.quals)
+            return cc_is_null_pointer_constant(p, e->lhs, out);
+    }
     if(!ccqt_is_integer(e->type)){
         *out = 0;
         return 0;
@@ -1038,7 +635,7 @@ cc_is_null_pointer_constant(CcParser* p, CcExpr* e, _Bool* out){
         *out = 0;
         return 0;
     }
-    if(err == CC_OOM_ERROR) return err;
+    if(err) return err;
     *out = value == 0;
     return 0;
 }
@@ -1046,11 +643,13 @@ cc_is_null_pointer_constant(CcParser* p, CcExpr* e, _Bool* out){
 static
 int
 cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _Nonnull out){
+    int err = cc_check_atomic_object_access(p, e, e->loc);
+    if(err) return err;
     if(ccqt_bt_eq(target, CCBT_void)){
         *out = e;
         return 0;
     }
-    if(e->type.bits == target.bits){
+    if(e->type.bits == target.bits && cc_is_value_operand_type(e->type)){
         *out = e;
         return 0;
     }
@@ -1059,10 +658,10 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
            || ccqt_bt_eq(target, CCBT_nullptr_t)
            || ccqt_kind(target) == CC_BLOCK_POINTER
            || ccqt_bt_eq(target, CCBT__Type)){
-        int err = cc_is_null_pointer_constant(p, e, &is_null_pointer_constant);
+        err = cc_is_null_pointer_constant(p, e, &is_null_pointer_constant);
         if(err) return err;
     }
-    if(!is_null_pointer_constant && !cc_implicit_convertible(p, e->type, target)){
+    if(!is_null_pointer_constant && !cc_implicit_convertible(cc_target(p), e->type, target)){
         MStringBuilder* sb = cc_start_error(p, e->loc, "cannot implicitly convert from '");
         cc_print_type(sb, e->type);
         msb_write_literal(sb, "' to '");
@@ -1072,7 +671,7 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
     }
     if(ccqt_kind(target) == CC_SLICE && ccqt_kind(e->type) == CC_ARRAY && (e->kind == CC_EXPR_VALUE || e->kind == CC_EXPR_BLOB) && cc_expr_array_data(e) && cc_expr_array_count(e)){
         CcQualType pointer;
-        int err = cc_pointer_of(p, ccqt_as_slice(target)->pointee, &pointer);
+        err = cc_pointer_of(p, ccqt_as_slice(target)->pointee, &pointer);
         if(err) return err;
         CcInitList* il = Allocator_zalloc(cc_allocator(p), sizeof *il + 2 * sizeof(CcInitEntry));
         if(!il) return CC_OOM_ERROR;
@@ -1098,14 +697,14 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
         return 0;
     }
     if(e->kind == CC_EXPR_COMPOUND_LITERAL){
-        int err = cc_desugar_compound_literal(p, e, &e);
+        err = cc_desugar_compound_literal(p, e, &e);
         if(err) return err;
     }
     if(ccqt_bt_eq(target, CCBT__Any) && !ccqt_bt_eq(e->type, CCBT__Any)){
         CcTypeKind k = ccqt_kind(e->type);
         if((ccqt_is_array(e->type)) || k == CC_FUNCTION){
             CcQualType ptr;
-            int err = cc_pointer_of(p, e->type, &ptr);
+            err = cc_pointer_of(p, e->type, &ptr);
             if(err) return err;
             CcExpr* addr = cc_unary_expr(p, k == CC_FUNCTION ? CC_EXPR_CAST : CC_EXPR_ADDR, e->loc, ptr, e);
             if(!addr) return CC_OOM_ERROR;
@@ -1113,11 +712,11 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
         }
     }
     if(ccqt_is_array(e->type) && ccqt_kind(target) == CC_POINTER){
-        CcQualType element = cc_array_element_type(e->type);
+        CcQualType element = ccqt_qualified_array_element(e->type);
         CcQualType to = ccqt_as_ptr(target)->pointee;
-        if(element.unqual != to.unqual && cc_plan9_base(element, to)){
+        if(!cc_types_compatible_ignoring_cv(element, to) && cc_plan9_base(element, to)){
             CcQualType decay;
-            int err = cc_pointer_of(p, element, &decay);
+            err = cc_pointer_of(p, element, &decay);
             if(err) return err;
             CcExpr* cast = cc_unary_expr(p, CC_EXPR_CAST, e->loc, decay, e);
             if(!cast) return CC_OOM_ERROR;
@@ -1127,11 +726,11 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
     if(ccqt_kind(e->type) == CC_POINTER && ccqt_kind(target) == CC_POINTER){
         CcQualType from = ccqt_as_ptr(e->type)->pointee;
         CcQualType to = ccqt_as_ptr(target)->pointee;
-        if(from.ptr != to.ptr && cc_plan9_base(from, to)){
+        if(!cc_types_compatible_ignoring_cv(from, to) && cc_plan9_base(from, to)){
             CcExpr* member = cc_make_expr(p, CC_EXPR_ARROW, e->loc, to, 1);
             if(!member) return CC_OOM_ERROR;
             member->is_lvalue = 1;
-            int err = cc_base_path(p, from, to, &member->field_path);
+            err = cc_base_path(p, from, to, &member->field_path);
             if(err){
                 _cc_release_expr(p, member, 1);
                 return err;
@@ -1161,7 +760,7 @@ cc_decay_array(CcParser* p, CcExpr*_Nullable*_Nonnull expr){
     CcQualType type = e->type;
     if(!ccqt_is_array(type)) return 0;
     CcQualType pointer;
-    int err = cc_pointer_of(p, cc_array_element_type(type), &pointer);
+    int err = cc_pointer_of(p, ccqt_qualified_array_element(type), &pointer);
     if(err) return err;
     return cc_implicit_cast(p, e, pointer, expr);
 }
@@ -1186,24 +785,28 @@ int
 cc_require_scalar(CcParser* p, CcExpr*_Nullable*_Nonnull expr, SrcLoc loc, const char* context){
     int err = cc_decay(p, expr);
     if(err) return err;
-    CcExpr* e = *expr;
-    CcTypeKind k = ccqt_kind(e->type);
-    if(k == CC_POINTER || k == CC_ENUM) return 0;
-    if(ccqt_is_basic(e->type)
-        && (ccbt_is_arithmetic(ccqt_basic_kind(e->type)) || ccqt_bt_eq(e->type, CCBT_nullptr_t)))
-        return 0;
-    return cc_error(p, loc, "%s requires scalar type", context);
+    CcExpr* value = *expr;
+    if(cc_is_scalar_operand(value->type))
+        return cc_check_atomic_object_access(p, value, value->loc);
+    return cc_type_error(p, loc, (*expr)->type, "%s requires scalar type", context);
 }
 
 static
 int
 cc_implicit_cast_to_index(CcParser* p, CcExpr* e, CcExpr* _Nullable* _Nonnull out){
-    CcQualType src = cc_arithmetic_operand_type(p, e);
+    CcQualType src;
+    cc_arithmetic_operand_type(cc_target(p), e, &src);
     if(!ccqt_is_integer(src))
-        return cc_error(p, e->loc, "index requires integer type");
+        return cc_type_error(p, e->loc, e->type, "index requires integer type");
     const CcTargetConfig* t = cc_target(p);
     CcQualType target = ccqt_basic(ccqt_is_unsigned(src, !t->char_is_signed)? t->size_type : ccbt_to_signed(t->size_type));
-    return cc_implicit_cast(p, e, target, out);
+    uint32_t size;
+    int err = cc_sizeof_as_uint(p, src, e->loc, &size);
+    if(err) return err;
+    err = cc_implicit_cast(p, e, target, out);
+    if(!err && size > t->sizeof_[t->size_type])
+        (*out)->cast.checked_index = 1;
+    return err;
 }
 
 static
@@ -1275,114 +878,14 @@ cc_is_type_start(CcParser* p, CcToken* tok){
 }
 
 static
-_Bool
-cc_type_contains_fam(CcQualType type){
-    if(ccqt_kind(type) == CC_STRUCT)
-        return ccqt_as_struct(type)->has_fam;
-    if(ccqt_kind(type) == CC_UNION){
-        CcUnion* u = ccqt_as_union(type);
-        for(uint32_t i = 0; i < u->field_count; i++)
-            if(cc_type_contains_fam(u->fields[i].type))
-                return 1;
-    }
-    return 0;
-}
-
-static
 int
 cc_check_derived_type(CcParser* p, CcQualType type, SrcLoc loc){
-    for(;;){
-        switch(ccqt_kind(type)){
-            case CC_POINTER:
-            case CC_BLOCK_POINTER:
-                type = ccqt_as_ptr(type)->pointee;
-                break;
-            case CC_SLICE:
-                type = ccqt_as_slice(type)->pointee;
-                if(ccqt_bt_eq(type, CCBT_void))
-                    return cc_error(p, loc, "slice of void is not allowed");
-                if(ccqt_kind(type) == CC_FUNCTION)
-                    return cc_error(p, loc, "slice of functions is not allowed");
-                break;
-            case CC_FUNCTION: {
-                CcFunction* function = ccqt_as_function(type);
-                type = function->return_type;
-                if(ccqt_is_vm(type))
-                    return cc_error(p, loc, "function return type cannot be variably modified");
-                if(ccqt_is_array(type))
-                    return cc_error(p, loc, "function cannot return array type");
-                if(ccqt_kind(type) == CC_FUNCTION)
-                    return cc_error(p, loc, "function cannot return function type");
-                for(uint32_t i = 0; i < function->param_count; i++){
-                    int err = cc_check_derived_type(p, function->params[i], loc);
-                    if(err) return err;
-                }
-                break;
-            }
-            case CC_VLA: {
-                CcQualType element = ccqt_as_vla(type)->element;
-                if(cc_type_contains_fam(element))
-                    return cc_error(p, loc, "array element contains a flexible array member");
-                uint32_t size = 0;
-                if(ccqt_bt_eq(element, CCBT_void)
-                || ccqt_kind(element) == CC_FUNCTION
-                || (ccqt_kind(element) != CC_VLA && cc_type_sizeof_complete(cc_target(p), element, &size)))
-                    return cc_error(p, loc, "array requires a complete object element type");
-                if(ccqt_raw_kind(element) == CC_ALIGNED && ccqt_kind(element) != CC_VLA){
-                    uint32_t alignment = ccqt_as_aligned(element)->alignment;
-                    if(alignment > size)
-                        return cc_error(p, loc, "alignment of array elements is greater than element size");
-                    if(size % alignment)
-                        return cc_error(p, loc, "size of array element is not a multiple of its alignment");
-                }
-                type = element;
-                break;
-            }
-            case CC_ARRAY: {
-                CcArray* array = ccqt_as_array(type);
-                CcQualType element = array->element;
-                if(ccqt_bt_eq(element, CCBT_void))
-                    return cc_error(p, loc, "array of void is not allowed");
-                if(ccqt_kind(element) == CC_FUNCTION)
-                    return cc_error(p, loc, "array of functions is not allowed");
-                if(cc_type_contains_fam(element))
-                    return cc_error(p, loc, "array element contains a flexible array member");
-                if(ccqt_raw_kind(element) == CC_ALIGNED){
-                    uint32_t size;
-                    if(!cc_type_sizeof_complete(cc_target(p), element, &size)){
-                        uint32_t alignment = ccqt_as_aligned(element)->alignment;
-                        if(alignment > size)
-                            return cc_error(p, loc, "alignment of array elements is greater than element size");
-                        if(size % alignment)
-                            return cc_error(p, loc, "size of array element is not a multiple of its alignment");
-                    }
-                }
-                type = element;
-                break;
-            }
-            default:
-                return 0;
-        }
-    }
+    const char* failure;
+    if(cc_check_derived_type_rules(cc_target(p), type, &failure)) return cc_type_error(p, loc, type, "%s", failure);
+    return 0;
 }
 
 static int cc_const_object_type(CcParser*, CcQualType, CcQualType*);
-
-static
-_Bool
-cc_constexpr_forbidden_qualifiers(CcQualType type){
-    if(type.is_volatile || type.is_atomic)
-        return 1;
-    if(ccqt_is_array(type))
-        return cc_constexpr_forbidden_qualifiers(ccqt_array_element(type));
-    if(ccqt_kind(type) == CC_STRUCT || ccqt_kind(type) == CC_UNION){
-        CcStruct* record = ccqt_as_struct(type);
-        for(uint32_t i = 0; i < record->field_count; i++)
-            if(cc_constexpr_forbidden_qualifiers(record->fields[i].type))
-                return 1;
-    }
-    return 0;
-}
 
 static
 _Bool
@@ -1391,7 +894,7 @@ cc_is_compound_type_start(CcParser* p, CcToken* tok){
     if(tok->type != CC_KEYWORD) return 0;
     switch(tok->kw.kw){
         case CC_static: case CC_thread_local: case CC_constexpr: case CC_register:
-        case CC_auto: case CC_extern: case CC_typedef:
+        case CC_auto: case CC_extern: case CC_typedef: case CC_alignas:
             return 1;
         default: return 0;
     }
@@ -1399,19 +902,88 @@ cc_is_compound_type_start(CcParser* p, CcToken* tok){
 
 static
 int
-cc_parse_compound_type(CcParser* p, CcParseFlags flags, CcQualType* out, CcParsedParams* _Nullable param_names, CcSpecifier* _Nullable storage){
+cc_apply_vector_type(CcParser* p, CcQualType* type, uint32_t size, SrcLoc loc){
+    if(!size) return 0;
+    int err;
+    union {
+        CcPointer pointer;
+        CcSlice slice;
+        CcArray array;
+        CcVla vla;
+        CcAligned aligned;
+    } copy;
+    CcQualType* child = NULL;
+    switch(ccqt_is_basic(*type) ? CC_BASIC : ccqt_raw_kind(*type)){
+        case CC_POINTER: case CC_BLOCK_POINTER:
+            copy.pointer = *ccqt_as_ptr(*type);
+            child = &copy.pointer.pointee;
+            break;
+        case CC_SLICE:
+            copy.slice = *ccqt_as_slice(*type);
+            child = &copy.slice.pointee;
+            break;
+        case CC_ARRAY:
+            copy.array = *ccqt_as_array(*type);
+            child = &copy.array.element;
+            break;
+        case CC_VLA:
+            copy.vla = *ccqt_as_vla(*type);
+            child = &copy.vla.element;
+            break;
+        case CC_FUNCTION: {
+            CcFunction* old = ccqt_as_function(*type);
+            CcQualType result = old->return_type;
+            err = cc_apply_vector_type(p, &result, size, loc);
+            if(err) return err;
+            CcFunction* function = cc_intern_function(&p->type_cache, cc_allocator(p),
+                result, old->params, old->param_count, old->fixed_param_count,
+                old->is_variadic, old->no_prototype);
+            if(!function) return CC_OOM_ERROR;
+            *type = (CcQualType){.bits=(uintptr_t)function | type->quals};
+            return cc_check_derived_type(p, *type, loc);
+        }
+        case CC_ALIGNED:
+            copy.aligned = *ccqt_as_aligned(*type);
+            child = &copy.aligned.underlying;
+            break;
+        default: break;
+    }
+    if(child){
+        err = cc_apply_vector_type(p, child, size, loc);
+        if(err) return err;
+        *type = cc_intern_qualtype(p, (CcQualType){.bits=(uintptr_t)&copy | type->quals});
+        if(!type->bits) return CC_OOM_ERROR;
+        return cc_check_derived_type(p, *type, loc);
+    }
+    CcQualType base = ccqt_unaligned(*type);
+    uint32_t length;
+    const char* failure;
+    if(cc_vector_element_count(cc_target(p), base, size, &length, &failure))
+        return cc_type_error(p, loc, base, "%s", failure);
+    CcVector* vector = cc_intern_vector(&p->type_cache, cc_allocator(p), base, length, size);
+    if(!vector) return CC_OOM_ERROR;
+    *type = (CcQualType){.bits=(uintptr_t)vector | base.quals};
+    return cc_check_derived_type(p, *type, loc);
+}
+
+static
+int
+cc_parse_type_syntax_inner(CcParser* p, CcParseFlags flags, CcQualType* out, CcParsedParams* _Nullable param_names, CcDeclBase* _Nullable storage, _Bool type_expression){
     CcDeclBase base = {0};
     int err = cc_parse_declaration_specifier(p, flags, &base);
     if(err) return err;
     if(storage){
         if(base.spec.sp_auto || base.spec.sp_extern || base.spec.sp_typedef || base.spec.sp_funcbits)
             return cc_error(p, base.loc, "invalid storage class in compound literal");
-        *storage = base.spec;
         if(base.spec.sp_register && !p->current_func)
             return cc_error(p, base.loc, "register compound literal requires block scope");
         if(base.spec.sp_thread_local && p->current_func && !base.spec.sp_static)
             return cc_error(p, base.loc, "block-scope thread_local compound literal requires static");
     }
+    else if(base.has_alignas)
+        return cc_error(p, base.loc, "_Alignas requires a compound literal");
+    else if(base.spec.sp_storagebits || base.spec.sp_typedef || base.spec.sp_funcbits)
+        return cc_error(p, base.loc, "storage class or function specifier is not allowed in a type name");
     if(!base.spec.bits && !base.type.bits){
         CcToken peek;
         err = cc_peek(p, &peek);
@@ -1421,54 +993,63 @@ cc_parse_compound_type(CcParser* p, CcParseFlags flags, CcQualType* out, CcParse
     err = cc_resolve_specifiers(p, &base);
     if(err) return err;
     if(base.spec.sp_infer_type)
-        return cc_error(p, base.loc, "Expected type name, got only qualifiers/storage class");
-    CcQualType head = {0};
-    CcQualType* tail = &head;
-    err = cc_parse_declarator(p, flags, &head, &tail, NULL, NULL, param_names);
-    if(err) return err;
-    *tail = base.type;
-    *out = cc_intern_qualtype(p, head);
-    if(storage && storage->sp_constexpr){
-        if(cc_constexpr_forbidden_qualifiers(*out))
-            return cc_error(p, base.loc, "constexpr object cannot have volatile or atomic subobjects");
-        err = cc_const_object_type(p, *out, out);
-        if(err) return err;
-    }
-    return cc_check_derived_type(p, *out, base.loc);
-}
-
-static
-int
-cc_parse_type_name(CcParser* p, CcParseFlags flags, CcQualType* out, CcParsedParams* _Nullable param_names){
-    return cc_parse_compound_type(p, flags, out, param_names, NULL);
-}
-
-static
-int
-cc_parse_abstract_type_name(CcParser* p, CcParseFlags flags, CcQualType* out){
-    CcDeclBase base = {0};
-    int err = cc_parse_declaration_specifier(p, flags, &base);
-    if(err) return err;
-    if(!base.spec.bits && !base.type.bits){
-        CcToken peek;
-        err = cc_peek(p, &peek);
-        if(err) return err;
-        return cc_error(p, peek.loc, "Expected type name");
-    }
-    err = cc_resolve_specifiers(p, &base);
-    if(err) return err;
-    if(base.spec.sp_infer_type)
-        return cc_error(p, base.loc, "Expected type name, got only qualifiers/storage class");
+        return cc_error(p, base.loc, type_expression && param_names
+            ? "Expected type in expression, got only qualifiers/storage class"
+            : "Expected type name, got only qualifiers/storage class");
     CcQualType head = {0};
     CcQualType* tail = &head;
     Atom name = NULL;
-    err = cc_parse_declarator(p, flags, &head, &tail, &name, NULL, NULL);
+    err = cc_parse_declarator(p, flags, &head, &tail, type_expression ? &name : NULL, NULL, param_names);
     if(err) return err;
     if(name)
         return cc_error(p, base.loc, "unexpected declarator name '%.*s' in type expression", name->length, name->data);
     *tail = base.type;
     *out = cc_intern_qualtype(p, head);
+    if(!out->bits) return CC_OOM_ERROR;
+    err = cc_parse_attributes(p, flags, &p->attributes);
+    if(err) return err;
+    err = cc_apply_vector_type(p, out, p->attributes.vector_size, base.loc);
+    if(err) return err;
+    if(storage && base.spec.sp_constexpr){
+        if(cc_constexpr_forbidden_qualifiers(*out))
+            return cc_type_error(p, base.loc, *out, "constexpr object cannot have volatile or atomic subobjects");
+        err = cc_const_object_type(p, *out, out);
+        if(err) return err;
+    }
+    if(storage){
+        *storage = base;
+        if(p->attributes.has_aligned && p->attributes.aligned > storage->alignment)
+            storage->alignment = p->attributes.aligned;
+    }
     return cc_check_derived_type(p, *out, base.loc);
+}
+
+static
+int
+cc_parse_type_syntax(CcParser* p, CcParseFlags flags, CcQualType* out, CcParsedParams* _Nullable param_names, CcDeclBase* _Nullable storage, _Bool type_expression){
+    CcAttributes saved = p->attributes;
+    cc_clear_attributes(&p->attributes);
+    int err = cc_parse_type_syntax_inner(p, flags, out, param_names, storage, type_expression);
+    p->attributes = saved;
+    return err;
+}
+
+static
+int
+cc_parse_compound_type(CcParser* p, CcParseFlags flags, CcQualType* out, CcParsedParams* _Nullable param_names, CcDeclBase* _Nullable storage){
+    return cc_parse_type_syntax(p, flags, out, param_names, storage, 0);
+}
+
+static
+int
+cc_parse_type_name(CcParser* p, CcParseFlags flags, CcQualType* out, CcParsedParams* _Nullable param_names){
+    return cc_parse_type_syntax(p, flags, out, param_names, NULL, 0);
+}
+
+static
+int
+cc_parse_abstract_type_name(CcParser* p, CcParseFlags flags, CcQualType* out){
+    return cc_parse_type_syntax(p, flags, out, NULL, NULL, 1);
 }
 
 static
@@ -1506,12 +1087,8 @@ cc_parse_type_string(CcParser* p, CcScope* scope, SrcLoc loc, StringView source,
 static
 int
 cc_check_function_definition_type(CcParser* p, CcFunction* type, SrcLoc loc){
-    uint32_t size;
-    if(!ccqt_bt_eq(type->return_type, CCBT_void) && cc_type_sizeof_complete(cc_target(p), type->return_type, &size))
-        return cc_error(p, loc, "function definition requires a complete return type");
-    for(uint32_t i = 0; i < type->param_count; i++)
-        if(cc_type_sizeof_complete(cc_target(p), type->params[i], &size))
-            return cc_error(p, loc, "function definition requires complete parameter types");
+    const char* failure;
+    if(cc_check_function_definition_types(cc_target(p), type, &failure)) return cc_type_error(p, loc, (CcQualType){.bits=(uintptr_t)type}, "%s", failure);
     return 0;
 }
 
@@ -1558,40 +1135,21 @@ cc_parse_lambda_body(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType typ
 static
 int
 cc_parse_lambda(CcParser* p, CcParseFlags flags, SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
-    CcDeclBase base = {0};
-    int err = cc_parse_declaration_specifier(p, flags, &base);
-    if(err) return err;
-    if(!base.spec.bits && !base.type.bits)
-        return cc_error(p, loc, "Expected type in lambda expression");
-    err = cc_resolve_specifiers(p, &base);
-    if(err) return err;
-    if(base.spec.sp_infer_type)
-        return cc_error(p, loc, "Expected type in expression, got only qualifiers/storage class");
-    CcQualType head = {0};
-    CcQualType* tail = &head;
     CcParsedParams param_names = {0};
-    Atom name = NULL;
-    err = cc_parse_declarator(p, flags, &head, &tail, &name, NULL, &param_names);
+    CcQualType type;
+    int err = cc_parse_type_syntax(p, flags, &type, &param_names, NULL, 1);
     if(err){
         cleanup_names:
         ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
         return err;
     }
-    if(name){
-        err = cc_error(p, loc, "unexpected declarator name '%.*s' in type expression", name->length, name->data);
-        goto cleanup_names;
-    }
-    *tail = base.type;
-    CcQualType type = cc_intern_qualtype(p, head);
-    err = cc_check_derived_type(p, type, base.loc);
-    if(err) goto cleanup_names;
     CcToken peek;
     err = cc_peek(p, &peek);
     if(err) goto cleanup_names;
     if(ccqt_kind(type) != CC_FUNCTION){
         ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
         if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lbrace)
-            return cc_error(p, loc, "Lambda requires a function type, got non-function type");
+            return cc_type_error(p, loc, type, "Lambda requires a function type, got non-function type");
     }
     if(peek.type != CC_PUNCTUATOR || peek.punct.punct != CC_lbrace){
         for(size_t i = 0; i < param_names.names.count; i++){
@@ -1631,6 +1189,7 @@ cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull o
         .static_ = cl->compound_static,
         .thread_local_ = cl->compound_thread_local,
         .constexpr_ = cl->compound_constexpr,
+        .alignment = cl->compound_alignment,
         .initializer = cl,
     };
     err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), nil_atom, anon);
@@ -1661,18 +1220,22 @@ cc_desugar_compound_literal(CcParser* p, CcExpr* cl, CcExpr*_Nullable*_Nonnull o
 
 static
 int
-cc_parse_compound_literal(CcParser* p, CcParseFlags flags, CcQualType type, CcSpecifier storage, CcExpr*_Nullable*_Nonnull out){
+cc_parse_compound_literal(CcParser* p, CcParseFlags flags, CcQualType type, CcDeclBase declaration, CcExpr*_Nullable*_Nonnull out){
+    int err = cc_check_decl_alignment(p, &declaration, type, 0);
+    if(err) return err;
+    CcSpecifier storage = declaration.spec;
     CcParseFlags init_flags = flags;
     if(storage.sp_constexpr) init_flags.vc = CC_CONSTEXPR_VALUE;
     else if(storage.sp_static || storage.sp_thread_local) init_flags.vc = CC_LINKTIME_VALUE;
     CcExpr* result;
-    int err = cc_parse_init_list(p, init_flags, &result, type);
+    err = cc_parse_init_list(p, init_flags, &result, type);
     if(err) return err;
     result->kind = CC_EXPR_COMPOUND_LITERAL;
     result->compound_static = storage.sp_static;
     result->compound_thread_local = storage.sp_thread_local;
     result->compound_constexpr = storage.sp_constexpr;
     result->compound_register = storage.sp_register;
+    result->compound_alignment = declaration.alignment;
     result->defer_compound_storage = flags.parsing_default_arg && !storage.sp_static && !storage.sp_thread_local;
     if(storage.sp_static || storage.sp_thread_local || storage.sp_constexpr){
         err = cc_check_linktime_expr(p, result, 0, 0);
@@ -1740,78 +1303,14 @@ cc_wrap_to_desugared_compound_literal(CcParser* p, CcParseFlags flags, CcExpr* o
     return 0;
 }
 
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wnullable-to-nonnull-conversion"
-#endif
 static
 int
-cc_check_cast(CcParser* _Nullable p, CcQualType from, CcQualType to, SrcLoc loc){
-    from = ccqt_unaligned(from);
-    to = ccqt_unaligned(to);
-    if(from.bits == to.bits) return 0;
-    if(p && ccqt_bt_eq(to, CCBT__Any) && (ccqt_bt_eq(from, CCBT__Any) || cc_any_convertible(p, from))) return 0;
-    if(ccqt_is_basic(to) && ccqt_basic_kind(to) == CCBT_void) return 0;
-    CcTypeKind fk = ccqt_kind(from), tk = ccqt_kind(to);
-    if(fk == CC_ENUM){
-        from = ccqt_as_enum(from)->underlying;
-        fk = ccqt_kind(from);
-    }
-    if(tk == CC_ENUM){
-        to = ccqt_as_enum(to)->underlying;
-        tk = ccqt_kind(to);
-    }
-    if(tk == CC_ARRAY || tk == CC_VLA){
-        if(p) cc_error(p, loc, "cannot cast to array type");
-        return CC_SYNTAX_ERROR;
-    }
-    if(tk == CC_FUNCTION){
-        if(p) cc_error(p, loc, "cannot cast to function type");
-        return CC_SYNTAX_ERROR;
-    }
-    if(tk == CC_STRUCT || tk == CC_UNION){
-        if(from.ptr == to.ptr) return 0;
-        if(p) cc_error(p, loc, "cannot cast to struct or union type");
-        return CC_SYNTAX_ERROR;
-    }
-    if(fk == CC_STRUCT || fk == CC_UNION){
-        if(p) cc_error(p, loc, "cannot cast from struct or union type");
-        return CC_SYNTAX_ERROR;
-    }
-    if(fk == CC_BASIC && ccqt_basic_kind(from) == CCBT_void){
-        if(p) cc_error(p, loc, "cannot cast from void");
-        return CC_SYNTAX_ERROR;
-    }
-    if(fk == CC_SLICE && tk == CC_SLICE){
-        if(cc_types_compatible_unqualified(ccqt_as_slice(from)->pointee, ccqt_as_slice(to)->pointee))
-            return 0;
-        if(p) cc_error(p, loc, "cannot cast to slice of different type");
-        return CC_SYNTAX_ERROR;
-    }
-    if(ccqt_is_array(from) && tk == CC_SLICE){
-        if(fk == CC_ARRAY && ccqt_as_array(from)->is_incomplete){
-            if(p) cc_error(p, loc, "cannot cast to slice from incomplete array or vector");
-            return CC_SYNTAX_ERROR;
-        }
-        if(cc_types_compatible_unqualified(cc_array_element_type(from), ccqt_as_slice(to)->pointee))
-            return 0;
-        if(p) cc_error(p, loc, "cannot cast to slice of different type");
-        return CC_SYNTAX_ERROR;
-    }
-    _Bool f_arith = fk == CC_BASIC && ccbt_is_arithmetic(ccqt_basic_kind(from));
-    _Bool t_arith = tk == CC_BASIC && ccbt_is_arithmetic(ccqt_basic_kind(to));
-    if(f_arith && t_arith) return 0;
-    _Bool f_ptr = fk == CC_POINTER || (ccqt_is_array(from)) || fk == CC_FUNCTION || (fk == CC_BASIC && ccqt_basic_kind(from) == CCBT_nullptr_t);
-    _Bool t_ptr = tk == CC_POINTER || (tk == CC_BASIC && ccqt_basic_kind(to) == CCBT_nullptr_t);
-    if(f_ptr && t_ptr) return 0;
-    if(f_ptr && tk == CC_BASIC && ccbt_is_integer(ccqt_basic_kind(to))) return 0;
-    if(t_ptr && fk == CC_BASIC && ccbt_is_integer(ccqt_basic_kind(from))) return 0;
-    if(p) cc_error(p, loc, "invalid cast");
-    return CC_SYNTAX_ERROR;
+cc_check_cast(CcParser* p, CcQualType from, CcQualType to, SrcLoc loc){
+    const char* failure;
+    if(cc_check_cast_types(cc_target(p), from, to, &failure))
+        return cc_types_error(p, loc, from, to, "%s", failure);
+    return 0;
 }
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
 
 static
 int
@@ -1822,95 +1321,33 @@ cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase* declbase, 
         return cc_error(p, loc, "non-static declaration of '%.*s' follows static declaration", existing->name->length, existing->name->data);
     if(!existing->static_ && declbase->spec.sp_static)
         return cc_error(p, loc, "static declaration of '%.*s' follows non-static declaration", existing->name->length, existing->name->data);
-    if(!cc_types_compatible(old_type->return_type, new_type->return_type, 0))
-        return cc_error(p, loc, "conflicting return type for '%.*s'", existing->name->length, existing->name->data);
+    if(!cc_types_compatible(old_type->return_type, new_type->return_type))
+        return cc_types_error(p, loc, old_type->return_type, new_type->return_type, "conflicting return type for '%.*s'", existing->name->length, existing->name->data);
     if(old_type->no_prototype || new_type->no_prototype){
         CcFunction* prototype = new_type->no_prototype ? old_type : new_type;
         if(prototype->is_variadic)
-            return cc_error(p, loc, "conflicting variadic specifier for '%.*s'", existing->name->length, existing->name->data);
+            return cc_types_error(p, loc, (CcQualType){.bits=(uintptr_t)old_type}, new_ftype, "conflicting variadic specifier for '%.*s'", existing->name->length, existing->name->data);
         // An empty parameter list in a definition specifies zero parameters.
         if(((existing->defined && old_type->no_prototype) || (definition && new_type->no_prototype))
             && prototype->param_count)
-            return cc_error(p, loc, "conflicting number of parameters for '%.*s'", existing->name->length, existing->name->data);
+            return cc_types_error(p, loc, (CcQualType){.bits=(uintptr_t)old_type}, new_ftype, "conflicting number of parameters for '%.*s'", existing->name->length, existing->name->data);
         for(uint32_t i = 0; i < prototype->param_count; i++){
-            CcQualType param = prototype->params[i];
-            if(ccqt_kind(param) == CC_ENUM) param = ccqt_as_enum(param)->underlying;
-            if(ccqt_is_basic(param) && (ccqt_basic_kind(param) == CCBT_float
-                || (ccbt_is_integer(ccqt_basic_kind(param)) && ccbt_int_rank(ccqt_basic_kind(param)) < ccbt_int_rank(CCBT_int))))
-                return cc_error(p, loc, "conflicting type for parameter %u of '%.*s'", i+1, existing->name->length, existing->name->data);
+            if(cc_requires_default_promotion(prototype->params[i]))
+                return cc_types_error(p, loc, (CcQualType){.bits=(uintptr_t)old_type}, new_ftype, "conflicting type for parameter %u of '%.*s'", i+1, existing->name->length, existing->name->data);
         }
         return 0;
     }
     if(old_type->is_variadic != new_type->is_variadic)
-        return cc_error(p, loc, "conflicting variadic specifier for '%.*s'", existing->name->length, existing->name->data);
+        return cc_types_error(p, loc, (CcQualType){.bits=(uintptr_t)old_type}, new_ftype, "conflicting variadic specifier for '%.*s'", existing->name->length, existing->name->data);
     if(old_type->param_count != new_type->param_count)
-        return cc_error(p, loc, "conflicting number of parameters for '%.*s'", existing->name->length, existing->name->data);
+        return cc_types_error(p, loc, (CcQualType){.bits=(uintptr_t)old_type}, new_ftype, "conflicting number of parameters for '%.*s'", existing->name->length, existing->name->data);
     for(uint32_t i = 0; i < old_type->param_count; i++){
-        CcQualType old_param = {.unqual=old_type->params[i].unqual};
-        CcQualType new_param = {.unqual=new_type->params[i].unqual};
-        if(!cc_types_compatible(old_param, new_param, 0))
-            return cc_error(p, loc, "conflicting type for parameter %u of '%.*s'", i + 1, existing->name->length, existing->name->data);
+        CcQualType old_param = cc_parameter_value_type(old_type->params[i]);
+        CcQualType new_param = cc_parameter_value_type(new_type->params[i]);
+        if(!cc_types_compatible(old_param, new_param))
+            return cc_types_error(p, loc, old_param, new_param, "conflicting type for parameter %u of '%.*s'", i + 1, existing->name->length, existing->name->data);
     }
     return 0;
-}
-
-static
-_Bool
-cc_type_contains_composite(CcQualType candidate, CcQualType other, unsigned depth, const CcTypePair* _Nullable pairs){
-    if(candidate.bits == other.bits) return 1;
-    if(depth >= 256) return 0;
-    if(ccqt_raw_kind(other) == CC_ALIGNED && ccqt_raw_kind(candidate) != CC_ALIGNED) return 0;
-    candidate = ccqt_unaligned(candidate);
-    other = ccqt_unaligned(other);
-    if(ccqt_kind(candidate) != ccqt_kind(other) && ccqt_is_array(candidate) && ccqt_is_array(other))
-        return ccqt_kind(candidate) == CC_VLA;
-    switch(ccqt_kind(candidate)){
-        case CC_VECTOR:
-            return cc_type_contains_composite(ccqt_as_vector(candidate)->element, ccqt_as_vector(other)->element, depth+1, pairs);
-        case CC_VLA: return ccqt_is_array(other) && cc_type_contains_composite(ccqt_array_element(candidate), ccqt_array_element(other), depth+1, pairs);
-        case CC_ALIGNED: cc_unsafe_unreachable();
-        case CC_POINTER:
-        case CC_BLOCK_POINTER:
-            return cc_type_contains_composite(ccqt_as_ptr(candidate)->pointee, ccqt_as_ptr(other)->pointee, depth+1, pairs);
-        case CC_SLICE:
-            return cc_type_contains_composite(ccqt_as_slice(candidate)->pointee, ccqt_as_slice(other)->pointee, depth+1, pairs);
-        case CC_ARRAY: {
-            CcArray* a = ccqt_as_array(candidate);
-            CcArray* b = ccqt_as_array(other);
-            if(a->is_incomplete && !b->is_incomplete)
-                return 0;
-            return cc_type_contains_composite(a->element, b->element, depth+1, pairs);
-        }
-        case CC_FUNCTION: {
-            CcFunction* a = ccqt_as_function(candidate);
-            CcFunction* b = ccqt_as_function(other);
-            if(!cc_type_contains_composite(a->return_type, b->return_type, depth+1, pairs))
-                return 0;
-            if(a->no_prototype || b->no_prototype)
-                return b->no_prototype;
-            for(uint32_t i = 0; i < a->param_count; i++)
-                if(!cc_type_contains_composite(a->params[i], b->params[i], depth+1, pairs))
-                    return 0;
-            return 1;
-        }
-        case CC_STRUCT:
-        case CC_UNION: {
-            for(const CcTypePair* prev = pairs; prev; prev = prev->previous)
-                if(prev->a.unqual == candidate.unqual && prev->b.unqual == other.unqual)
-                    return 1;
-            CcTypePair pair = {candidate, other, pairs};
-            CcStruct* a = ccqt_as_struct(candidate);
-            CcStruct* b = ccqt_as_struct(other);
-            for(uint32_t i = 0; i < a->field_count; i++)
-                if(!cc_type_contains_composite(a->fields[i].type, b->fields[i].type, depth+1, &pair))
-                    return 0;
-            return 1;
-        }
-        case CC_BASIC:
-        case CC_ENUM:
-            return 1;
-        DRP_CASES_EXHAUSTED;
-    }
 }
 
 typedef struct CcCompositePair CcCompositePair;
@@ -1918,6 +1355,7 @@ struct CcCompositePair {
     CcQualType a, b, composite;
     const CcCompositePair* _Nullable previous;
 };
+
 
 static
 int
@@ -1928,36 +1366,51 @@ cc_merge_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* ou
         CcQualType merged;
         int err = cc_merge_decl_types(p, ccqt_unaligned(old), ccqt_unaligned(new_), &merged, pairs);
         if(err) return err;
-        CcQualType aligned_type = ccqt_raw_kind(new_) == CC_ALIGNED ? new_ : old;
-        CcAligned* aligned = cc_intern_aligned(&p->type_cache, cc_allocator(p), merged, ccqt_as_aligned(aligned_type)->alignment);
+        uint32_t old_alignment = ccqt_explicit_alignment(old);
+        uint32_t new_alignment = ccqt_explicit_alignment(new_);
+        uint32_t alignment = old_alignment > new_alignment ? old_alignment : new_alignment;
+        CcAligned* aligned = cc_intern_aligned(&p->type_cache, cc_allocator(p), merged, alignment);
         if(!aligned) return CC_OOM_ERROR;
         *out = (CcQualType){.bits=(uintptr_t)aligned | merged.quals};
         return 0;
     }
     CcTypeKind kind = ccqt_kind(old);
-    if(ccqt_is_array(old) && ccqt_is_array(new_)
-        && (kind == CC_VLA || ccqt_kind(new_) == CC_VLA))
-        return cc_types_compatible(old, new_, 0) ? 0 : CC_SYNTAX_ERROR;
-    if(kind != ccqt_kind(new_) || (kind != CC_ARRAY && old.quals != new_.quals))
-        return CC_SYNTAX_ERROR;
-    switch(kind){
-        case CC_VLA: return cc_types_compatible(old, new_, 0) ? 0 : CC_SYNTAX_ERROR;
-        case CC_VECTOR: return cc_types_compatible(old, new_, 0) ? 0 : CC_SYNTAX_ERROR;
-        case CC_ALIGNED: cc_unsafe_unreachable();
-        case CC_ARRAY: {
+    if((kind == CC_ENUM && ccqt_kind(new_) == CC_BASIC)
+        || (kind == CC_BASIC && ccqt_kind(new_) == CC_ENUM)){
+        if(!cc_types_compatible(old, new_)) return CC_SYNTAX_ERROR;
+        *out = kind == CC_ENUM ? old : new_;
+        return 0;
+    }
+    if(ccqt_is_array(old) && ccqt_is_array(new_)){
+        if(kind == CC_ARRAY && ccqt_kind(new_) == CC_ARRAY){
             CcArray* a = ccqt_as_array(old);
             CcArray* b = ccqt_as_array(new_);
             if(!a->is_incomplete && !b->is_incomplete && a->length != b->length)
                 return CC_SYNTAX_ERROR;
-            CcQualType element;
-            int err = cc_merge_decl_types(p, cc_array_element_type(old), cc_array_element_type(new_), &element, pairs);
-            if(err) return err;
-            CcArray* bound = b->is_incomplete ? a : b;
-            CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), element, bound->length, bound->is_static, bound->is_incomplete);
-            if(!arr) return CC_OOM_ERROR;
-            *out = (CcQualType){.bits = (uintptr_t)arr};
-            return 0;
         }
+        CcQualType element;
+        int err = cc_merge_decl_types(p, ccqt_qualified_array_element(old), ccqt_qualified_array_element(new_), &element, pairs);
+        if(err) return err;
+        CcQualType bound = cc_array_bound_information(old) > cc_array_bound_information(new_) ? old : new_;
+        if(ccqt_kind(bound) == CC_ARRAY){
+            CcArray* source = ccqt_as_array(bound);
+            CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element, source->length, source->is_incomplete);
+            if(!array) return CC_OOM_ERROR;
+            *out = (CcQualType){.bits=(uintptr_t)array};
+        }
+        else {
+            CcVla* vla = cc_intern_vla(&p->type_cache, cc_allocator(p), ccqt_as_vla(bound), element);
+            if(!vla) return CC_OOM_ERROR;
+            *out = (CcQualType){.bits=(uintptr_t)vla};
+        }
+        return 0;
+    }
+    if(kind != ccqt_kind(new_) || old.quals != new_.quals)
+        return CC_SYNTAX_ERROR;
+    switch(kind){
+        case CC_VLA: case CC_ARRAY: cc_unsafe_unreachable(); // Handled above.
+        case CC_VECTOR: return cc_types_compatible(old, new_) ? 0 : CC_SYNTAX_ERROR;
+        case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_POINTER:
         case CC_BLOCK_POINTER: {
             CcPointer* a = ccqt_as_ptr(old);
@@ -1993,10 +1446,7 @@ cc_merge_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* ou
             if(a->no_prototype || b->no_prototype){
                 if(proto->is_variadic) return CC_SYNTAX_ERROR;
                 for(uint32_t i = 0; i < proto->param_count; i++){
-                    CcQualType pt = proto->params[i];
-                    if(ccqt_kind(pt) == CC_ENUM) pt = ccqt_as_enum(pt)->underlying;
-                    if(ccqt_is_basic(pt) && (ccqt_basic_kind(pt) == CCBT_float
-                        || (ccbt_is_integer(ccqt_basic_kind(pt)) && ccbt_int_rank(ccqt_basic_kind(pt)) < ccbt_int_rank(CCBT_int))))
+                    if(cc_requires_default_promotion(proto->params[i]))
                         return CC_SYNTAX_ERROR;
                 }
             }
@@ -2029,17 +1479,14 @@ cc_merge_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* ou
         case CC_STRUCT:
         case CC_UNION: {
             for(const CcCompositePair* prev = pairs; prev; prev = prev->previous){
-                if(prev->a.unqual == old.unqual && prev->b.unqual == new_.unqual){
+                if((prev->a.unqual == old.unqual && prev->b.unqual == new_.unqual)
+                    || (prev->a.unqual == new_.unqual && prev->b.unqual == old.unqual)){
                     *out = prev->composite;
                     out->quals = new_.quals;
                     return 0;
                 }
             }
-            if(cc_type_contains_composite(new_, old, 0, NULL)) return 0;
-            if(cc_type_contains_composite(old, new_, 0, NULL)){
-                *out = old;
-                return 0;
-            }
+            int err;
             CcStruct* a = ccqt_as_struct(old);
             CcStruct* b = ccqt_as_struct(new_);
             CcStruct* record = Allocator_alloc(cc_allocator(p), sizeof *record);
@@ -2054,10 +1501,10 @@ cc_merge_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* ou
             record->fields = Allocator_alloc(cc_allocator(p), b->field_count * sizeof(CcField));
             if(b->field_count && !record->fields) return CC_OOM_ERROR;
             *out = (CcQualType){.bits = (uintptr_t)record | new_.quals};
-            CcCompositePair pair = {old, new_, *out, pairs};
+            CcCompositePair pair = {.a=old, .b=new_, .composite=*out, .previous=pairs};
             for(uint32_t i = 0; i < b->field_count; i++){
                 record->fields[i] = b->fields[i];
-                int err = cc_merge_decl_types(p, a->fields[i].type, b->fields[i].type, &record->fields[i].type, &pair);
+                err = cc_merge_decl_types(p, a->fields[i].type, b->fields[i].type, &record->fields[i].type, &pair);
                 if(err) return err;
             }
             return 0;
@@ -2065,7 +1512,8 @@ cc_merge_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* ou
         case CC_BASIC:
             return CC_SYNTAX_ERROR;
         case CC_ENUM:
-            return 0; // Compatibility was checked before constructing the composite.
+            if(old.unqual < new_.unqual) *out = old;
+            return 0;
         DRP_CASES_EXHAUSTED;
     }
 }
@@ -2073,7 +1521,8 @@ cc_merge_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* ou
 static
 int
 cc_merge_compatible_decl_types(CcParser* p, CcQualType old, CcQualType new_, CcQualType* out){
-    if(!cc_types_compatible(old, new_, 0)) return CC_SYNTAX_ERROR;
+    if(!cc_types_compatible(old, new_)) return CC_SYNTAX_ERROR;
+    if(old.bits == new_.bits){ *out = old; return 0; }
     return cc_merge_decl_types(p, old, new_, out, NULL);
 }
 
@@ -2091,38 +1540,9 @@ cc_merge_qualified_types(CcParser* p, CcQualType a, CcQualType b, CcQualType* ou
 static
 int
 cc_merge_func_decl_type(CcParser* p, CcFunction* old, CcQualType* type){
-    CcFunction* declared = ccqt_as_function(*type);
     CcQualType composite;
     int err = cc_merge_compatible_decl_types(p, (CcQualType){.bits=(uintptr_t)old}, *type, &composite);
     if(err) return err;
-    CcFunction* merged = ccqt_as_function(composite);
-    // Composite signatures ignore parameter qualifiers for compatibility, but
-    // retain the new declaration's qualifiers for reflection and definitions.
-    _Bool restore_quals = 0;
-    if(!declared->no_prototype){
-        for(uint32_t i = 0; i < declared->param_count; i++)
-            restore_quals |= declared->params[i].quals != merged->params[i].quals;
-    }
-    if(restore_quals){
-        Marray(CcQualType) params = {0};
-        for(uint32_t i = 0; i < merged->param_count; i++){
-            CcQualType pt = merged->params[i];
-            pt.quals = declared->params[i].quals;
-            err = ma_push(CcQualType)(&params, cc_scratch_allocator(p), pt);
-            if(err){
-                err = CC_OOM_ERROR;
-                break;
-            }
-        }
-        if(!err){
-            CcFunction* f = cc_intern_function(&p->type_cache, cc_allocator(p), merged->return_type,
-                params.data, merged->param_count, merged->fixed_param_count, merged->is_variadic, merged->no_prototype);
-            if(!f) err = CC_OOM_ERROR;
-            else composite = (CcQualType){.bits=(uintptr_t)f | type->quals};
-        }
-        ma_cleanup(CcQualType)(&params, cc_scratch_allocator(p));
-        if(err) return err;
-    }
     *type = composite;
     return 0;
 }
@@ -2173,6 +1593,8 @@ cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Non
             if(err) return err;
             CcExpr* size = cc_binary_expr(p, CC_EXPR_MUL, loc, size_type, bound, element);
             if(!size) return CC_OOM_ERROR;
+            size->binary.checked_size = 1;
+            size->binary.element_alignment = ccqt_explicit_alignment(vla->element);
             *out = size;
             return 0;
         }
@@ -2212,15 +1634,16 @@ cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Non
         case CC_ARRAY: {
             CcArray* arr = ccqt_as_array(t);
             if(arr->is_incomplete)
-                return cc_error(p, loc, "sizeof applied to incomplete array type");
+                return cc_type_error(p, loc, t, "sizeof applied to incomplete array type");
             CcExpr* elem_size;
             int err = cc_sizeof_as_expr(p, arr->element, loc, &elem_size);
             if(err) return err;
             if(elem_size->kind == CC_EXPR_VALUE){
                 uint32_t size;
-                if(cc_layout_array_size(elem_size->uinteger, arr->length, &size)){
+                err = cc_sizeof_as_uint(p, t, loc, &size);
+                if(err){
                     cc_release_expr(p, elem_size);
-                    return cc_error(p, loc, "object size exceeds 32-bit layout limit");
+                    return err;
                 }
                 elem_size->uinteger = size;
                 *out = elem_size;
@@ -2231,13 +1654,15 @@ cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Non
             len->uinteger = (uint64_t)arr->length;
             CcExpr* mul = cc_binary_expr(p, CC_EXPR_MUL, loc, size_type, len, elem_size);
             if(!mul) return CC_OOM_ERROR;
+            mul->binary.checked_size = 1;
+            mul->binary.element_alignment = ccqt_explicit_alignment(arr->element);
             *out = mul;
             return 0;
         }
         case CC_STRUCT:{
             CcStruct* s = ccqt_as_struct(t);
             if(s->is_incomplete)
-                return cc_error(p, loc, "sizeof applied to incomplete struct type");
+                return cc_type_error(p, loc, t, "sizeof applied to incomplete struct type");
             CcExpr* node = cc_value_expr(p, loc, size_type);
             if(!node) return CC_OOM_ERROR;
             node->uinteger = s->size;
@@ -2247,7 +1672,7 @@ cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Non
         case CC_UNION:{
             CcUnion* u = ccqt_as_union(t);
             if(u->is_incomplete)
-                return cc_error(p, loc, "sizeof applied to incomplete union type");
+                return cc_type_error(p, loc, t, "sizeof applied to incomplete union type");
             CcExpr* node = cc_value_expr(p, loc, size_type);
             if(!node) return CC_OOM_ERROR;
             node->uinteger = u->size;
@@ -2256,11 +1681,11 @@ cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Non
         }
         case CC_ENUM:{
             CcEnum* e = ccqt_as_enum(t);
-            if(e->is_incomplete) return cc_error(p, loc, "sizeof applied to incomplete enum type");
+            if(e->is_incomplete) return cc_type_error(p, loc, t, "sizeof applied to incomplete enum type");
             return cc_sizeof_as_expr(p, e->underlying, loc, out);
         }
         case CC_FUNCTION:
-            return cc_error(p, loc, "sizeof applied to function type");
+            return cc_type_error(p, loc, t, "sizeof applied to function type");
     }
     cc_unsafe_unreachable();
 }
@@ -2281,67 +1706,28 @@ cc_alignof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _No
 static
 int
 cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
-    const CcTargetConfig* tgt = cc_target(p);
-    switch(ccqt_kind(t)){
-        case CC_VLA: return cc_error(p, loc, "variable length type requires a runtime size");
-        case CC_ALIGNED: cc_unsafe_unreachable();
-        case CC_BASIC:{
-            if(ccqt_basic_kind(t) >= CCBT_COUNT)
-                return ((void)cc_error(p, loc, "basic kind out of bounds"), CC_UNREACHABLE_ERROR);
-            *out = tgt->sizeof_[ccqt_basic_kind(t)];
-            return 0;
-        }
-        case CC_BLOCK_POINTER:
-        case CC_POINTER: {
-            *out = tgt->sizeof_[CCBT_nullptr_t];
-            return 0;
-        }
-        case CC_SLICE: {
-            *out = 2*tgt->sizeof_[CCBT_nullptr_t];
-            return 0;
-        }
-        case CC_VECTOR: {
-            CcVector* arr = ccqt_as_vector(t);
-            *out = arr->vector_size;
-            return 0;
-        }
-        case CC_ARRAY: {
-            CcArray* arr = ccqt_as_array(t);
-            if(arr->is_incomplete)
-                return cc_error(p, loc, "Taking sizeof of an incomplete type");
-            uint32_t elem_size;
-            int err = cc_sizeof_as_uint(p, arr->element, loc, &elem_size);
-            if(err) return err;
-            if(cc_layout_array_size(elem_size, arr->length, out))
-                return cc_error(p, loc, "object size exceeds 32-bit layout limit");
-            return 0;
-        }
-        case CC_STRUCT: {
-            CcStruct* s = ccqt_as_struct(t);
-            if(s->is_incomplete)
-                return cc_error(p, loc, "Taking sizeof of an incomplete type");
-            *out = s->size;
-            return 0;
-        }
-        case CC_UNION: {
-            CcUnion* u = ccqt_as_union(t);
-            if(u->is_incomplete)
-                return cc_error(p, loc, "Taking sizeof of an incomplete type");
-            *out = u->size;
-            return 0;
-        }
-        case CC_ENUM: {
-            CcEnum* e = ccqt_as_enum(t);
-            if(e->is_incomplete) return cc_error(p, loc, "sizeof applied to incomplete enum type");
-            return cc_sizeof_as_uint(p, e->underlying, loc, out);
-        }
+    CcQualType failure_type;
+    int err = cc_type_sizeof_complete(cc_target(p), t, out, &failure_type);
+    if(!err) return 0;
+    if(err == CC_OVERFLOW_ERROR)
+        return cc_error(p, loc, "object size exceeds 32-bit layout limit");
+    switch(ccqt_kind(failure_type)){
+        case CC_VLA:
+            return cc_type_error(p, loc, failure_type, "variable length type requires a runtime size");
+        case CC_ARRAY:
+        case CC_STRUCT:
+        case CC_UNION:
+            return cc_type_error(p, loc, failure_type, "Taking sizeof of an incomplete type");
+        case CC_ENUM:
+            return cc_type_error(p, loc, failure_type, "sizeof applied to incomplete enum type");
         case CC_FUNCTION:
-            return cc_error(p, loc, "Taking sizeof of a function type (not function pointer type)");
+            return cc_type_error(p, loc, failure_type, "Taking sizeof of a function type (not function pointer type)");
+        case CC_BASIC:
+            return ((void)cc_error(p, loc, "basic kind out of bounds"), CC_UNREACHABLE_ERROR);
+        default:
+            cc_unsafe_unreachable();
     }
-    cc_unsafe_unreachable();
 }
-
-static
 int
 cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
     if(t.is_atomic){
@@ -2390,37 +1776,253 @@ cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out){
         case CC_STRUCT: {
             CcStruct* s = ccqt_as_struct(t);
             if(s->is_incomplete)
-                return cc_error(p, loc, "alignof applied to incomplete struct type");
+                return cc_type_error(p, loc, t, "alignof applied to incomplete struct type");
             *out = s->alignment;
             return 0;
         }
         case CC_UNION: {
             CcUnion* u = ccqt_as_union(t);
             if(u->is_incomplete)
-                return cc_error(p, loc, "alignof applied to incomplete union type");
+                return cc_type_error(p, loc, t, "alignof applied to incomplete union type");
             *out = u->alignment;
             return 0;
         }
         case CC_ENUM: {
             CcEnum* e = ccqt_as_enum(t);
-            if(e->is_incomplete) return cc_error(p, loc, "alignof applied to incomplete enum type");
+            if(e->is_incomplete) return cc_type_error(p, loc, t, "alignof applied to incomplete enum type");
             return cc_alignof_as_uint(p, e->underlying, loc, out);
         }
         case CC_FUNCTION:
-            return cc_error(p, loc, "alignof applied to function type");
+            return cc_type_error(p, loc, t, "alignof applied to function type");
     }
     cc_unsafe_unreachable();
 }
 
 static
 int
-cc_check_decl_alignment(CcParser* p, const CcDeclBase* base, CcQualType type){
+cc_type_alignment(CcParser* p, CcQualType type, SrcLoc loc, uint32_t* out){
+    uint32_t alignment;
+    int err = cc_alignof_as_uint(p, type, loc, &alignment);
+    if(err) return err;
+    *out = 0;
+    while(alignment > 1){ alignment >>= 1; ++*out; }
+    return 0;
+}
+
+static
+uint32_t
+cc_offset_alignment(uint32_t align_log2, uint64_t offset){
+    while(align_log2 && (offset & ((UINT64_C(1) << align_log2) - 1))) align_log2--;
+    return align_log2;
+}
+
+static
+int
+cc_index_alignment(CcParser* p, CcExpr* index, uint32_t stride, uint32_t* out){
+    int64_t value;
+    int err = cc_eval_integer(&(CcEvalCtx){.parser=p}, index, &value);
+    if(err && err != CC_NOT_CONSTANT_ERROR) return err;
+    uint64_t offset = err ? stride : (uint64_t)value * stride;
+    *out = cc_offset_alignment(*out, offset);
+    return 0;
+}
+
+static
+int
+cc_pointer_type_alignment(CcParser* p, CcQualType type, SrcLoc loc, uint32_t source_alignment, uint32_t* out){
+    if(ccqt_kind(type) == CC_POINTER){
+        CcQualType pointee = ccqt_as_ptr(type)->pointee;
+        if((ccqt_kind(pointee) == CC_STRUCT && ccqt_as_struct(pointee)->is_incomplete)
+            || (ccqt_kind(pointee) == CC_UNION && ccqt_as_union(pointee)->is_incomplete)
+            || (ccqt_kind(pointee) == CC_ENUM && ccqt_as_enum(pointee)->is_incomplete)){
+            *out = source_alignment;
+            return 0;
+        }
+        if(ccqt_kind(pointee) != CC_FUNCTION && !ccqt_bt_eq(pointee, CCBT_void)){
+            int err = cc_type_alignment(p, pointee, loc, out);
+            if(err) return err;
+            if(source_alignment > *out) *out = source_alignment;
+            return 0;
+        }
+    }
+    *out = source_alignment;
+    return 0;
+}
+
+static
+int
+cc_pointer_alignment(CcParser* p, const CcExpr* e, uint32_t* out){
+    if(ccqt_kind(e->type) == CC_VLA)
+        return cc_type_alignment(p, e->type, e->loc, out);
+    uint32_t source_alignment = 0;
+    if((ccqt_is_fixed_sequence(e->type) || ccqt_kind(e->type) == CC_VLA))
+        return cc_lvalue_alignment(p, e, out);
+    switch((uint32_t)e->kind){
+        case CC_EXPR_ADDR:
+            return cc_lvalue_alignment(p, e->lhs, out);
+        case CC_EXPR_COMMA:
+            return cc_pointer_alignment(p, e->values[0], out);
+        case CC_EXPR_ASSIGN:
+            return cc_pointer_alignment(p, e->values[0], out);
+        case CC_EXPR_OBJECT_VIEW:
+            return cc_pointer_alignment(p, e->lhs, out);
+        case CC_EXPR_BLOB:
+        case CC_EXPR_VALUE:
+            *out = 0;
+            return 0;
+        case CC_EXPR_CAST:{
+            // Trust the programmer
+            if(ccqt_kind(e->lhs->type) == CC_POINTER || (ccqt_is_fixed_sequence(e->lhs->type) || ccqt_kind(e->lhs->type) == CC_VLA)){
+                int err = cc_pointer_alignment(p, e->lhs, &source_alignment);
+                if(err) return err;
+            }
+            break;
+        }
+        case CC_EXPR_TERNARY:{
+            uint32_t other;
+            int err = cc_pointer_alignment(p, e->values[0], out);
+            if(err) return err;
+            err = cc_pointer_alignment(p, e->values[1], &other);
+            if(err) return err;
+            if(other < *out) *out = other;
+            return 0;
+        }
+        case CC_EXPR_ADD:
+        case CC_EXPR_SUB:{
+            const CcExpr* base = e->lhs;
+            CcExpr* index = e->values[0];
+            if(ccqt_kind(base->type) != CC_POINTER){ base = e->values[0]; index = e->lhs; }
+            if(ccqt_kind(ccqt_as_ptr(base->type)->pointee) == CC_VLA)
+                return cc_type_alignment(p, ccqt_as_ptr(base->type)->pointee, e->loc, out);
+            int err = cc_pointer_alignment(p, base, out);
+            if(err) return err;
+            uint32_t stride;
+            err = cc_sizeof_as_uint(p, ccqt_as_ptr(base->type)->pointee, e->loc, &stride);
+            if(err) return err;
+            return cc_index_alignment(p, index, stride, out);
+        }
+    }
+    return cc_pointer_type_alignment(p, e->type, e->loc, source_alignment, out);
+}
+
+static
+int
+cc_lvalue_alignment(CcParser* p, const CcExpr* e, uint32_t* out){
+    if(ccqt_kind(e->type) == CC_VLA)
+        return cc_type_alignment(p, e->type, e->loc, out);
+    int err;
+    switch((uint32_t)e->kind){
+        case CC_EXPR_COMMA:
+            return cc_lvalue_alignment(p, e->values[0], out);
+        case CC_EXPR_DEREF:
+            return cc_pointer_alignment(p, e->lhs, out);
+        case CC_EXPR_DOT:
+        case CC_EXPR_ARROW:
+            err = e->kind == CC_EXPR_DOT
+                ? cc_lvalue_alignment(p, e->values[0], out)
+                : cc_pointer_alignment(p, e->values[0], out);
+            if(err) return err;
+            uint64_t field_offset;
+            err = cc_expr_field_offset(cc_target(p), e, &field_offset);
+            if(err) return err;
+            *out = cc_offset_alignment(*out, field_offset);
+            return 0;
+        case CC_EXPR_SUBSCRIPT:{
+            const CcExpr* base = e->lhs;
+            if((ccqt_is_fixed_sequence(base->type) || ccqt_kind(base->type) == CC_VLA))
+                err = cc_lvalue_alignment(p, base, out);
+            else if(ccqt_kind(base->type) == CC_POINTER)
+                err = cc_pointer_alignment(p, base, out);
+            else
+                err = cc_type_alignment(p, e->type, e->loc, out);
+            if(err) return err;
+            uint32_t stride;
+            err = cc_sizeof_as_uint(p, e->type, e->loc, &stride);
+            if(err) return err;
+            return cc_index_alignment(p, e->values[0], stride, out);
+        }
+    }
+    err = cc_type_alignment(p, e->type, e->loc, out);
+    if(err) return err;
+    if(e->kind == CC_EXPR_VARIABLE){
+        uint32_t alignment = e->var->alignment, exponent = 0;
+        while(alignment > 1){ alignment >>= 1; exponent++; }
+        if(exponent > *out) *out = exponent;
+    }
+    return 0;
+}
+
+static
+int
+cc_expr_alignment(CcParser* p, const CcExpr* e, uint32_t* out){
+    while(e->kind == CC_EXPR_COMMA) e = e->values[0];
+    int err = cc_alignof_as_uint(p, e->type, e->loc, out);
+    if(err) return err;
+    if(e->kind == CC_EXPR_VARIABLE){
+        if(e->var->alignment > *out) *out = e->var->alignment;
+    }
+    else if(e->kind == CC_EXPR_COMPOUND_LITERAL){
+        if(e->compound_alignment > *out) *out = e->compound_alignment;
+    }
+    else if(e->kind == CC_EXPR_DOT || e->kind == CC_EXPR_ARROW){
+        CcQualType owner = cc_expr_field_owner(e);
+        uint32_t available;
+        if(e->kind == CC_EXPR_DOT)
+            err = cc_expr_alignment(p, e->values[0], &available);
+        else
+            err = cc_alignof_as_uint(p, owner, e->loc, &available);
+        if(err) return err;
+        for(uint32_t i = 0; i < cc_field_path_count(e->field_path); i++){
+            if(ccqt_kind(owner) != CC_STRUCT && ccqt_kind(owner) != CC_UNION)
+                break; // Builtin pseudo-members use their type alignment.
+            CcField* field = &ccqt_as_struct(owner)->fields[cc_field_path_component(e->field_path, i)];
+            if(field->layout_alignment < available) available = field->layout_alignment;
+            *out = available;
+            owner = field->type;
+        }
+    }
+    return 0;
+}
+
+static
+int
+cc_check_decl_alignment(CcParser* p, const CcDeclBase* base, CcQualType type, _Bool bitfield){
+    if(!base->has_alignas) return 0;
+    if(base->spec.sp_typedef)
+        return cc_error(p, base->loc, "_Alignas is not allowed on typedef declarations");
+    if(base->spec.sp_register)
+        return cc_error(p, base->loc, "_Alignas is not allowed on register objects");
+    if(ccqt_kind(type) == CC_FUNCTION)
+        return cc_type_error(p, base->loc, type, "_Alignas is not allowed on functions");
+    if(bitfield)
+        return cc_error(p, base->loc, "_Alignas is not allowed on bitfields");
     if(!base->alignas_alignment) return 0;
     uint32_t natural;
     int err = cc_alignof_as_uint(p, type, base->loc, &natural);
     if(err) return err;
     if(base->alignas_alignment < natural)
-        return cc_error(p, base->loc, "_Alignas cannot weaken natural alignment");
+        return cc_type_error(p, base->loc, type, "_Alignas cannot weaken natural alignment");
+    return 0;
+}
+
+static
+int
+cc_apply_field_attributes(CcParser* p, const CcDeclBase* base, const CcAttributes* attrs, CcField* field){
+    if(base->spec.sp_funcbits)
+        return cc_error(p, base->loc, "function specifier is not allowed on data members");
+    int err = cc_apply_vector_type(p, &field->type, attrs->vector_size, base->loc);
+    if(err) return err;
+    err = cc_check_derived_type(p, field->type, base->loc);
+    if(err) return err;
+    const char* failure;
+    if(cc_check_member_type(field->type, field->is_bitfield, &failure))
+        return cc_type_error(p, field->loc, field->type, "%s", failure);
+    err = cc_check_decl_alignment(p, base, field->type, field->is_bitfield);
+    if(err) return err;
+    field->alignment = base->alignment;
+    if(attrs->has_aligned && attrs->aligned > field->alignment)
+        field->alignment = attrs->aligned;
+    field->packed = attrs->packed;
     return 0;
 }
 
@@ -2486,6 +2088,13 @@ cc_parse_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out){
     CcExpr* left;
     int err = cc_parse_assignment_expr(p, flags, &left, CCQT_NONE);
     if(err) return err;
+    return cc_parse_comma_tail(p, flags, left, out);
+}
+
+static
+int
+cc_parse_comma_tail(CcParser* p, CcParseFlags flags, CcExpr* left, CcExpr* _Nullable* _Nonnull out){
+    int err;
     for(;;){
         CcToken tok;
         err = cc_next_token(p, &tok);
@@ -2495,6 +2104,8 @@ cc_parse_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out){
             err = cc_parse_assignment_expr(p, flags, &right, CCQT_NONE);
             if(err) return err;
             err = cc_decay(p, &left);
+            if(err) return err;
+            err = cc_implicit_cast(p, left, ccqt_basic(CCBT_void), &left);
             if(err) return err;
             err = cc_decay(p, &right);
             if(err) return err;
@@ -2529,8 +2140,14 @@ cc_parse_assignment_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _No
     CcExpr* left;
     int err = cc_parse_ternary_expr(p, flags, &left);
     if(err) return err;
+    return cc_parse_assignment_tail(p, flags, left, out);
+}
+
+static
+int
+cc_parse_assignment_tail(CcParser* p, CcParseFlags flags, CcExpr* left, CcExpr* _Nullable* _Nonnull out){
     CcToken tok;
-    err = cc_next_token(p, &tok);
+    int err = cc_next_token(p, &tok);
     if(err) return err;
     if(tok.type == CC_PUNCTUATOR){
         CcExprKind kind;
@@ -2545,8 +2162,10 @@ cc_parse_assignment_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _No
             }
             if(!left->is_lvalue)
                 return cc_error(p, tok.loc, "expression is not assignable");
-            if(left->type.is_const && !flags.static_rebind)
-                return cc_error(p, tok.loc, "cannot assign to variable with const-qualified type");
+            if(!ccqt_is_complete_object(left->type))
+                return cc_type_error(p, tok.loc, left->type, "assignment requires a complete object type");
+            if(ccqt_array_object_type(left->type).is_const && !flags.static_rebind)
+                return cc_type_error(p, tok.loc, left->type, "cannot assign to variable with const-qualified type");
             CcExpr* right;
             CcToken peek_assign;
             err = cc_peek(p, &peek_assign);
@@ -2556,53 +2175,50 @@ cc_parse_assignment_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _No
             if(kind != CC_EXPR_ASSIGN && kind != CC_EXPR_ADDASSIGN && kind != CC_EXPR_SUBASSIGN){
                 CcQualType lt = left->type;
                 lt.is_atomic = 0;
-                if(ccqt_kind(lt) == CC_ENUM) lt = ccqt_as_enum(lt)->underlying;
+                lt = ccqt_enum_underlying(lt);
                 if(!ccqt_is_basic(lt) || !ccbt_is_arithmetic(ccqt_basic_kind(lt))){
-                    return cc_error(p, tok.loc, "compound assignment requires arithmetic operands");
+                    return cc_types_error(p, tok.loc, left->type, right->type, "compound assignment requires arithmetic operands");
                 }
             }
             if(kind == CC_EXPR_ASSIGN){
-                err = cc_check_atomic_object_access(p, left->type, tok.loc);
+                err = cc_check_atomic_object_access(p, left, tok.loc);
                 if(err) return err;
             }
             else {
-                err = cc_check_atomic_rmw(p, left->type, tok.loc);
+                err = cc_check_atomic_rmw(p, left, tok.loc);
                 if(err) return err;
             }
             if(kind != CC_EXPR_ASSIGN && ccqt_bt_eq(left->type, CCBT__Any))
-                return cc_error(p, tok.loc, "compound assignment requires arithmetic or pointer type");
+                return cc_types_error(p, tok.loc, left->type, right->type, "compound assignment requires arithmetic or pointer type");
             if(kind == CC_EXPR_MODASSIGN || kind == CC_EXPR_BITANDASSIGN
             || kind == CC_EXPR_BITORASSIGN || kind == CC_EXPR_BITXORASSIGN
             || kind == CC_EXPR_LSHIFTASSIGN || kind == CC_EXPR_RSHIFTASSIGN){
-                if(!ccqt_is_integer(left->type))
-                    return cc_error(p, tok.loc, "operator requires integer operands");
+                if(!ccqt_is_integer(left->type)){
+                    return cc_types_error(p, tok.loc, left->type, right->type, "operator '%s' requires integer operands", cc_expr_kind_to_operator(kind));
+                }
             }
             CcQualType operation_type = CCQT_NONE;
             if((kind == CC_EXPR_ADDASSIGN || kind == CC_EXPR_SUBASSIGN) && ccqt_kind(left->type) == CC_POINTER){
-                err = cc_check_pointer_arithmetic(p, left->type, tok.loc);
+                err = cc_check_type_has_size_or_error(p, ccqt_as_ptr(left->type)->pointee, tok.loc);
                 if(err) return err;
                 if(!ccqt_is_integer(right->type))
-                    return cc_error(p, tok.loc, "pointer arithmetic requires integer operand");
+                    return cc_types_error(p, tok.loc, left->type, right->type, "pointer arithmetic requires integer operand");
                 err = cc_implicit_cast_to_index(p, right, &right);
                 if(err) return err;
             }
             else if(kind == CC_EXPR_ASSIGN){
-                err = cc_check_atomic_object_access(p, right->type, right->loc);
-                if(err) return err;
                 err = cc_implicit_cast(p, right, (CcQualType){.unqual=left->type.unqual}, &right);
                 if(err) return err;
             }
             else {
-                err = cc_check_atomic_object_access(p, right->type, right->loc);
-                if(err) return err;
                 if(kind == CC_EXPR_MODASSIGN || kind == CC_EXPR_BITANDASSIGN
                 || kind == CC_EXPR_BITORASSIGN || kind == CC_EXPR_BITXORASSIGN
                 || kind == CC_EXPR_LSHIFTASSIGN || kind == CC_EXPR_RSHIFTASSIGN){
                     if(!ccqt_is_integer(right->type))
-                        return cc_error(p, tok.loc, "operator requires integer operands");
+                        return cc_types_error(p, tok.loc, left->type, right->type, "operator '%s' requires integer operands", cc_expr_kind_to_operator(kind));
                 }
                 if(kind == CC_EXPR_LSHIFTASSIGN || kind == CC_EXPR_RSHIFTASSIGN){
-                    err = cc_integer_promote(p, cc_arithmetic_operand_type(p, left), &operation_type, tok.loc);
+                    err = cc_integer_promote_expr(p, left, &operation_type, tok.loc);
                 }
                 else err = cc_usual_arithmetic(p, left, right, &operation_type, tok.loc);
                 if(err) return err;
@@ -2633,7 +2249,13 @@ cc_parse_ternary_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
     CcExpr* cond;
     int err = cc_parse_prefix(p, flags, &cond);
     if(err) return err;
-    err = cc_parse_infix(p, flags, cond, 4, &cond);
+    return cc_parse_ternary_tail(p, flags, cond, out);
+}
+
+static
+int
+cc_parse_ternary_tail(CcParser* p, CcParseFlags flags, CcExpr* cond, CcExpr* _Nullable* _Nonnull out){
+    int err = cc_parse_infix(p, flags, cond, 4, &cond);
     if(err) return err;
     CcToken tok;
     err = cc_next_token(p, &tok);
@@ -2652,8 +2274,8 @@ cc_parse_ternary_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
         CcQualType common;
         CcTypeKind tk = ccqt_kind(then_expr->type);
         CcTypeKind ek = ccqt_kind(else_expr->type);
-        _Bool tptr = (ccqt_is_pointer_like(then_expr->type) && !ccqt_bt_eq(then_expr->type, CCBT_nullptr_t)) || tk == CC_FUNCTION;
-        _Bool eptr = (ccqt_is_pointer_like(else_expr->type) && !ccqt_bt_eq(else_expr->type, CCBT_nullptr_t)) || ek == CC_FUNCTION;
+        _Bool tptr = tk == CC_POINTER || ccqt_is_array(then_expr->type) || tk == CC_FUNCTION;
+        _Bool eptr = ek == CC_POINTER || ccqt_is_array(else_expr->type) || ek == CC_FUNCTION;
         if(tptr && eptr){
             err = cc_decay(p, &then_expr);
             if(err) return err;
@@ -2679,14 +2301,21 @@ cc_parse_ternary_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
                 if(tvoid || evoid){
                     pointee = ccqt_basic(CCBT_void);
                     pointee.quals = cc_object_quals(tpointee) | cc_object_quals(epointee);
+                    pointee.is_atomic = 0;
                 }
-                else if(cc_types_compatible_unqualified(tpointee, epointee)){
+                else if(cc_types_compatible_ignoring_cv(tpointee, epointee)){
                     err = cc_merge_qualified_types(p, tpointee, epointee, &pointee);
                     if(err) return err;
                 }
                 else {
-                    pointee = tpointee;
-                    pointee.quals |= epointee.quals;
+                    CcQualType target = epointee;
+                    target.quals |= tpointee.quals;
+                    if(cc_pointer_pointee_convertible(tpointee, target))
+                        pointee = target;
+                    else {
+                        pointee = tpointee;
+                        pointee.quals |= epointee.quals;
+                    }
                 }
                 err = cc_pointer_of(p, pointee, &common);
                 if(err) return err;
@@ -2697,7 +2326,7 @@ cc_parse_ternary_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
             err = cc_is_null_pointer_constant(p, else_expr, &is_npc);
             if(err) return err;
             if(!is_npc)
-                return cc_error(p, tok.loc, "incompatible operand types for ternary");
+                return cc_types_error(p, tok.loc, then_expr->type, else_expr->type, "incompatible operand types for ternary");
             err = cc_decay(p, &then_expr);
             if(err) return err;
             common = then_expr->type;
@@ -2707,7 +2336,7 @@ cc_parse_ternary_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
             err = cc_is_null_pointer_constant(p, then_expr, &is_npc);
             if(err) return err;
             if(!is_npc)
-                return cc_error(p, tok.loc, "incompatible operand types for ternary");
+                return cc_types_error(p, tok.loc, then_expr->type, else_expr->type, "incompatible operand types for ternary");
             err = cc_decay(p, &else_expr);
             if(err) return err;
             common = else_expr->type;
@@ -2719,22 +2348,26 @@ cc_parse_ternary_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
              && ccqt_is_basic(else_expr->type) && ccqt_basic_kind(else_expr->type) == CCBT_void){
             common = then_expr->type;
         }
-        else if(ccqt_bt_eq(then_expr->type, CCBT__Any) && ccqt_bt_eq(else_expr->type, CCBT__Any)){
-            common = ccqt_basic(CCBT__Any);
+        else if((ccqt_bt_eq(then_expr->type, CCBT__Any)
+            || ccqt_bt_eq(then_expr->type, CCBT__Type) || tk == CC_VECTOR)
+            && cc_types_compatible_unqualified(then_expr->type, else_expr->type)){
+            common = then_expr->type;
         }
         else if((tk == CC_STRUCT || tk == CC_UNION) && tk == ek
-            && cc_types_compatible((CcQualType){.unqual=then_expr->type.unqual}, (CcQualType){.unqual=else_expr->type.unqual}, 0)){
-            common = then_expr->type;
+            && cc_types_compatible((CcQualType){.unqual=then_expr->type.unqual}, (CcQualType){.unqual=else_expr->type.unqual})){
+            err = cc_merge_compatible_decl_types(p, (CcQualType){.unqual=then_expr->type.unqual},
+                (CcQualType){.unqual=else_expr->type.unqual}, &common);
+            if(err) return err;
         }
         else if(tk == CC_SLICE && ek == CC_SLICE){
             CcQualType tpointee = ccqt_as_slice(then_expr->type)->pointee;
             CcQualType epointee = ccqt_as_slice(else_expr->type)->pointee;
-            if(!cc_types_compatible_unqualified(tpointee, epointee))
-                return cc_error(p, tok.loc, "incompatible operand types for ternary");
+            if(!cc_types_compatible_ignoring_cv(tpointee, epointee))
+                return cc_types_error(p, tok.loc, then_expr->type, else_expr->type, "incompatible operand types for ternary");
             CcQualType pointee;
             err = cc_merge_qualified_types(p, tpointee, epointee, &pointee);
             if(err) return err;
-            err = cc_slice_of(p, pointee, &common);
+            err = cc_slice_of(p, pointee, tok.loc, &common);
             if(err) return err;
         }
         else {
@@ -2787,7 +2420,7 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
         if(err) return err;
         if((kind == CC_EXPR_ADD || kind == CC_EXPR_SUB)
             && (ccqt_bt_eq(left->type, CCBT_nullptr_t) || ccqt_bt_eq(right->type, CCBT_nullptr_t)))
-            return cc_error(p, tok.loc, "pointer arithmetic does not accept nullptr_t");
+            return cc_types_error(p, tok.loc, left->type, right->type, "pointer arithmetic does not accept nullptr_t");
         CcQualType result_type = {0};
         switch(kind){
             case CC_EXPR_LOGAND: case CC_EXPR_LOGOR:
@@ -2806,14 +2439,22 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                     result_type = ccqt_basic(CCBT_int);
                     break;
                 }
-                _Bool lp = ccqt_is_pointer_like(left->type) || ccqt_kind(left->type) == CC_FUNCTION;
-                _Bool rp = ccqt_is_pointer_like(right->type) || ccqt_kind(right->type) == CC_FUNCTION;
+                _Bool lp = ccqt_kind(left->type) == CC_POINTER || ccqt_is_array(left->type)
+                    || ccqt_kind(left->type) == CC_FUNCTION || ccqt_bt_eq(left->type, CCBT_nullptr_t);
+                _Bool rp = ccqt_kind(right->type) == CC_POINTER || ccqt_is_array(right->type)
+                    || ccqt_kind(right->type) == CC_FUNCTION || ccqt_bt_eq(right->type, CCBT_nullptr_t);
+                if((lp || rp) && kind != CC_EXPR_EQ && kind != CC_EXPR_NE){
+                    if(!lp || !rp || ccqt_bt_eq(left->type, CCBT_nullptr_t)
+                        || ccqt_bt_eq(right->type, CCBT_nullptr_t)
+                        || ccqt_callable_function(left->type) || ccqt_callable_function(right->type))
+                        return cc_types_error(p, tok.loc, left->type, right->type, "ordered pointer comparison requires two object pointers");
+                }
                 if(!lp && !rp){
                     CcQualType common;
                     err = cc_usual_arithmetic(p, left, right, &common, tok.loc);
                     if(err) return err;
                     if(kind != CC_EXPR_EQ && kind != CC_EXPR_NE && ccbt_is_complex(ccqt_basic_kind(common)))
-                        return cc_error(p, tok.loc, "ordered comparison requires real operands");
+                        return cc_types_error(p, tok.loc, left->type, right->type, "ordered comparison requires real operands");
                     err = cc_implicit_cast(p, left, common, &left);
                     if(err) return err;
                     err = cc_implicit_cast(p, right, common, &right);
@@ -2826,14 +2467,14 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                     if(err) return err;
                     if(!ccqt_bt_eq(left->type, CCBT_nullptr_t) && !ccqt_bt_eq(right->type, CCBT_nullptr_t)){
                         CcQualType lpointee, rpointee;
-                        err = cc_deref_type(p, left->type, &lpointee, tok.loc, 0);
+                        err = cc_deref_type_or_error(p, left->type, &lpointee, tok.loc, 0);
                         if(err) return cc_unreachable(p, tok.loc, "Error dereferencing lhs pointer");
-                        err = cc_deref_type(p, right->type, &rpointee, tok.loc, 0);
+                        err = cc_deref_type_or_error(p, right->type, &rpointee, tok.loc, 0);
                         if(err) return cc_unreachable(p, tok.loc, "Error dereferencing rhs pointer");
-                        if(!cc_types_compatible_unqualified(lpointee, rpointee)
+                        if(!cc_types_compatible_ignoring_cv(lpointee, rpointee)
                         && !(ccqt_is_basic(lpointee) && ccqt_basic_kind(lpointee) == CCBT_void)
                         && !(ccqt_is_basic(rpointee) && ccqt_basic_kind(rpointee) == CCBT_void))
-                            return cc_error(p, tok.loc, "comparison of incompatible pointer types");
+                            return cc_types_error(p, tok.loc, left->type, right->type, "comparison of incompatible pointer types");
                     }
                 }
                 else if(lp){
@@ -2853,12 +2494,12 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
             }
             case CC_EXPR_LSHIFT: case CC_EXPR_RSHIFT: {
                 CcQualType lp, rp;
-                err = cc_integer_promote(p, cc_arithmetic_operand_type(p, left), &lp, tok.loc);
+                err = cc_integer_promote_expr(p, left, &lp, tok.loc);
                 if(err) return err;
-                err = cc_integer_promote(p, cc_arithmetic_operand_type(p, right), &rp, tok.loc);
+                err = cc_integer_promote_expr(p, right, &rp, tok.loc);
                 if(err) return err;
                 if(!ccqt_is_integer(lp) || !ccqt_is_integer(rp))
-                    return cc_error(p, tok.loc, "shift operands require integer type");
+                    return cc_types_error(p, tok.loc, left->type, right->type, "shift operands require integer type");
                 err = cc_implicit_cast(p, left, lp, &left);
                 if(err) return err;
                 err = cc_implicit_cast(p, right, rp, &right);
@@ -2867,17 +2508,20 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                 break;
             }
             case CC_EXPR_ADD: {
-                _Bool lptr = ccqt_is_pointer_like(left->type);
-                _Bool rptr = ccqt_is_pointer_like(right->type);
+                _Bool lptr = ccqt_kind(left->type) == CC_POINTER || ccqt_is_array(left->type);
+                _Bool rptr = ccqt_kind(right->type) == CC_POINTER || ccqt_is_array(right->type);
                 if(lptr && rptr)
-                    return cc_error(p, tok.loc, "addition of two pointers");
+                    return cc_types_error(p, tok.loc, left->type, right->type, "addition of two pointers");
                 if(lptr || rptr) {
                     CcExpr** ptr_operand = lptr ? &left : &right;
                     CcExpr* int_operand = lptr ? right : left;
-                    err = cc_check_pointer_arithmetic(p, (*ptr_operand)->type, tok.loc);
+                    CcQualType element;
+                    err = cc_deref_type_or_error(p, (*ptr_operand)->type, &element, tok.loc, 0);
+                    if(err) return err;
+                    err = cc_check_type_has_size_or_error(p, element, tok.loc);
                     if(err) return err;
                     if(!ccqt_is_integer(int_operand->type))
-                        return cc_error(p, tok.loc, "pointer arithmetic requires integer operand");
+                        return cc_types_error(p, tok.loc, left->type, right->type, "pointer arithmetic requires integer operand");
                     if(rptr){
                         err = cc_implicit_cast_to_index(p, left, &left);
                         if(err) return err;
@@ -2887,7 +2531,7 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                         if(err) return err;
                     }
                     if(ccqt_is_array((*ptr_operand)->type)){
-                        err = cc_pointer_of(p, cc_array_element_type((*ptr_operand)->type), &result_type);
+                        err = cc_pointer_of(p, ccqt_qualified_array_element((*ptr_operand)->type), &result_type);
                         if(err) return err;
                         err = cc_implicit_cast(p, *ptr_operand, result_type, ptr_operand);
                         if(err) return err;
@@ -2906,38 +2550,36 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                 break;
             }
             case CC_EXPR_SUB: {
-                _Bool lptr = ccqt_is_pointer_like(left->type);
-                _Bool rptr = ccqt_is_pointer_like(right->type);
+                _Bool lptr = ccqt_kind(left->type) == CC_POINTER || ccqt_is_array(left->type);
+                _Bool rptr = ccqt_kind(right->type) == CC_POINTER || ccqt_is_array(right->type);
                 if(lptr && rptr){
-                    err = cc_check_pointer_arithmetic(p, left->type, tok.loc);
-                    if(err) return err;
-                    err = cc_check_pointer_arithmetic(p, right->type, tok.loc);
-                    if(err) return err;
                     CcQualType lp, rp;
-                    err = cc_deref_type(p, left->type, &lp, tok.loc, 0);
+                    err = cc_deref_type_or_error(p, left->type, &lp, tok.loc, 0);
                     if(err) return err;
-                    err = cc_deref_type(p, right->type, &rp, tok.loc, 0);
+                    err = cc_deref_type_or_error(p, right->type, &rp, tok.loc, 0);
                     if(err) return err;
-                    if(!cc_types_compatible_unqualified(lp, rp)
+                    err = cc_check_type_has_size_or_error(p, lp, tok.loc);
+                    if(err) return err;
+                    err = cc_check_type_has_size_or_error(p, rp, tok.loc);
+                    if(err) return err;
+                    if(!cc_types_compatible_ignoring_cv(lp, rp)
                     && !(ccqt_is_basic(lp) && ccqt_basic_kind(lp) == CCBT_void)
                     && !(ccqt_is_basic(rp) && ccqt_basic_kind(rp) == CCBT_void))
-                        return cc_error(p, tok.loc, "pointer subtraction with incompatible types");
+                        return cc_types_error(p, tok.loc, left->type, right->type, "pointer subtraction with incompatible types");
                     if(ccqt_is_array(left->type)){
                         CcQualType ptr_type;
-                        err = cc_pointer_of(p, cc_array_element_type(left->type), &ptr_type);
+                        err = cc_pointer_of(p, ccqt_qualified_array_element(left->type), &ptr_type);
                         if(err) return err;
                         err = cc_implicit_cast(p, left, ptr_type, &left);
                         if(err) return err;
                     }
                     if(ccqt_is_array(right->type)){
                         CcQualType ptr_type;
-                        err = cc_pointer_of(p, cc_array_element_type(right->type), &ptr_type);
+                        err = cc_pointer_of(p, ccqt_qualified_array_element(right->type), &ptr_type);
                         if(err) return err;
                         err = cc_implicit_cast(p, right, ptr_type, &right);
                         if(err) return err;
                     }
-                    // Mixed void/object subtraction measures both operands in
-                    // the typed pointee's units, regardless of operand order.
                     if(ccqt_bt_eq(lp, CCBT_void) != ccqt_bt_eq(rp, CCBT_void)){
                         CcQualType pointee = ccqt_bt_eq(lp, CCBT_void) ? rp : lp;
                         pointee.quals |= lp.quals | rp.quals;
@@ -2952,14 +2594,17 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                     result_type = ccqt_basic(cc_target(p)->ptrdiff_type);
                 }
                 else if(lptr){
-                    err = cc_check_pointer_arithmetic(p, left->type, tok.loc);
+                    CcQualType element;
+                    err = cc_deref_type_or_error(p, left->type, &element, tok.loc, 0);
+                    if(err) return err;
+                    err = cc_check_type_has_size_or_error(p, element, tok.loc);
                     if(err) return err;
                     if(!ccqt_is_integer(right->type))
-                        return cc_error(p, tok.loc, "pointer arithmetic requires integer operand");
+                        return cc_types_error(p, tok.loc, left->type, right->type, "pointer arithmetic requires integer operand");
                     err = cc_implicit_cast_to_index(p, right, &right);
                     if(err) return err;
                     if(ccqt_is_array(left->type)){
-                        err = cc_pointer_of(p, cc_array_element_type(left->type), &result_type);
+                        err = cc_pointer_of(p, ccqt_qualified_array_element(left->type), &result_type);
                         if(err) return err;
                         err = cc_implicit_cast(p, left, result_type, &left);
                         if(err) return err;
@@ -2988,7 +2633,7 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                 if(kind == CC_EXPR_MOD || kind == CC_EXPR_BITAND
                 || kind == CC_EXPR_BITOR || kind == CC_EXPR_BITXOR){
                     if(!ccqt_is_integer(result_type))
-                        return cc_error(p, tok.loc, "operator requires integer operands");
+                        return cc_types_error(p, tok.loc, left->type, right->type, "operator '%s' requires integer operands", cc_expr_kind_to_operator(kind));
                 }
                 err = cc_implicit_cast(p, left, result_type, &left);
                 if(err) return err;
@@ -3067,7 +2712,184 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
 
 static
 int
+cc_parse_type_value_tail(CcParser* p, CcParseFlags flags, CcQualType type,
+    SrcLoc loc, _Bool comma, CcExpr* _Nullable* _Nonnull out){
+    CcExpr* value = cc_value_expr(p, loc, ccqt_basic(CCBT__Type));
+    if(!value) return CC_OOM_ERROR;
+    value->type_value = type;
+    int err = cc_parse_postfix(p, flags, value, &value);
+    if(err) goto fail;
+    err = cc_parse_ternary_tail(p, flags, value, &value);
+    if(err) goto fail;
+    err = cc_parse_assignment_tail(p, flags, value, &value);
+    if(err) goto fail;
+    if(comma) err = cc_parse_comma_tail(p, flags, value, &value);
+    if(err) goto fail;
+    *out = value;
+    fail:
+    return err;
+}
+
+static
+int
+cc_parse_type_query_operand(CcParser* p, CcParseFlags flags, CcPunct terminator,
+    _Bool comma, CcQualType* type, CcExpr* _Nullable* _Nonnull expression){
+    *expression = NULL;
+    CcToken tok;
+    int err = cc_peek(p, &tok);
+    if(err) return err;
+    CcParseFlags expression_flags = flags;
+    expression_flags.vc = CC_RUNTIME_VALUE;
+    if(cc_is_type_start(p, &tok)){
+        SrcLoc loc = tok.loc;
+        err = cc_parse_type_name(p, flags, type, NULL);
+        if(err) return err;
+        err = cc_peek(p, &tok);
+        if(err) return err;
+        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == terminator) return 0;
+        err = cc_parse_type_value_tail(p, expression_flags, *type, loc, comma, expression);
+    }
+    else if(comma)
+        err = cc_parse_expr(p, expression_flags, expression);
+    else
+        err = cc_parse_assignment_expr(p, expression_flags, expression, CCQT_NONE);
+    if(err) return err;
+    *type = (*expression)->type;
+    return 0;
+}
+
+static
+int
+cc_parse_type_operand_tail(CcParser* p, CcParseFlags flags, CcQualType type,
+    CcDeclBase storage, SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
+    *out = NULL;
+    CcToken tok;
+    int err = cc_peek(p, &tok);
+    if(err) return err;
+    if(tok.type != CC_PUNCTUATOR || tok.punct.punct != CC_rparen){
+        if(storage.spec.sp_storagebits)
+            return cc_error(p, loc, "storage class requires a compound literal");
+        if(storage.has_alignas)
+            return cc_error(p, loc, "_Alignas requires a compound literal");
+        err = cc_parse_type_value_tail(p, flags, type, loc, 1, out);
+        if(err) return err;
+    }
+    err = cc_expect_punct(p, CC_rparen);
+    if(err || *out) return err;
+    err = cc_peek(p, &tok);
+    if(err) return err;
+    if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lbrace){
+        CcExpr* literal;
+        err = cc_parse_compound_literal(p, flags, type, storage, &literal);
+        if(err) return err;
+        return cc_parse_postfix(p, flags, literal, out);
+    }
+    if(storage.spec.sp_storagebits)
+        return cc_error(p, loc, "storage class requires a compound literal");
+    if(storage.has_alignas)
+        return cc_error(p, loc, "_Alignas requires a compound literal");
+    return 0;
+}
+
+static
+int
+cc_parse_type_or_unary_operand(CcParser* p, CcParseFlags flags, SrcLoc loc,
+    CcQualType* type, CcExpr* _Nullable* _Nonnull operand){
+    *operand = NULL;
+    CcToken tok;
+    int err = cc_peek(p, &tok);
+    if(err) return err;
+    if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen){
+        err = cc_next_token(p, &tok);
+        if(err) return err;
+        CcToken peek;
+        err = cc_peek(p, &peek);
+        if(err) return err;
+        if(cc_is_compound_type_start(p, &peek)){
+            CcDeclBase storage = {0};
+            err = cc_parse_compound_type(p, flags, type, NULL, &storage);
+            if(err) return err;
+            err = cc_parse_type_operand_tail(p, flags, *type, storage, loc, operand);
+            if(!err && *operand) *type = (*operand)->type;
+            return err;
+        }
+        err = cc_unget(p, &tok);
+        if(err) return err;
+    }
+    err = cc_parse_prefix(p, flags, operand);
+    if(!err) *type = (*operand)->type;
+    return err;
+}
+
+static
+int
 cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out);
+
+static
+_Bool
+cc_token_starts_cast_operand(const CcToken* tok){
+    if(tok->type == CC_EOF) return 0;
+    if(tok->type != CC_PUNCTUATOR) return 1;
+    switch(tok->punct.punct){
+        case CC_lparen: case CC_lbrace:
+        case CC_plus: case CC_minus: case CC_tilde: case CC_bang:
+        case CC_star: case CC_amp: case CC_plusplus: case CC_minusminus:
+            return 1;
+        default: return 0;
+    }
+}
+
+static
+int
+cc_check_addressable(CcParser* p, CcExpr* operand, SrcLoc loc){
+    CcExpr* object = operand;
+    while(object->kind == CC_EXPR_CAST) object = object->lhs;
+    for(;;){
+        if(object->compound_register)
+            return cc_error(p, loc, "cannot take address of register compound literal");
+        if(object->kind == CC_EXPR_VARIABLE && object->var->register_)
+            return cc_error(p, loc, "cannot take address of register variable");
+        if(object->kind == CC_EXPR_DOT || object->kind == CC_EXPR_COMMA)
+            object = object->values[0];
+        else if(object->kind == CC_EXPR_SUBSCRIPT
+            && (ccqt_is_array(object->lhs->type) || ccqt_kind(object->lhs->type) == CC_VECTOR))
+            object = object->lhs;
+        else break;
+    }
+    if(cc_expr_field_bit_width(operand))
+        return cc_error(p, loc, "cannot take address of bitfield");
+    return 0;
+}
+
+static
+int
+cc_adapt_receiver(CcParser* p, CcFunction* function, CcExpr* operand,
+    SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
+    *out = operand;
+    if(!function->param_count) return 0;
+    _Bool wants_pointer = ccqt_kind(function->params[0]) == CC_POINTER;
+    _Bool is_pointer = ccqt_kind(operand->type) == CC_POINTER;
+    CcExprKind kind;
+    CcQualType type;
+    int err;
+    if(wants_pointer && !is_pointer && operand->is_lvalue){
+        err = cc_check_addressable(p, operand, loc);
+        if(err) return err;
+        err = cc_pointer_of(p, operand->type, &type);
+        kind = CC_EXPR_ADDR;
+    }
+    else if(!wants_pointer && is_pointer){
+        err = cc_deref_type_or_error(p, operand->type, &type, loc, 0);
+        kind = CC_EXPR_DEREF;
+    }
+    else return 0;
+    if(err) return err;
+    CcExpr* result = cc_unary_expr(p, kind, loc, type, operand);
+    if(!result) return CC_OOM_ERROR;
+    result->is_lvalue = kind == CC_EXPR_DEREF;
+    *out = result;
+    return 0;
+}
 
 static
 int
@@ -3113,7 +2935,7 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
             if(err) return err;
             if(cc_is_compound_type_start(p, &peek)){
                 CcQualType cast_type;
-                CcSpecifier storage = {0};
+                CcDeclBase storage = {0};
                 CcParsedParams param_names = {0};
                 err = cc_parse_compound_type(p, flags, &cast_type, &param_names, &storage);
                 if(err){
@@ -3128,8 +2950,10 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
                 }
                 if(peek_after.type == CC_PUNCTUATOR && peek_after.punct.punct == CC_lbrace
                    && ccqt_kind(cast_type) == CC_FUNCTION){
-                    if(storage.sp_storagebits)
+                    if(storage.spec.sp_storagebits)
                         return cc_error(p, tok.loc, "storage class requires a compound literal");
+                    err = cc_check_decl_alignment(p, &storage, cast_type, 0);
+                    if(err) return err;
                     CcExpr* lambda;
                     err = cc_parse_lambda_body(p, flags, tok.loc, cast_type, &param_names, &lambda);
                     if(err) return err;
@@ -3138,27 +2962,15 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
                     return cc_parse_postfix(p, flags, lambda, out);
                 }
                 ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
-                err = cc_expect_punct(p, CC_rparen);
+                CcExpr* value;
+                err = cc_parse_type_operand_tail(p, flags, cast_type, storage, tok.loc, &value);
                 if(err) return err;
+                if(value)
+                    return cc_parse_postfix(p, flags, value, out);
                 CcToken peek2;
                 err = cc_peek(p, &peek2);
                 if(err) return err;
-                if(peek2.type == CC_PUNCTUATOR && peek2.punct.punct == CC_lbrace){
-                    CcExpr* result;
-                    err = cc_parse_compound_literal(p, flags, cast_type, storage, &result);
-                    if(err) return err;
-                    return cc_parse_postfix(p, flags, result, out);
-                }
-                if(storage.sp_storagebits)
-                    return cc_error(p, tok.loc, "storage class requires a compound literal");
-                if(peek2.type == CC_PUNCTUATOR && (
-                    peek2.punct.punct == CC_dot
-                    || peek2.punct.punct == CC_rparen
-                    || peek2.punct.punct == CC_semi
-                    || peek2.punct.punct == CC_comma
-                    || peek2.punct.punct == CC_eq
-                    || peek2.punct.punct == CC_ne
-                )){
+                if(!cc_token_starts_cast_operand(&peek2)){
                     CcExpr* type_val = cc_value_expr(p, tok.loc, ccqt_basic(CCBT__Type));
                     if(!type_val) return CC_OOM_ERROR;
                     type_val->uinteger = cast_type.bits;
@@ -3169,6 +2981,9 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
                 if(err) return err;
                 err = cc_check_cast(p, operand->type, cast_type, tok.loc);
                 if(err) return err;
+                err = cc_check_atomic_object_access(p, operand, operand->loc);
+                if(err) return err;
+                cast_type.quals = 0;
                 if(ccqt_bt_eq(cast_type, CCBT__Any))
                     return cc_implicit_cast(p, operand, cast_type, out);
                 CcExpr* cast = cc_unary_expr(p, CC_EXPR_CAST, tok.loc, cast_type, operand);
@@ -3240,7 +3055,7 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
             CcQualType result_type;
             switch(kind){
                 case CC_EXPR_NEG: case CC_EXPR_POS: {
-                    err = cc_integer_promote(p, cc_arithmetic_operand_type(p, operand), &result_type, tok.loc);
+                    err = cc_integer_promote_expr(p, operand, &result_type, tok.loc);
                     if(err) return err;
                     err = cc_implicit_cast(p, operand, result_type, &operand);
                     if(err) return err;
@@ -3248,8 +3063,8 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
                 }
                 case CC_EXPR_BITNOT: {
                     if(!ccqt_is_integer(operand->type))
-                        return cc_error(p, tok.loc, "'~' requires integer type");
-                    err = cc_integer_promote(p, cc_arithmetic_operand_type(p, operand), &result_type, tok.loc);
+                        return cc_type_error(p, tok.loc, operand->type, "'~' requires integer type");
+                    err = cc_integer_promote_expr(p, operand, &result_type, tok.loc);
                     if(err) return err;
                     err = cc_implicit_cast(p, operand, result_type, &operand);
                     if(err) return err;
@@ -3268,30 +3083,22 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
                     }
                     if(ccqt_is_array(operand->type)){
                         CcQualType ptr_type;
-                        err = cc_pointer_of(p, cc_array_element_type(operand->type), &ptr_type);
+                        err = cc_pointer_of(p, ccqt_qualified_array_element(operand->type), &ptr_type);
                         if(err) return err;
                         err = cc_implicit_cast(p, operand, ptr_type, &operand);
                         if(err) return err;
                     }
                     if(ccqt_kind(operand->type) == CC_SLICE)
-                        return cc_error(p, tok.loc, "dereferencing non-pointer type");
-                    err = cc_deref_type(p, operand->type, &result_type, tok.loc, 0);
+                        return cc_type_error(p, tok.loc, operand->type, "dereferencing non-pointer type");
+                    err = cc_deref_type_or_error(p, operand->type, &result_type, tok.loc, 0);
                     if(err) return err;
                     break;
                 case CC_EXPR_ADDR: {
+                    err = cc_check_addressable(p, operand, tok.loc);
+                    if(err) return err;
                     CcExpr* val = operand;
                     while(val->kind == CC_EXPR_CAST){
                         val = val->lhs;
-                    }
-                    CcExpr* object = val;
-                    for(;;){
-                        if(object->compound_register)
-                            return cc_error(p, tok.loc, "cannot take address of register compound literal");
-                        if(object->kind == CC_EXPR_VARIABLE && object->var->register_)
-                            return cc_error(p, tok.loc, "cannot take address of register variable");
-                        if(object->kind == CC_EXPR_DOT) object = object->values[0];
-                        else if(object->kind == CC_EXPR_COMMA) object = object->values[0];
-                        else break;
                     }
                     if(val->kind == CC_EXPR_VALUE && !ccqt_is_fixed_sequence(val->type)){
                         // eg &3. Desugar to &(int){3}.
@@ -3302,8 +3109,6 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
                         err = cc_desugar_compound_literal(p, operand, &operand);
                         if(err) return err;
                     }
-                    if(cc_expr_field_bit_width(operand))
-                        return cc_error(p, tok.loc, "cannot take address of bitfield");
                     if(ccqt_kind(operand->type) == CC_FUNCTION){
                         err = cc_pointer_of(p, operand->type, &result_type);
                         if(err) return err;
@@ -3328,8 +3133,8 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
                     if(!operand->is_lvalue)
                         return cc_error(p, tok.loc, "expression is not an lvalue");
                     if(operand->type.is_const && !flags.static_rebind)
-                        return cc_error(p, tok.loc, "cannot modify const-qualified variable");
-                    err = cc_check_incdec_type(p, operand->type, tok.loc);
+                        return cc_type_error(p, tok.loc, operand->type, "cannot modify const-qualified variable");
+                    err = cc_check_incdec(p, operand, tok.loc);
                     if(err) return err;
                     result_type = (CcQualType){.unqual=operand->type.unqual};
                     break;
@@ -3424,13 +3229,13 @@ cc_check_atomic_buffer(CcParser* p, CcExpr*_Nullable*_Nonnull expr, CcQualType o
     if(err) return err;
     CcQualType type = (*expr)->type;
     if(ccqt_kind(type) != CC_POINTER)
-        return cc_error(p, loc, "atomic buffer argument must be a pointer to compatible non-atomic storage");
+        return cc_types_error(p, loc, type, object, "atomic buffer argument must be a pointer to compatible non-atomic storage");
     CcQualType element = ccqt_as_ptr(type)->pointee;
     CcQualType storage = ccqt_array_object_type(element);
     if(storage.is_atomic || !cc_types_compatible_unqualified(element, object))
-        return cc_error(p, loc, "atomic buffer argument must be a pointer to compatible non-atomic storage");
+        return cc_types_error(p, loc, type, object, "atomic buffer argument must be a pointer to compatible non-atomic storage");
     if(writable && storage.is_const)
-        return cc_error(p, loc, "atomic output buffer must be writable");
+        return cc_type_error(p, loc, type, "atomic output buffer must be writable");
     return 0;
 }
 
@@ -3438,10 +3243,8 @@ static
 int
 cc_parse_atomic_order(CcParser* p, CcParseFlags flags, SrcLoc loc, CcAtomicOp op, _Bool failure, CcMemoryOrder* out){
     flags.unevaluated = 1;
-    int err = cc_expect_punct(p, ',');
-    if(err) return err;
     CcExpr* expr = NULL;
-    err = cc_parse_assignment_expr(p, flags, &expr, CCQT_NONE);
+    int err = cc_parse_assignment_expr(p, flags, &expr, CCQT_NONE);
     if(err) return err;
     int64_t value;
     err = cc_eval_integer(&(CcEvalCtx){p}, expr, &value);
@@ -3449,9 +3252,9 @@ cc_parse_atomic_order(CcParser* p, CcParseFlags flags, SrcLoc loc, CcAtomicOp op
     cc_release_expr(p, expr);
     if(err && err != CC_NOT_CONSTANT_ERROR) return err;
     if(err) return cc_error(p, eloc, "memory order must be a constant expression");
+    if(value < 0 || value >= CC_MO_COUNT)
+        return cc_error(p, eloc, "invalid memory order value %lld", (long long)value);
     unsigned order = (unsigned)value;
-    if(order >= CC_MO_COUNT)
-        return cc_error(p, eloc, "invalid memory order value %u", order);
     err = cc_check_atomic_memory_order(p, op, order, loc, failure);
     if(err) return err;
     *out = (CcMemoryOrder)order;
@@ -3511,27 +3314,38 @@ static const CcAtomicBuiltinSignature cc_atomic_builtin_signatures[] = {
 
 static
 int
-cc_check_atomic_builtin_object(CcParser* p, SrcLoc loc, CcQualType object, CcAtomicObjectRule rule){
+cc_check_atomic_builtin_object(CcParser* p, SrcLoc loc, const CcExpr* pointer, CcAtomicObjectRule rule){
+    CcQualType object = ccqt_as_ptr(pointer->type)->pointee;
+    if(!ccqt_is_complete_object(object))
+        return cc_type_error(p, loc, object, "atomic operation requires a complete object type");
     if(rule != CC_AOBJ_READ && ccqt_array_object_type(object).is_const)
-        return cc_error(p, loc, "atomic operation requires writable object");
+        return cc_type_error(p, loc, object, "atomic operation requires writable object");
     uint32_t size;
     int err = cc_sizeof_as_uint(p, object, loc, &size);
     if(err) return err;
-    err = cc_check_atomic_size(p, size, loc);
+    err = cc_check_atomic_size(p, object, size, loc);
     if(err) return err;
-    if((rule == CC_AOBJ_ADD_SUB || rule == CC_AOBJ_BITWISE) && size > 8)
-        return cc_error(p, loc, "atomic arithmetic not supported for operand size %u", size);
+    err = cc_check_atomic_alignment(p, pointer, 1, size, loc);
+    if(err) return err;
+    if(rule == CC_AOBJ_ADD_SUB || rule == CC_AOBJ_BITWISE){
+        if(ccqt_is_bool(object))
+            return cc_type_error(p, loc, object, "atomic arithmetic requires non-boolean storage");
+        if(size > 8)
+            return cc_type_error(p, loc, object, "atomic arithmetic not supported for operand size %u", size);
+    }
     switch(rule){
         case CC_AOBJ_READ:
         case CC_AOBJ_WRITE:
             return 0;
         case CC_AOBJ_ADD_SUB:
             if(ccqt_kind(object) != CC_POINTER && !ccqt_is_integer(object))
-                return cc_error(p, loc, "atomic fetch add/sub requires integer or pointer type");
+                return cc_type_error(p, loc, object, "atomic fetch add/sub requires integer or pointer type");
+            if(ccqt_kind(object) == CC_POINTER)
+                return cc_check_type_has_size_or_error(p, ccqt_as_ptr(object)->pointee, loc);
             return 0;
         case CC_AOBJ_BITWISE:
             if(!ccqt_is_integer(object))
-                return cc_error(p, loc, "atomic fetch bitwise operation requires integer type");
+                return cc_type_error(p, loc, object, "atomic fetch bitwise operation requires integer type");
             return 0;
         DRP_CASES_EXHAUSTED;
     }
@@ -3543,12 +3357,13 @@ cc_check_interlocked_pointer(CcParser* p, CcExpr*_Nullable*_Nonnull ptr, CcBasic
     int err = cc_decay_array(p, ptr);
     if(err) return err;
     if(ccqt_kind((*ptr)->type) != CC_POINTER)
-        return cc_error(p, loc, "first argument to interlocked builtin must be a pointer");
+        return cc_type_error(p, loc, (*ptr)->type, "first argument to interlocked builtin must be a pointer");
     CcQualType object = ccqt_as_ptr((*ptr)->type)->pointee;
-    err = cc_check_atomic_builtin_object(p, loc, object, CC_AOBJ_WRITE);
+    CcExpr* pointer = *ptr;
+    err = cc_check_atomic_builtin_object(p, loc, pointer, CC_AOBJ_WRITE);
     if(err) return err;
     if(!cc_types_compatible_unqualified(object, ccqt_basic(expected)))
-        return cc_error(p, loc, "interlocked destination has incorrect pointee type");
+        return cc_types_error(p, loc, object, ccqt_basic(expected), "interlocked destination has incorrect pointee type");
     return 0;
 }
 
@@ -3596,11 +3411,11 @@ cc_parse_atomic_builtin(CcParser* p, CcParseFlags flags, SrcLoc loc, CcAtomicOp 
     err = cc_decay_array(p, &ptr);
     if(err) goto cleanup;
     if(ccqt_kind(ptr->type) != CC_POINTER){
-        err = cc_error(p, loc, "first argument to atomic builtin must be a pointer");
+        err = cc_type_error(p, loc, ptr->type, "first argument to atomic builtin must be a pointer");
         goto cleanup;
     }
     CcQualType value_type = ccqt_as_ptr(ptr->type)->pointee;
-    err = cc_check_atomic_builtin_object(p, loc, value_type, signature->object);
+    err = cc_check_atomic_builtin_object(p, loc, ptr, signature->object);
     if(err) goto cleanup;
     value_type.quals = 0;
     unsigned nargs = 0;
@@ -3610,8 +3425,18 @@ cc_parse_atomic_builtin(CcParser* p, CcParseFlags flags, SrcLoc loc, CcAtomicOp 
     }
     CcMemoryOrder orders[2] = {CC_MO_RELAXED, CC_MO_RELAXED};
     for(unsigned i = 0; i < signature->orders; i++){
+        err = cc_expect_punct(p, ',');
+        if(err) goto cleanup;
         err = cc_parse_atomic_order(p, flags, loc, op, i == 1, &orders[i]);
         if(err) goto cleanup;
+    }
+    if(signature->orders == 2){
+        CcMemoryOrder maximum = orders[0] == CC_MO_RELEASE ? CC_MO_RELAXED
+            : orders[0] == CC_MO_ACQ_REL ? CC_MO_ACQUIRE : orders[0];
+        if(orders[1] > maximum){
+            err = cc_error(p, loc, "atomic compare-exchange failure order is stronger than success order");
+            goto cleanup;
+        }
     }
     err = cc_expect_punct(p, ')');
     if(err) goto cleanup;
@@ -3660,23 +3485,23 @@ cc_parse_overflow_builtin(CcParser* p, CcParseFlags flags, SrcLoc loc, CcExprKin
             err = cc_decay_array(p, &args[i]);
             if(err) goto cleanup;
             if(ccqt_kind(args[i]->type) != CC_POINTER){
-                err = cc_error(p, args[i]->loc, "third argument to overflow builtin must be a pointer to integer type");
+                err = cc_type_error(p, args[i]->loc, args[i]->type, "third argument to overflow builtin must be a pointer to integer type");
                 goto cleanup;
             }
             type = ccqt_as_ptr(args[i]->type)->pointee;
             if(type.is_const || type.is_atomic){
-                err = cc_error(p, loc, "overflow builtin result must be writable non-atomic storage");
+                err = cc_type_error(p, loc, type, "overflow builtin result must be writable non-atomic storage");
                 goto cleanup;
             }
         }
         if(!ccqt_is_integer(type)){
-            err = cc_error(p, args[i]->loc, "%s argument to overflow builtin must be %s",
+            err = cc_type_error(p, args[i]->loc, args[i]->type, "%s argument to overflow builtin must be %s",
                 i == 0 ? "first" : i == 1 ? "second" : "third",
                 i == 2 ? "a pointer to integer type" : "an integer type");
             goto cleanup;
         }
-        if(ccqt_is_bool(type)){
-            err = cc_error(p, loc, "overflow builtin requires non-boolean integer operands and result");
+        if(i == 2 && ccqt_is_bool(type)){
+            err = cc_type_error(p, loc, type, "overflow builtin requires a non-boolean integer result");
             goto cleanup;
         }
         uint32_t size;
@@ -3702,6 +3527,14 @@ cc_parse_overflow_builtin(CcParser* p, CcParseFlags flags, SrcLoc loc, CcExprKin
 cleanup:
     for(unsigned i = 0; i < 3; i++) if(args[i]) cc_release_expr(p, args[i]);
     return err;
+}
+
+static
+int
+cc_check_va_start_context(CcParser* p, SrcLoc loc){
+    if(!p->current_func || !p->current_func->type->is_variadic)
+        return cc_error(p, loc, "va_start requires a variadic function");
+    return 0;
 }
 
 static
@@ -3832,7 +3665,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                 case CC_U8STRING: elem_type = CCBT_unsigned_char; break;
                 DRP_CASES_EXHAUSTED;
             }
-            CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(elem_type), tok.str.length, 0, 0);
+            CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(elem_type), tok.str.length, 0);
             if(!sa) return CC_OOM_ERROR;
             node->type = (CcQualType){.bits = (uintptr_t)sa};
             node->is_lvalue = 1;
@@ -3858,10 +3691,13 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     err = cc_expect_punct(p, ')');
                     if(err) goto complex_error;
                     if(!real || !imag || !ccqt_is_basic(real->type)
-                        || !ccqt_is_basic(imag->type) || real->type.unqual != imag->type.unqual
+                        || !ccqt_is_basic(imag->type)
+                        || ccqt_basic_kind(real->type) != ccqt_basic_kind(imag->type)
                         || ccqt_basic_kind(real->type) < CCBT_float16
                         || ccqt_basic_kind(real->type) > CCBT_long_double){
-                        err = cc_error(p, tok.loc, "__builtin_complex requires two arguments of the same real floating type");
+                        err = real && imag
+                            ? cc_types_error(p, tok.loc, real->type, imag->type, "__builtin_complex requires two arguments of the same real floating type")
+                            : cc_error(p, tok.loc, "__builtin_complex requires two arguments of the same real floating type");
                         goto complex_error;
                     }
                     CcExpr* node = cc_make_expr(p, CC_EXPR_BUILTIN, tok.loc,
@@ -3943,16 +3779,14 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                         uint64_t floc = 0;
                         CcQualType member_type = {0};
                         CcField* found = NULL;
-                        if(tk == CC_STRUCT){
-                            err = cc_lookup_field_offset(p, cur, member.ident.ident, &floc, &member_type, &found);
-                            if(err) return err;
-                        }
-                        else if(tk == CC_UNION){
+                        if(tk == CC_STRUCT || tk == CC_UNION){
                             err = cc_lookup_field_offset(p, cur, member.ident.ident, &floc, &member_type, &found);
                             if(err) return err;
                         }
                         if(!found)
-                            return cc_error(p, member.loc, "no member named '%s' in type", member.ident.ident->data);
+                            return cc_type_error(p, member.loc, cur, "no member named '%s' in type", member.ident.ident->data);
+                        if(found->is_bitfield || found->is_method)
+                            return cc_error(p, member.loc, "__builtin_offsetof requires a non-bitfield data member");
                         offset += floc;
                         cur = member_type;
                         for(;;){
@@ -3963,7 +3797,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                                 break;
                             cc_next_token(p, &next);
                             if(!ccqt_is_fixed_sequence(cur))
-                                return cc_error(p, next.loc, "subscript in __builtin_offsetof requires array type");
+                                return cc_type_error(p, next.loc, cur, "subscript in __builtin_offsetof requires array type");
                             CcExpr* idx_expr = NULL;
                             err = cc_parse_assignment_expr(p, operand_flags, &idx_expr, CCQT_NONE);
                             if(err) return err;
@@ -4062,7 +3896,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     Atom name = p->current_func ? p->current_func->name : NULL;
                     const char* s = name ? name->data : "";
                     uint32_t len = name ? name->length : 0;
-                    CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), len + 1, 0, 0);
+                    CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), len + 1, 0);
                     if(!sa) return CC_OOM_ERROR;
                     CcQualType type = {.bits = (uintptr_t)sa};
                     CcExpr* node = cc_value_expr(p, tok.loc, type);
@@ -4107,20 +3941,9 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     enum CcAtomicOp op = (builtin == CC__atomic_thread_fence) ? CC_ATOMIC_THREAD_FENCE : CC_ATOMIC_SIGNAL_FENCE;
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
-                    CcExpr* const_expr;
-                    CcParseFlags order_flags = flags;
-                    order_flags.unevaluated = 1;
-                    err = cc_parse_assignment_expr(p, order_flags, &const_expr, CCQT_NONE);
+                    CcMemoryOrder order;
+                    err = cc_parse_atomic_order(p, flags, tok.loc, op, 0, &order);
                     if(err) return err;
-                    int64_t ev;
-                    err = cc_eval_integer(&(CcEvalCtx){p}, const_expr, &ev);
-                    if(err && err != CC_NOT_CONSTANT_ERROR) return err;
-                    if(err)
-                        return cc_error(p, const_expr->loc, "memory order must be a constant expression");
-                    unsigned order = (unsigned)ev;
-                    if(order >= CC_MO_COUNT)
-                        return cc_error(p, const_expr->loc, "invalid memory order value %u", order);
-                    cc_release_expr(p, const_expr);
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_ATOMIC, tok.loc, ccqt_basic(CCBT_void), 0);
@@ -4252,7 +4075,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     if(err) return err;
                     err = cc_check_interlocked_pointer(p, &ptr_expr, CCBT_long_long, tok.loc);
                     if(err) return err;
-                    err = cc_check_atomic_size(p, 16, tok.loc);
+                    err = cc_check_atomic_size(p, ptr_expr->type, 16, tok.loc);
                     if(err) return err;
                     CcQualType ll_type = ccqt_basic(CCBT_long_long);
                     CcQualType ll_ptr_type;
@@ -4323,12 +4146,14 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     return 0;
                 }
                 case CC__builtin_va_start: {
+                    err = cc_check_va_start_context(p, tok.loc);
+                    if(err) return err;
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* ap_expr;
                     err = cc_parse_assignment_expr(p, flags, &ap_expr, CCQT_NONE);
                     if(err) return err;
-                    err = cc_va_list_to_ptr(p, tok.loc, &ap_expr);
+                    err = cc_va_list_to_ptr(p, tok.loc, &ap_expr, 1);
                     if(err) return err;
                     CcToken peek;
                     err = cc_peek(p, &peek);
@@ -4360,7 +4185,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
-                    err = cc_va_list_to_ptr(p, tok.loc, &ap_expr);
+                    err = cc_va_list_to_ptr(p, tok.loc, &ap_expr, 1);
                     if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_VA, tok.loc, ccqt_basic(CCBT_void), 0);
                     if(!node) return CC_OOM_ERROR;
@@ -4375,13 +4200,15 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     CcExpr* ap_expr;
                     err = cc_parse_assignment_expr(p, flags, &ap_expr, CCQT_NONE);
                     if(err) return err;
-                    err = cc_va_list_to_ptr(p, tok.loc, &ap_expr);
+                    err = cc_va_list_to_ptr(p, tok.loc, &ap_expr, 1);
                     if(err) return err;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcQualType arg_type;
                     err = cc_parse_type_name(p, flags, &arg_type, NULL);
                     if(err) return err;
+                    if(!ccqt_is_complete_object(arg_type))
+                        return cc_type_error(p, tok.loc, arg_type, "va_arg requires a complete object type");
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_VA, tok.loc, arg_type, 0);
@@ -4397,7 +4224,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     CcExpr* dest_expr;
                     err = cc_parse_assignment_expr(p, flags, &dest_expr, CCQT_NONE);
                     if(err) return err;
-                    err = cc_va_list_to_ptr(p, tok.loc, &dest_expr);
+                    err = cc_va_list_to_ptr(p, tok.loc, &dest_expr, 1);
                     if(err) return err;
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
@@ -4406,7 +4233,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
-                    err = cc_va_list_to_ptr(p, tok.loc, &src_expr);
+                    err = cc_va_list_to_ptr(p, tok.loc, &src_expr, 0);
                     if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_VA, tok.loc, ccqt_basic(CCBT_void), 1);
                     if(!node) return CC_OOM_ERROR;
@@ -4430,6 +4257,8 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     err = cc_parse_assignment_expr(p, flags, &unused, CCQT_NONE);
                     if(err) return err;
                     err = cc_decay(p, &unused);
+                    if(err) return err;
+                    err = cc_implicit_cast(p, unused, ccqt_basic(CCBT_void), &unused);
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
@@ -4604,7 +4433,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     else {
                         _Bool signed_arg = op == CC_BIT_FFS || op == CC_BIT_CLRSB;
                         if(!ccqt_is_integer(arg->type) || ccqt_is_bool(arg->type) || (ccqt_is_unsigned(arg->type, !cc_target(p)->char_is_signed) == signed_arg))
-                            return cc_error(p, arg->loc, "bit builtin requires %s integer argument", signed_arg ? "a signed" : "an unsigned");
+                            return cc_type_error(p, arg->loc, arg->type, "bit builtin requires %s integer argument", signed_arg ? "a signed" : "an unsigned");
                         // Load lvalues without applying integral promotions.
                         err = cc_implicit_cast(p, arg, arg->type, &arg);
                         if(err) return err;
@@ -4620,12 +4449,12 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                         if(err) return err;
                         if(rotate){
                             if(!ccqt_is_integer(second->type))
-                                return cc_error(p, second->loc, "rotation count must have integer type");
+                                return cc_type_error(p, second->loc, second->type, "rotation count must have integer type");
                             err = cc_implicit_cast(p, second, second->type, &second);
                         }
                         else {
                             if(!ccqt_bt_eq(second->type, CCBT_int))
-                                return cc_error(p, second->loc, "zero fallback must have int type");
+                                return cc_type_error(p, second->loc, second->type, "zero fallback must have int type");
                             err = cc_implicit_cast(p, second, ccqt_basic(CCBT_int), &second);
                         }
                         if(err) return err;
@@ -4724,8 +4553,8 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     CcExpr* arg;
                     err = cc_parse_assignment_expr(p, flags, &arg, CCQT_NONE);
                     if(err) return err;
-                    if(!cc_implicit_convertible(p, arg->type, p->const_char_slice))
-                        return cc_error(p, arg->loc, "__builtin_intern argument must be convertible to const char[:]");
+                    if(!cc_implicit_convertible(cc_target(p), arg->type, p->const_char_slice))
+                        return cc_type_error(p, arg->loc, arg->type, "__builtin_intern argument must be convertible to const char[:]");
                     err = cc_implicit_cast(p, arg, p->const_char_slice, &arg);
                     if(err) return err;
                     err = cc_expect_punct(p, ')');
@@ -4748,8 +4577,8 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     }
                     err = cc_parse_assignment_expr(p, flags, &arg, CCQT_NONE);
                     if(err) return err;
-                    if(!cc_implicit_convertible(p, arg->type, p->const_char_slice)){
-                        err = cc_error(p, arg->loc, "__compile argument must be convertible to const char[:]");
+                    if(!cc_implicit_convertible(cc_target(p), arg->type, p->const_char_slice)){
+                        err = cc_type_error(p, arg->loc, arg->type, "__compile argument must be convertible to const char[:]");
                         goto __compile_fail;
                     }
                     err = cc_implicit_cast(p, arg, p->const_char_slice, &arg);
@@ -4759,8 +4588,8 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     if(err) goto __compile_fail;
                     err = cc_parse_assignment_expr(p, flags, &arg2, CCQT_NONE);
                     if(err) goto __compile_fail;
-                    if(!cc_implicit_convertible(p, arg2->type, p->const_char_slice)){
-                        err = cc_error(p, arg2->loc, "__compile argument must be convertible to const char[:]");
+                    if(!cc_implicit_convertible(cc_target(p), arg2->type, p->const_char_slice)){
+                        err = cc_type_error(p, arg2->loc, arg2->type, "__compile argument must be convertible to const char[:]");
                         goto __compile_fail;
                     }
                     err = cc_implicit_cast(p, arg2, p->const_char_slice, &arg2);
@@ -4801,7 +4630,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     }
                     if(ccqt_kind(old_func->type) != CC_POINTER
                     || ccqt_kind(ccqt_as_ptr(old_func->type)->pointee) != CC_FUNCTION)
-                        return cc_error(p, old_func->loc, "__hotswap first argument must be a function pointer");
+                        return cc_type_error(p, old_func->loc, old_func->type, "__hotswap first argument must be a function pointer");
                     err = cc_expect_punct(p, ',');
                     if(err) return err;
                     CcExpr* new_func;
@@ -4814,8 +4643,9 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                         err = cc_implicit_cast(p, new_func, ptr_type, &new_func);
                         if(err) return err;
                     }
-                    if(new_func->type.bits != old_func->type.bits)
-                        return cc_error(p, new_func->loc, "__hotswap function pointer types must match");
+                    if(!cc_types_same((CcQualType){.unqual=new_func->type.unqual},
+                                      (CcQualType){.unqual=old_func->type.unqual}))
+                        return cc_types_error(p, new_func->loc, old_func->type, new_func->type, "__hotswap function pointer types must match");
                     err = cc_expect_punct(p, ')');
                     if(err) return err;
                     CcExpr* node = cc_make_expr(p, CC_EXPR_HOTSWAP, tok.loc, ccqt_basic(CCBT_int), 1);
@@ -4887,11 +4717,9 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
             }
             switch(sym.kind){
                 case CC_SYM_VAR:{
-                    if(flags.parsing_default_arg && sym.var->automatic && !sym.var->constexpr_)
-                        return cc_error(p, tok.loc, "default argument may not use automatic variable '%.*s'", tok.ident.ident->length, tok.ident.ident->data);
                     if(flags.vc == CC_CONSTEXPR_VALUE && !flags.static_rebind && !sym.var->constexpr_ && !ccqt_is_fixed_sequence(sym.var->type))
                         return cc_error(p, tok.loc, "expression '%s' is not a constant expression", tok.ident.ident->data);
-                    if(flags.vc == CC_LINKTIME_VALUE && sym.var->automatic)
+                    if(flags.vc == CC_LINKTIME_VALUE && sym.var->automatic && !sym.var->constexpr_)
                         return cc_error(p, tok.loc, "expression '%s' is not a constant expression", tok.ident.ident->data);
                     CcExpr* node = cc_make_expr(p, CC_EXPR_VARIABLE, tok.loc, sym.var->type, 0);
                     if(!node) return CC_OOM_ERROR;
@@ -4926,8 +4754,6 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                 err = cc_peek(p, &peek);
                 if(err) return err;
                 if(peek.type == CC_PUNCTUATOR && peek.punct.punct == '{'){
-                    if(flags.parsing_default_arg)
-                        return cc_error(p, tok.loc, "default argument may not use a statement expression");
                     if(flags.vc == CC_CONSTEXPR_VALUE)
                         return cc_error(p, tok.loc, "statement expression in constant expression");
                     err = cc_next_token(p, &tok);
@@ -5033,164 +4859,51 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
             case CC_sizeof:{
                 CcExpr* operand = NULL;
                 CcParseFlags sizeof_flags = runtime_flags;
-                sizeof_flags.parsing_default_arg = 0;
                 sizeof_flags.unevaluated |= flags.vc != CC_RUNTIME_VALUE;
-                CcToken peek;
-                err = cc_peek(p, &peek);
+                CcQualType type;
+                err = cc_parse_type_or_unary_operand(p, sizeof_flags, tok.loc, &type, &operand);
                 if(err) return err;
-                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lparen){
-                    err = cc_next_token(p, &peek);
-                    if(err) return err;
-                    CcToken peek2;
-                    err = cc_peek(p, &peek2);
-                    if(err) return err;
-                    if(cc_is_compound_type_start(p, &peek2)){
-                        CcQualType type;
-                        CcSpecifier storage = {0};
-                        err = cc_parse_compound_type(p, sizeof_flags, &type, NULL, &storage);
-                        if(err) return err;
-                        err = cc_expect_punct(p, CC_rparen);
-                        if(err) return err;
-                        CcToken peek3;
-                        err = cc_peek(p, &peek3);
-                        if(err) return err;
-                        if(peek3.type == CC_PUNCTUATOR && peek3.punct.punct == CC_lbrace){
-                            CcExpr* result;
-                            err = cc_parse_compound_literal(p, sizeof_flags, type, storage, &result);
-                            if(err) return err;
-                            CcExpr* postfixed;
-                            err = cc_parse_postfix(p, sizeof_flags, result, &postfixed);
-                            if(err) return err;
-                            operand = postfixed;
-                            goto sizeof_operand;
-                        }
-                        if(storage.sp_storagebits)
-                            return cc_error(p, tok.loc, "storage class requires a compound literal");
-                        CcExpr* sz;
-                        err = cc_sizeof_as_expr(p, type, tok.loc, &sz);
-                        if(err) return err;
-                        *out = sz;
-                        return 0;
-                    }
-                    err = cc_unget(p, &peek);
-                    if(err) return err;
-                }
-                err = cc_parse_prefix(p, sizeof_flags, &operand);
-                if(err) return err;
-                sizeof_operand:;
-                if(cc_expr_field_bit_width(operand))
+                if(operand && cc_expr_field_bit_width(operand))
                     return cc_error(p, tok.loc, "sizeof applied to bitfield");
-                if(!operand->type.ptr)
+                if(!type.ptr)
                     return cc_error(p, tok.loc, "cannot take sizeof incomplete type");
                 CcExpr* sz;
-                err = cc_sizeof_as_expr(p, operand->type, tok.loc, &sz);
+                err = cc_sizeof_as_expr(p, type, tok.loc, &sz);
                 if(err) return err;
-                if(ccqt_kind(operand->type) == CC_VLA){
+                if(operand && ccqt_kind(type) == CC_VLA){
                     CcExpr* comma = cc_binary_expr(p, CC_EXPR_COMMA, tok.loc, sz->type, operand, sz);
                     if(!comma) return CC_OOM_ERROR;
                     sz = comma;
                 }
-                else cc_release_expr(p, operand);
+                else if(operand) cc_release_expr(p, operand);
                 *out = sz;
                 return 0;
             }
             case CC_alignof:{
-                CcParseFlags alignof_flags = flags;
+                CcParseFlags alignof_flags = runtime_flags;
                 alignof_flags.unevaluated = 1;
-                CcToken peek;
-                err = cc_peek(p, &peek);
+                CcExpr* operand = NULL;
+                CcQualType type;
+                err = cc_parse_type_or_unary_operand(p, alignof_flags, tok.loc, &type, &operand);
                 if(err) return err;
-                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lparen){
-                    err = cc_next_token(p, &peek);
-                    if(err) return err;
-                    CcToken peek2;
-                    err = cc_peek(p, &peek2);
-                    if(err) return err;
-                    if(cc_is_type_start(p, &peek2)){
-                        CcQualType type;
-                        err = cc_parse_type_name(p, alignof_flags, &type, NULL);
-                        if(err) return err;
-                        err = cc_expect_punct(p, CC_rparen);
-                        if(err) return err;
-                        CcExpr* al;
-                        err = cc_alignof_as_expr(p, type, tok.loc, &al);
-                        if(err) return err;
-                        *out = al;
-                        return 0;
-                    }
-                    err = cc_unget(p, &peek);
-                    if(err) return err;
-                }
-                CcExpr* operand;
-                alignof_flags.vc = CC_RUNTIME_VALUE;
-                err = cc_parse_prefix(p, alignof_flags, &operand);
+                if(!operand) return cc_alignof_as_expr(p, type, tok.loc, out);
+                uint32_t alignment;
+                err = cc_expr_alignment(p, operand, &alignment);
                 if(err) return err;
-                CcExpr* al;
-                if(operand->kind == CC_EXPR_VARIABLE && operand->var->alignment){
-                    uint32_t natural;
-                    err = cc_alignof_as_uint(p, operand->type, tok.loc, &natural);
-                    if(err) return err;
-                    al = cc_value_expr(p, tok.loc, ccqt_basic(cc_target(p)->size_type));
-                    if(!al) return CC_OOM_ERROR;
-                    al->uinteger = operand->var->alignment > natural ? operand->var->alignment : natural;
-                }
-                else {
-                    err = cc_alignof_as_expr(p, operand->type, tok.loc, &al);
-                    if(err) return err;
-                }
+                CcExpr* al = cc_value_expr(p, tok.loc, ccqt_basic(cc_target(p)->size_type));
+                if(!al) return CC_OOM_ERROR;
+                al->uinteger = alignment;
                 cc_release_expr(p, operand);
                 *out = al;
                 return 0;
             }
             case CC__Countof:{
-                CcParseFlags countof_flags = flags;
+                CcParseFlags countof_flags = runtime_flags;
                 countof_flags.unevaluated |= flags.vc != CC_RUNTIME_VALUE;
                 CcExpr* operand = NULL;
-                CcToken peek;
-                err = cc_peek(p, &peek);
-                if(err) return err;
                 CcQualType arr_type;
-                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lparen){
-                    err = cc_next_token(p, &peek);
-                    if(err) return err;
-                    CcToken peek2;
-                    err = cc_peek(p, &peek2);
-                    if(err) return err;
-                    if(cc_is_compound_type_start(p, &peek2)){
-                        CcSpecifier storage = {0};
-                        err = cc_parse_compound_type(p, countof_flags, &arr_type, NULL, &storage);
-                        if(err) return err;
-                        err = cc_expect_punct(p, CC_rparen);
-                        if(err) return err;
-                        CcToken peek3;
-                        err = cc_peek(p, &peek3);
-                        if(err) return err;
-                        if(peek3.type == CC_PUNCTUATOR && peek3.punct.punct == CC_lbrace){
-                            CcExpr* result;
-                            err = cc_parse_compound_literal(p, countof_flags, arr_type, storage, &result);
-                            if(err) return err;
-                            CcExpr* postfixed;
-                            err = cc_parse_postfix(p, countof_flags, result, &postfixed);
-                            if(err) return err;
-                            arr_type = postfixed->type;
-                            operand = postfixed;
-                        }
-                        else if(storage.sp_storagebits)
-                            return cc_error(p, tok.loc, "storage class requires a compound literal");
-                        goto countof_have_type;
-                    }
-                    err = cc_unget(p, &peek);
-                    if(err) return err;
-                }
-                {
-                    CcExpr* expr = NULL;
-                    countof_flags.vc = CC_RUNTIME_VALUE;
-                    err = cc_parse_prefix(p, countof_flags, &expr);
-                    if(err) return err;
-                    arr_type = expr->type;
-                    operand = expr;
-                }
-                countof_have_type:;
+                err = cc_parse_type_or_unary_operand(p, countof_flags, tok.loc, &arr_type, &operand);
+                if(err) return err;
                 if(operand && ccqt_kind(arr_type) == CC_SLICE){
                     if(flags.vc != CC_RUNTIME_VALUE)
                         return cc_error(p, operand->loc, "Can only _Countof a slice at runtime");
@@ -5215,9 +4928,9 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                 }
                 if(operand) cc_release_expr(p, operand);
                 if(!ccqt_is_fixed_sequence(arr_type))
-                    return cc_error(p, tok.loc, "_Countof requires an array type");
+                    return cc_type_error(p, tok.loc, arr_type, "_Countof requires an array type");
                 if(ccqt_array_incomplete(arr_type))
-                    return cc_error(p, tok.loc, "_Countof applied to incomplete array type");
+                    return cc_type_error(p, tok.loc, arr_type, "_Countof applied to incomplete array type");
                 CcQualType size_type = ccqt_basic(cc_target(p)->size_type);
                 CcExpr* node = cc_value_expr(p, tok.loc, size_type);
                 if(!node) return CC_OOM_ERROR;
@@ -5400,7 +5113,6 @@ int
 cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out){
     CcParseFlags type_flags = flags;
     type_flags.vc = CC_RUNTIME_VALUE;
-    type_flags.parsing_default_arg = 0;
     type_flags.unevaluated = 1;
     int err;
     err = cc_expect_punct(p, '(');
@@ -5410,23 +5122,18 @@ cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out)
     err = cc_peek(p, &tok);
     if(err) return err;
     SrcLoc loc = tok.loc;
-    if(cc_is_type_start(p, &tok)){
-        err = cc_parse_type_name(p, type_flags, &tswitch, NULL);
-        if(err) return err;
-    }
-    else {
-        CcExpr* condition;
-        err = cc_parse_assignment_expr(p, type_flags, &condition, CCQT_NONE);
-        if(err) return err;
-        tswitch = condition->type;
+    CcExpr* condition;
+    err = cc_parse_type_query_operand(p, type_flags, CC_comma, 0, &tswitch, &condition);
+    if(err) return err;
+    if(condition){
         cc_release_expr(p, condition);
         CcTypeKind tk = ccqt_kind(tswitch);
         switch(tk){
-        case CC_VLA: err = cc_pointer_of(p, cc_array_element_type(tswitch), &tswitch); if(err) return err; break;
+        case CC_VLA: err = cc_pointer_of(p, ccqt_qualified_array_element(tswitch), &tswitch); if(err) return err; break;
         case CC_VECTOR: break;
         case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_ARRAY:{
-            err = cc_pointer_of(p, cc_array_element_type(tswitch), &tswitch);
+            err = cc_pointer_of(p, ccqt_qualified_array_element(tswitch), &tswitch);
             if(err) return err;
             break;
         }
@@ -5472,7 +5179,7 @@ cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out)
             assoc_flags.generic_association = 1;
             err = cc_parse_type_name(p, assoc_flags, &assoc_type, NULL);
             if(err) goto done;
-            is_match = cc_types_compatible(assoc_type, tswitch, 0);
+            is_match = cc_types_compatible(assoc_type, tswitch);
         }
         err = cc_expect_punct(p, ':');
         if(err) goto done;
@@ -5543,7 +5250,7 @@ cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out)
         if(err) goto done;
     }
     if(!result){
-        err = cc_error(p, loc, "no matching type in _Generic and no default");
+        err = cc_type_error(p, loc, tswitch, "no matching type in _Generic and no default");
         goto done;
     }
     *out = result;
@@ -5558,7 +5265,7 @@ int
 cc_pack_call_args(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType slice, Parray(CcExpression)* args, uint32_t start){
     uint32_t count = (uint32_t)args->count - start;
     CcQualType element = ccqt_as_slice(slice)->pointee;
-    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element, count, 0, 0);
+    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element, count, 0);
     if(!array) return CC_OOM_ERROR;
     for(uint32_t i = start; i < args->count; i++){
         CcExpr** arg = (CcExpr**)&args->data[i];
@@ -5577,13 +5284,102 @@ cc_pack_call_args(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType slice,
     for(uint32_t i = 0; i < count; i++)
         list->entries[i] = (CcInitEntry){.path={.n_components=1, .idx0=i}, .value=(CcExpr*)args->data[start+i]};
     literal->init_list = list;
-    literal->defer_compound_storage = flags.parsing_default_arg;
+    literal->defer_compound_storage = flags.parsing_default_arg || flags.vc > CC_RUNTIME_VALUE;
     CcExpr* packed;
     int err = cc_implicit_cast(p, literal, slice, &packed);
     if(err) return err;
     args->count = start;
     if(pa_push(args, cc_scratch_allocator(p), packed)) return CC_OOM_ERROR;
     return 0;
+}
+
+static
+int
+cc_parse_typed_pack(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType slice, CcExpr* _Nonnull* _Nonnull out){
+    Parray(CcExpression) args = {0};
+    int err;
+    _Bool explicit_pack = 0;
+    for(;;){
+        CcToken tok;
+        err = cc_peek(p, &tok);
+        if(err) goto cleanup;
+        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_rparen) break;
+        if(explicit_pack){
+            err = cc_error(p, tok.loc, "cannot combine an explicit typed pack with trailing arguments");
+            goto cleanup;
+        }
+        if(tok.type == CC_PUNCTUATOR && (tok.punct.punct == CC_dot || tok.punct.punct == CC_lbracket)){
+            cc_next_token(p, &tok);
+            if(tok.punct.punct == CC_dot){
+                CcToken name;
+                err = cc_next_token(p, &name);
+                if(err) goto cleanup;
+                if(name.type != CC_IDENTIFIER){
+                    err = cc_error(p, name.loc, "expected parameter name after '.'");
+                    goto cleanup;
+                }
+                if(name.ident.ident->length != 4 || memcmp(name.ident.ident->data, "args", 4)){
+                    err = cc_error(p, name.loc, "no parameter named '%.*s'", name.ident.ident->length, name.ident.ident->data);
+                    goto cleanup;
+                }
+            }
+            else {
+                CcExpr* index;
+                CcParseFlags index_flags = flags;
+                index_flags.unevaluated = 1;
+                err = cc_parse_assignment_expr(p, index_flags, &index, CCQT_NONE);
+                if(err) goto cleanup;
+                int64_t value;
+                err = cc_eval_integer(&(CcEvalCtx){p}, index, &value);
+                cc_release_expr(p, index);
+                if(err){
+                    if(err == CC_NOT_CONSTANT_ERROR)
+                        err = cc_error(p, tok.loc, "positional designator must be a constant integer expression");
+                    goto cleanup;
+                }
+                if(value != 0){
+                    err = cc_error(p, tok.loc, "positional designator value out of range");
+                    goto cleanup;
+                }
+                err = cc_expect_punct(p, CC_rbracket);
+                if(err) goto cleanup;
+            }
+            err = cc_expect_punct(p, CC_assign);
+            if(err) goto cleanup;
+            if(args.count){
+                err = cc_error(p, tok.loc, "cannot combine an explicit typed pack with trailing arguments");
+                goto cleanup;
+            }
+            explicit_pack = 1;
+        }
+        CcExpr* arg;
+        CcQualType type = explicit_pack ? slice : ccqt_as_slice(slice)->pointee;
+        err = cc_parse_assignment_expr(p, flags, &arg, type);
+        if(err) goto cleanup;
+        if(explicit_pack){
+            err = cc_implicit_cast(p, arg, slice, &arg);
+            if(err) goto cleanup;
+        }
+        err = pa_push(&args, cc_scratch_allocator(p), arg);
+        if(err) goto cleanup;
+        err = cc_peek(p, &tok);
+        if(err) goto cleanup;
+        if(tok.type != CC_PUNCTUATOR || tok.punct.punct != CC_comma) break;
+        cc_next_token(p, &tok);
+    }
+    if(!explicit_pack){
+        err = cc_pack_call_args(p, flags, loc, slice, &args, 0);
+        if(err) goto cleanup;
+    }
+    *out = (CcExpr*)args.data[0];
+    err = 0;
+cleanup:
+    if(err){
+        for(size_t i = 0; i < args.count; i++)
+            cc_release_expr(p, (CcExpr*)args.data[i]);
+    }
+    pa_cleanup(&args, cc_scratch_allocator(p));
+    return err;
 }
 
 static
@@ -5613,23 +5409,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
             }
         }
         switch((uint32_t)tok.punct.punct){
-            case CC_plusplus: {
-                if(flags.static_rebind && !cc_static_rebind_target(p, operand))
-                    return cc_error(p, operand->loc, "static for update must rebind a clause-1 variable");
-                if(flags.vc > CC_RUNTIME_VALUE && !flags.static_rebind)
-                    return cc_error(p, tok.loc, "increment/decrement in constant expression");
-                if(!operand->is_lvalue)
-                    return cc_error(p, tok.loc, "expression is not an lvalue");
-                if(operand->type.is_const && !flags.static_rebind)
-                    return cc_error(p, tok.loc, "cannot modify const-qualified variable");
-                err = cc_check_incdec_type(p, operand->type, tok.loc);
-                if(err) return err;
-                CcExpr* node = cc_make_expr(p, CC_EXPR_POSTINC, tok.loc, (CcQualType){.unqual=operand->type.unqual}, 0);
-                if(!node) return CC_OOM_ERROR;
-                node->lhs = operand;
-                operand = node;
-                continue;
-            }
+            case CC_plusplus:
             case CC_minusminus: {
                 if(flags.static_rebind && !cc_static_rebind_target(p, operand))
                     return cc_error(p, operand->loc, "static for update must rebind a clause-1 variable");
@@ -5638,10 +5418,11 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                 if(!operand->is_lvalue)
                     return cc_error(p, tok.loc, "expression is not an lvalue");
                 if(operand->type.is_const && !flags.static_rebind)
-                    return cc_error(p, tok.loc, "cannot modify const-qualified variable");
-                err = cc_check_incdec_type(p, operand->type, tok.loc);
+                    return cc_type_error(p, tok.loc, operand->type, "cannot modify const-qualified variable");
+                err = cc_check_incdec(p, operand, tok.loc);
                 if(err) return err;
-                CcExpr* node = cc_make_expr(p, CC_EXPR_POSTDEC, tok.loc, (CcQualType){.unqual=operand->type.unqual}, 0);
+                CcExprKind kind = tok.punct.punct == CC_plusplus ? CC_EXPR_POSTINC : CC_EXPR_POSTDEC;
+                CcExpr* node = cc_make_expr(p, kind, tok.loc, (CcQualType){.unqual=operand->type.unqual}, 0);
                 if(!node) return CC_OOM_ERROR;
                 node->lhs = operand;
                 operand = node;
@@ -5651,92 +5432,52 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                 CcToken peek;
                 err = cc_peek(p, &peek);
                 if(err) return err;
-                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ':'){
-                    CcQualType elem_type;
-                    err = cc_check_pointer_arithmetic(p, operand->type, tok.loc);
-                    if(err) return err;
-                    err = cc_deref_type(p, operand->type, &elem_type, tok.loc, 0);
-                    if(err) return err;
-                    CcQualType slice_type;
-                    err = cc_slice_of(p, elem_type, &slice_type);
-                    if(err) return err;
-                    err = cc_next_token(p, &peek);
+                CcExpr* index = NULL;
+                if(peek.type != CC_PUNCTUATOR || peek.punct.punct != ':'){
+                    err = cc_parse_expr(p, flags, &index);
                     if(err) return err;
                     err = cc_peek(p, &peek);
                     if(err) return err;
-                    if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ']'){
-                        if(ccqt_kind(operand->type) == CC_POINTER)
-                            return cc_error(p, tok.loc, "slice of pointer requires upper bound");
-                        if(ccqt_kind(operand->type) == CC_ARRAY && ccqt_as_array(operand->type)->is_incomplete)
-                            return cc_error(p, tok.loc, "slice of incomplete array requires upper bound");
-                        err = cc_next_token(p, &peek);
-                        if(err) return err;
-                        CcExpr* node = cc_make_expr(p, CC_EXPR_SLICE_ALL, tok.loc, slice_type, 0);
-                        if(!node) return CC_OOM_ERROR;
-                        node->lhs = operand;
-                        operand = node;
-                        continue;
-                    }
-                    CcExpr* hi;
-                    err = cc_parse_expr(p, flags, &hi);
-                    if(err) return err;
-                    err = cc_implicit_cast_to_index(p, hi, &hi);
-                    if(err) return err;
-                    err = cc_expect_punct(p, CC_rbracket);
-                    if(err) return err;
-                    CcExpr* node = cc_make_expr(p, CC_EXPR_SLICE_HI, tok.loc, slice_type, 1);
-                    if(!node) return CC_OOM_ERROR;
-                    node->lhs = operand;
-                    node->values[0] = hi;
-                    operand = node;
-                    continue;
                 }
-                CcExpr* index;
-                err = cc_parse_expr(p, flags, &index);
-                if(err) return err;
-                err = cc_peek(p, &peek);
-                if(err) return err;
                 if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ':'){
                     CcQualType elem_type;
-                    err = cc_check_pointer_arithmetic(p, operand->type, tok.loc);
+                    err = cc_deref_type_or_error(p, operand->type, &elem_type, tok.loc, 0);
                     if(err) return err;
-                    err = cc_deref_type(p, operand->type, &elem_type, tok.loc, 0);
+                    err = cc_check_type_has_size_or_error(p, elem_type, tok.loc);
                     if(err) return err;
                     CcQualType slice_type;
-                    err = cc_slice_of(p, elem_type, &slice_type);
+                    err = cc_slice_of(p, elem_type, tok.loc, &slice_type);
                     if(err) return err;
-                    err = cc_implicit_cast_to_index(p, index, &index);
-                    if(err) return err;
+                    if(index){
+                        err = cc_implicit_cast_to_index(p, index, &index);
+                        if(err) return err;
+                    }
                     err = cc_next_token(p, &peek);
                     if(err) return err;
                     err = cc_peek(p, &peek);
                     if(err) return err;
+                    CcExpr* hi = NULL;
                     if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ']'){
                         if(ccqt_kind(operand->type) == CC_POINTER)
                             return cc_error(p, tok.loc, "slice of pointer requires upper bound");
-                        if(ccqt_kind(operand->type) == CC_ARRAY && ccqt_as_array(operand->type)->is_incomplete)
+                        if(ccqt_array_incomplete(operand->type))
                             return cc_error(p, tok.loc, "slice of incomplete array requires upper bound");
-                        err = cc_next_token(p, &peek);
-                        if(err) return err;
-                        CcExpr* node = cc_make_expr(p, CC_EXPR_SLICE_LO, tok.loc, slice_type, 1);
-                        if(!node) return CC_OOM_ERROR;
-                        node->lhs = operand;
-                        node->values[0] = index;
-                        operand = node;
-                        continue;
                     }
-                    CcExpr* hi;
-                    err = cc_parse_expr(p, flags, &hi);
-                    if(err) return err;
-                    err = cc_implicit_cast_to_index(p, hi, &hi);
-                    if(err) return err;
+                    else{
+                        err = cc_parse_expr(p, flags, &hi);
+                        if(err) return err;
+                        err = cc_implicit_cast_to_index(p, hi, &hi);
+                        if(err) return err;
+                    }
                     err = cc_expect_punct(p, CC_rbracket);
                     if(err) return err;
-                    CcExpr* node = cc_make_expr(p, CC_EXPR_SLICE, tok.loc, slice_type, 2);
+                    CcExprKind kind = index ? (hi ? CC_EXPR_SLICE : CC_EXPR_SLICE_LO)
+                        : (hi ? CC_EXPR_SLICE_HI : CC_EXPR_SLICE_ALL);
+                    CcExpr* node = cc_make_expr(p, kind, tok.loc, slice_type, !!index + !!hi);
                     if(!node) return CC_OOM_ERROR;
                     node->lhs = operand;
-                    node->values[0] = index;
-                    node->values[1] = hi;
+                    if(index || hi) node->values[0] = index ? index : hi;
+                    if(index && hi) node->values[1] = hi;
                     operand = node;
                     continue;
                 }
@@ -5745,11 +5486,12 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                 {
                     CcQualType idx_type = index->type;
                     _Bool idx_int = ccqt_is_integer(idx_type);
-                    _Bool idx_ptr = ccqt_is_pointer_like(idx_type);
+                    _Bool idx_ptr = ccqt_kind(idx_type) == CC_POINTER || ccqt_is_array(idx_type);
                     if(!idx_int && !idx_ptr)
-                        return cc_error(p, tok.loc, "array subscript requires integer or pointer type");
+                        return cc_type_error(p, tok.loc, idx_type, "array subscript requires integer or pointer type");
                 }
-                if(!ccqt_is_pointer_like(operand->type) && ccqt_is_pointer_like(index->type)){
+                if(ccqt_is_integer(operand->type)
+                    && (ccqt_kind(index->type) == CC_POINTER || ccqt_is_array(index->type))){
                     CcExpr* tmp = operand;
                     operand = index;
                     index = tmp;
@@ -5759,13 +5501,13 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                     if(err) return err;
                 }
                 CcQualType elem_type;
-                err = cc_check_pointer_arithmetic(p, operand->type, tok.loc);
+                err = cc_deref_type_or_error(p, operand->type, &elem_type, tok.loc, 1);
                 if(err) return err;
-                err = cc_deref_type(p, operand->type, &elem_type, tok.loc, 1);
+                err = cc_check_type_has_size_or_error(p, elem_type, tok.loc);
                 if(err) return err;
                 CcExpr* node = cc_make_expr(p, CC_EXPR_SUBSCRIPT, tok.loc, elem_type, 1);
                 if(!node) return CC_OOM_ERROR;
-                node->is_lvalue = 1;
+                node->is_lvalue = ccqt_kind(operand->type) != CC_VECTOR || operand->is_lvalue;
                 node->lhs = operand;
                 node->values[0] = index;
                 operand = node;
@@ -5806,6 +5548,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                     else {
                         mkind = CC_EXPR_DOT;
                     }
+                    agg_type = ccqt_unaligned(agg_type);
                     CcTypeKind tk = ccqt_kind(agg_type);
                     CcField* f;
                     if(tk == CC_STRUCT){
@@ -5853,6 +5596,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                 else {
                     mkind = CC_EXPR_DOT;
                 }
+                agg_type = ccqt_unaligned(agg_type);
                 uint64_t floc = 0;
                 CcQualType member_type = {0};
                 CcQualType member_owner = {0};
@@ -5899,8 +5643,8 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                             err = cc_pointer_of(p, symbol_type, &result_type);
                             if(err) return err;
                         }
-                        if(!cc_implicit_convertible(p, name->type, p->const_char_slice))
-                            return cc_error(p, name->loc, "_Module.symbol first argument must be convertible to const char[:]");
+                        if(!cc_implicit_convertible(cc_target(p), name->type, p->const_char_slice))
+                            return cc_types_error(p, name->loc, name->type, p->const_char_slice, "_Module.symbol first argument must be convertible to const char[:]");
                         err = cc_implicit_cast(p, name, p->const_char_slice, &name);
                         if(err) return err;
                         err = cc_expect_punct(p, ')');
@@ -5931,8 +5675,8 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                         CcExpr* name;
                         err = cc_parse_assignment_expr(p, flags, &name, CCQT_NONE);
                         if(err) return err;
-                        if(!cc_implicit_convertible(p, name->type, p->const_char_slice))
-                            return cc_error(p, name->loc, "_Module.parse_type first argument must be convertible to const char[:]");
+                        if(!cc_implicit_convertible(cc_target(p), name->type, p->const_char_slice))
+                            return cc_types_error(p, name->loc, name->type, p->const_char_slice, "_Module.parse_type first argument must be convertible to const char[:]");
                         err = cc_implicit_cast(p, name, p->const_char_slice, &name);
                         if(err) return err;
                         err = cc_expect_punct(p, ')');
@@ -5986,8 +5730,8 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                             CcExpr* idx;
                             err = cc_parse_assignment_expr(p, flags, &idx, CCQT_NONE);
                             if(err) return err;
-                            if(!cc_implicit_convertible(p, idx->type, ccqt_basic(cc_target(p)->size_type)))
-                                return cc_error(p, idx->loc, "_Module reflection index must be convertible to size_t");
+                            if(!cc_implicit_convertible(cc_target(p), idx->type, ccqt_basic(cc_target(p)->size_type)))
+                                return cc_types_error(p, idx->loc, idx->type, ccqt_basic(cc_target(p)->size_type), "_Module reflection index must be convertible to size_t");
                             err = cc_implicit_cast(p, idx, ccqt_basic(cc_target(p)->size_type), &idx);
                             if(err) return err;
                             err = cc_expect_punct(p, ')');
@@ -6034,7 +5778,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                         CcQualType qt = tv->type_value;
                         CcTypeKind k = ccqt_kind(qt);
                         if(k != CC_STRUCT && k != CC_UNION)
-                            return cc_error(p, member.loc, "push_method requires a struct or union type");
+                            return cc_type_error(p, member.loc, qt, "push_method requires a struct or union type");
                         err = cc_expect_punct(p, '(');
                         if(err) return err;
                         CcToken mname_tok;
@@ -6159,7 +5903,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                             CcQualType size_type = ccqt_basic(cc_target(p)->size_type);
                             CcQualType arg_type = ti_op == CC_TYPE_HAS_FIELD || ti_op == CC_TYPE_HAS_METHOD
                                 || ((ti_op == CC_TYPE_FIELD || ti_op == CC_TYPE_METHOD)
-                                    && cc_implicit_convertible(p, arg_expr->type, p->const_char_slice))
+                                    && cc_implicit_convertible(cc_target(p), arg_expr->type, p->const_char_slice))
                                 ? p->const_char_slice : size_type;
                             err = cc_implicit_cast(p, arg_expr, arg_type, &arg_expr);
                             if(err) return err;
@@ -6173,32 +5917,31 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                             if(err) return err;
                             arg_val = arg_expr;
                         }
+                        else if(ti_op == CC_TYPE_IS_CALLABLE_WITH){
+                            CcQualType element = ccqt_basic(CCBT__Type), slice;
+                            element.is_const = 1;
+                            err = cc_slice_of(p, element, tok.loc, &slice);
+                            if(err) return err;
+                            err = cc_parse_typed_pack(p, flags, tok.loc, slice, &arg_val);
+                            if(err) return err;
+                        }
                         else if(ti_op == CC_TYPE_IS_CALLABLE_THROUGH){
                             err = cc_parse_assignment_expr(p, flags, &arg_val, CCQT_NONE);
                             if(err) return err;
                             if(!ccqt_bt_eq(arg_val->type, CCBT__Type)){
+                                err = cc_type_error(p, tok.loc, arg_val->type, "is_callable_through requires a function type");
                                 cc_release_expr(p, arg_val);
-                                return cc_error(p, tok.loc, "is_callable_through requires a function type");
+                                return err;
                             }
                         }
                         else {
                             CcQualType arg_type;
                             CcParseFlags argument_flags = flags;
                             argument_flags.unevaluated = 1;
-                            CcToken peek2;
-                            err = cc_peek(p, &peek2);
+                            CcExpr* arg_expr;
+                            err = cc_parse_type_query_operand(p, argument_flags, CC_rparen, 0, &arg_type, &arg_expr);
                             if(err) return err;
-                            if(cc_is_type_start(p, &peek2)){
-                                err = cc_parse_type_name(p, argument_flags, &arg_type, NULL);
-                                if(err) return err;
-                            }
-                            else {
-                                CcExpr* arg_expr;
-                                err = cc_parse_assignment_expr(p, argument_flags, &arg_expr, CCQT_NONE);
-                                if(err) return err;
-                                arg_type = arg_expr->type;
-                                cc_release_expr(p, arg_expr);
-                            }
+                            if(arg_expr) cc_release_expr(p, arg_expr);
                             arg_val = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(CCBT__Type), 0);
                             if(!arg_val) return CC_OOM_ERROR;
                             arg_val->uinteger = arg_type.bits;
@@ -6260,8 +6003,9 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                         cc_release_expr(p, te);
                         if(err) return err == CC_NOT_CONSTANT_ERROR ? cc_error(p, member.loc, "_Any.as requires a constant type") : err;
                         if(!ccqt_bt_eq(tv->type, CCBT__Type)){
+                            err = cc_type_error(p, member.loc, tv->type, "_Any.as requires a complete, non-array object type fitting its payload");
                             cc_release_expr(p, tv);
-                            return cc_error(p, member.loc, "_Any.as requires a complete, non-array object type fitting its payload");
+                            return err;
                         }
                         member_type = tv->type_value;
                         cc_release_expr(p, tv);
@@ -6269,8 +6013,8 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                             err = cc_pointer_of(p, member_type, &member_type);
                             if(err) return err;
                         }
-                        if(!cc_any_payload_type(p, member_type))
-                            return cc_error(p, member.loc, "_Any.as requires a complete, non-array object type fitting its payload");
+                        if(!cc_any_payload_type(cc_target(p), member_type))
+                            return cc_type_error(p, member.loc, member_type, "_Any.as requires a complete, non-array object type fitting its payload");
                         err = cc_expect_punct(p, CC_rparen);
                         if(err) return err;
                         floc = offsetof(CiRtAny, payload);
@@ -6288,6 +6032,8 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                         field->values[0] = operand;
                         operand = field;
                         if(payload){
+                            err = cc_check_addressable(p, field, tok.loc);
+                            if(err) return err;
                             CcQualType ptr;
                             err = cc_pointer_of(p, member_type, &ptr);
                             if(err) return err;
@@ -6331,30 +6077,12 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                     fnode->func = fucs_func;
                     // Prefer normal argument conversion (including decay and boxing)
                     // before adapting a receiver by address or dereference.
-                    if(fucs_func->type->param_count > 0 && cc_implicit_convertible(p, operand->type, fucs_func->type->params[0])){
+                    if(fucs_func->type->param_count > 0 && cc_implicit_convertible(cc_target(p), operand->type, fucs_func->type->params[0])){
                         receiver = operand;
-                    }
-                    else if(fucs_func->type->param_count > 0 && ccqt_kind(fucs_func->type->params[0]) == CC_POINTER && ccqt_kind(operand->type) != CC_POINTER && operand->is_lvalue){
-                        CcQualType addr_type;
-                        err = cc_pointer_of(p, operand->type, &addr_type);
-                        if(err) return err;
-                        CcExpr* addr = cc_make_expr(p, CC_EXPR_ADDR, tok.loc, addr_type, 0);
-                        if(!addr) return CC_OOM_ERROR;
-                        addr->lhs = operand;
-                        receiver = addr;
-                    }
-                    else if(fucs_func->type->param_count > 0 && ccqt_kind(operand->type) == CC_POINTER && ccqt_kind(fucs_func->type->params[0]) != CC_POINTER){
-                        CcQualType deref_type;
-                        err = cc_deref_type(p, operand->type, &deref_type, tok.loc, 0);
-                        if(err) return err;
-                        CcExpr* deref = cc_make_expr(p, CC_EXPR_DEREF, tok.loc, deref_type, 0);
-                        if(!deref) return CC_OOM_ERROR;
-                        deref->lhs = operand;
-                        deref->is_lvalue = 1;
-                        receiver = deref;
                     }
                     else {
-                        receiver = operand;
+                        err = cc_adapt_receiver(p, fucs_func->type, operand, tok.loc, &receiver);
+                        if(err) return err;
                     }
                     operand = fnode;
                     continue;
@@ -6378,31 +6106,12 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                     CcExpr* mnode = cc_make_expr(p, CC_EXPR_FUNCTION, tok.loc, member_type, 0);
                     if(!mnode) return CC_OOM_ERROR;
                     mnode->func = method;
-                    if(method->type->param_count > 0 && ccqt_kind(method->type->params[0]) == CC_POINTER && ccqt_kind(operand->type) != CC_POINTER && operand->is_lvalue){
-                        CcQualType addr_type;
-                        err = cc_pointer_of(p, operand->type, &addr_type);
-                        if(err) return err;
-                        CcExpr* addr = cc_make_expr(p, CC_EXPR_ADDR, tok.loc, addr_type, 0);
-                        if(!addr) return CC_OOM_ERROR;
-                        addr->lhs = operand;
-                        receiver = addr;
-                    }
-                    else if(method->type->param_count > 0 && ccqt_kind(operand->type) == CC_POINTER && ccqt_kind(method->type->params[0]) != CC_POINTER){
-                        CcQualType deref_type;
-                        err = cc_deref_type(p, operand->type, &deref_type, tok.loc, 0);
-                        if(err) return err;
-                        CcExpr* deref = cc_make_expr(p, CC_EXPR_DEREF, tok.loc, deref_type, 0);
-                        if(!deref) return CC_OOM_ERROR;
-                        deref->lhs = operand;
-                        deref->is_lvalue = 1;
-                        receiver = deref;
-                    }
-                    else {
-                        receiver = operand;
-                    }
+                    err = cc_adapt_receiver(p, method->type, operand, tok.loc, &receiver);
+                    if(err) return err;
                     operand = mnode;
                     continue;
                 }
+                member_type.quals |= agg_type.quals;
                 CcExpr* mnode = cc_make_expr(p, mkind, tok.loc, member_type, 1);
                 if(!mnode) return CC_OOM_ERROR;
                 mnode->is_lvalue = mkind == CC_EXPR_ARROW || operand->is_lvalue;
@@ -6418,6 +6127,11 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
             case CC_lparen: {
                 if(flags.vc > CC_RUNTIME_VALUE)
                     return cc_error(p, tok.loc, "function call in constant expression");
+                CcFunction* ftype = ccqt_callable_function(operand->type);
+                if(!ftype)
+                    return cc_type_error(p, tok.loc, operand->type, "Called object is not a function or function pointer");
+                if(!ccqt_bt_eq(ftype->return_type, CCBT_void) && !ccqt_is_complete_object(ftype->return_type))
+                    return cc_type_error(p, tok.loc, ftype->return_type, "function call requires a complete return type");
                 CcToken peek;
                 err = cc_next_token(p, &peek);
                 if(err) return err;
@@ -6429,16 +6143,10 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                 _Bool typed_pack = pack_index != UINT32_MAX;
                 if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rparen && !receiver && !typed_pack
                     && !(operand->kind == CC_EXPR_FUNCTION && operand->func->params.count)){
-                    CcQualType ct = operand->type;
-                    if(ccqt_kind(ct) == CC_POINTER)
-                        ct = ccqt_as_ptr(ct)->pointee;
-                    if(ccqt_kind(ct) != CC_FUNCTION)
-                        return cc_error(p, tok.loc, "Called object is not a function or function pointer");
-                    CcFunction* ftype = ccqt_as_function(ct);
-                    if(!ftype->no_prototype && ftype->param_count != 0){
+                    if(!cc_function_accepts_arity(ftype, 0)){
                         if(ftype->is_variadic)
-                            return cc_error(p, tok.loc, "Too few arguments: expected at least %u, got 0", (unsigned)ftype->param_count);
-                        return cc_error(p, tok.loc, "Expected %u arguments, got 0", (unsigned)ftype->param_count);
+                            return cc_type_error(p, tok.loc, operand->type, "Too few arguments: expected at least %u, got 0", (unsigned)ftype->param_count);
+                        return cc_type_error(p, tok.loc, operand->type, "Expected %u arguments, got 0", (unsigned)ftype->param_count);
                     }
                     CcExpr* node = cc_make_expr(p, CC_EXPR_CALL, tok.loc, ftype->return_type, 0);
                     if(!node) return CC_OOM_ERROR;
@@ -6451,12 +6159,6 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                     rparen_consumed = 1;
                 else
                     cc_unget(p, &peek);
-                CcQualType ct = operand->type;
-                if(ccqt_kind(ct) == CC_POINTER)
-                    ct = ccqt_as_ptr(ct)->pointee;
-                if(ccqt_kind(ct) != CC_FUNCTION)
-                    return cc_error(p, tok.loc, "Called object is not a function or function pointer");
-                CcFunction* ftype = ccqt_as_function(ct);
                 CcFuncParam*_Null_unspecified param_names = NULL;
                 size_t param_names_count = 0;
                 if(operand->kind == CC_EXPR_FUNCTION && operand->func->params.count){
@@ -6662,7 +6364,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                 }
                 if(typed_pack && !explicit_pack){
                     if(args.count < pack_index){
-                        err = cc_error(p, tok.loc, "Too few arguments: expected at least %u, got %u", pack_index, (unsigned)args.count);
+                        err = cc_type_error(p, tok.loc, operand->type, "Too few arguments: expected at least %u, got %u", pack_index, (unsigned)args.count);
                         goto call_cleanup;
                     }
                     if(args.count < ftype->param_count){
@@ -6686,51 +6388,44 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                         goto call_cleanup;
                     }
                 }
-                if(!ftype->is_variadic && !ftype->no_prototype && nargs != ftype->param_count){
-                    err = cc_error(p, tok.loc, "Expected %u arguments, got %u", (unsigned)ftype->param_count, (unsigned)nargs);
-                    goto call_cleanup;
-                }
-                if(ftype->is_variadic && nargs < ftype->param_count){
-                    err = cc_error(p, tok.loc, "Too few arguments: expected at least %u, got %u", (unsigned)ftype->param_count, (unsigned)nargs);
+                if(!cc_function_accepts_arity(ftype, nargs)){
+                    if(ftype->is_variadic){
+                        err = cc_type_error(p, tok.loc, operand->type, "Too few arguments: expected at least %u, got %u", (unsigned)ftype->param_count, (unsigned)nargs);
+                        goto call_cleanup;
+                    }
+                    err = cc_type_error(p, tok.loc, operand->type, "Expected %u arguments, got %u", (unsigned)ftype->param_count, (unsigned)nargs);
                     goto call_cleanup;
                 }
                 for(uint32_t i = 0; i < nargs; i++){
                     CcExpr** argp = (CcExpr**)&args.data[i];
+                    if(!cc_is_value_operand_type((*argp)->type)){
+                        err = cc_type_error(p, (*argp)->loc, (*argp)->type, "argument must have a complete object type");
+                        goto call_cleanup;
+                    }
                     if(!ftype->no_prototype && i < ftype->param_count){
                         err = cc_implicit_cast(p, *argp, ftype->params[i], argp);
                         if(err) goto call_cleanup;
                     }
                     else {
-                        CcQualType at = cc_arithmetic_operand_type(p, *argp);
+                        CcQualType at;
+                        cc_arithmetic_operand_type(cc_target(p), *argp, &at);
                         if(ccqt_is_array(at) || ccqt_kind(at) == CC_FUNCTION){
                             err = cc_decay(p, argp);
                             if(err) goto call_cleanup;
                         }
                         else {
-                            if(ccqt_kind(at) == CC_ENUM)
-                                at = ccqt_as_enum(at)->underlying;
-                            if(ccqt_is_basic(at)){
-                                CcBasicTypeKind k = ccqt_basic_kind(at);
-                                if(k == CCBT_float){
-                                    err = cc_implicit_cast(p, *argp, ccqt_basic(CCBT_double), argp);
-                                    if(err) goto call_cleanup;
-                                }
-                                else if(ccbt_is_integer(k)){
-                                    CcQualType promoted;
-                                    err = cc_integer_promote(p, at, &promoted, (*argp)->loc);
-                                    if(err) goto call_cleanup;
-                                    err = cc_implicit_cast(p, *argp, promoted, argp);
-                                    if(err) goto call_cleanup;
-                                }
-                            }
+                            err = cc_implicit_cast(p, *argp, cc_default_promotion(at), argp);
+                            if(err) goto call_cleanup;
                         }
                     }
                 }
-                if(operand->kind == CC_EXPR_FUNCTION && operand->func->printf_like){
-                    uint32_t fi = operand->func->type->param_count - 1;
-                    SrcLoc fmt_loc = fi < nargs ? ((CcExpr*)args.data[fi])->loc : tok.loc;
-                    err = cc_check_printf_format(p, operand->func, (CcExpr*_Nonnull*_Nonnull)args.data, nargs, fmt_loc);
-                    if(err) goto call_cleanup;
+                if(operand->kind == CC_EXPR_FUNCTION){
+                    for(const CcPrintfFormat* format = operand->func->printf_formats; format; format = format->next){
+                        uint32_t fi = format->string_index - 1;
+                        SrcLoc fmt_loc = fi < nargs ? ((CcExpr*)args.data[fi])->loc : tok.loc;
+                        err = cc_check_printf_format(p, format, (CcExpr*_Nonnull*_Nonnull)args.data, nargs, fmt_loc);
+                        if(err) goto call_cleanup;
+                    }
                 }
                 CcExpr* node = cc_make_expr(p, CC_EXPR_CALL, tok.loc, ftype->return_type, nargs);
                 if(!node){
@@ -7741,23 +7436,23 @@ cc_static_switch_key(CcParser* p, CcParseFlags flags, CcQualType* type, CiUint12
     }
     _Bool is_type = ccqt_bt_eq(expr->type, CCBT__Type);
     if(!is_type && !ccqt_is_integer(expr->type)){
-        err = cc_error(p, expr->loc, "static switch requires integer or _Type expressions");
+        err = cc_type_error(p, expr->loc, expr->type, "static switch requires integer or _Type expressions");
         goto done;
     }
     if(!type->bits){
         if(is_type) *type = ccqt_basic(CCBT__Type);
-        else err = cc_integer_promote(p, cc_arithmetic_operand_type(p, expr), type, expr->loc);
+        else err = cc_integer_promote_expr(p, expr, type, expr->loc);
         if(err) goto done;
     }
     if(is_type != ccqt_bt_eq(*type, CCBT__Type)){
-        err = cc_error(p, expr->loc, "static case type does not match static switch expression");
+        err = cc_types_error(p, expr->loc, expr->type, *type, "static case type does not match static switch expression");
         goto done;
     }
     err = cc_implicit_cast(p, expr, *type, &expr);
     if(err) goto evaluation_done;
     err = cc_eval_expr(&(CcEvalCtx){.parser=p}, expr, &value);
     if(err) goto evaluation_done;
-    *key = is_type ? ci_uint128_from_uint64(value->type_value.bits) : cc_eval_u128(p, value);
+    *key = is_type ? ci_uint128_from_uint64(value->type_value.bits) : cc_eval_u128(cc_target(p), value);
     if(range) range->high = *key;
     evaluation_done:
     if(err == CC_NOT_CONSTANT_ERROR || err == CC_OVERFLOW_ERROR)
@@ -8301,9 +7996,47 @@ cc_printf_format_error(CcParser* p, SrcLoc loc, const char* spec, int spec_len, 
 
 static
 int
-cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args, uint32_t nargs, SrcLoc loc){
-    uint32_t fmt_idx = func->type->param_count - 1;
-    uint32_t first_vararg = func->type->param_count;
+cc_merge_printf_formats(CcParser* p, const CcPrintfFormat* _Nullable source,
+    const CcPrintfFormat* _Nullable* _Nonnull destination){
+    for(; source; source = source->next){
+        _Bool duplicate = 0;
+        for(const CcPrintfFormat* old = *destination; old; old = old->next){
+            if(old->string_index == source->string_index && old->first_to_check == source->first_to_check){
+                duplicate = 1;
+                break;
+            }
+        }
+        if(duplicate) continue;
+        CcPrintfFormat* copy = Allocator_alloc(cc_allocator(p), sizeof *copy);
+        if(!copy) return CC_OOM_ERROR;
+        *copy = *source;
+        copy->next = *destination;
+        *destination = copy;
+    }
+    return 0;
+}
+
+static
+int
+cc_apply_printf_formats(CcParser* p, CcFunc* func, const CcPrintfFormat* _Nullable formats){
+    for(const CcPrintfFormat* format = formats; format; format = format->next){
+        if(!format->string_index || format->string_index > func->type->param_count)
+            return cc_error(p, format->loc, "format string index is outside the parameter list");
+        CcQualType type = func->type->params[format->string_index - 1];
+        if(ccqt_kind(type) != CC_POINTER || !ccqt_bt_eq(ccqt_as_ptr(type)->pointee, CCBT_char))
+            return cc_type_error(p, format->loc, type, "format string parameter must be a char pointer");
+        if(format->first_to_check
+            && (!func->type->is_variadic || format->first_to_check - 1 != func->type->param_count))
+            return cc_error(p, format->loc, "format first argument must name the first variadic argument or be zero");
+    }
+    return cc_merge_printf_formats(p, formats, &func->printf_formats);
+}
+
+static
+int
+cc_check_printf_format(CcParser* p, const CcPrintfFormat* format, CcExpr*_Nonnull*_Nonnull args, uint32_t nargs, SrcLoc loc){
+    uint32_t fmt_idx = format->string_index - 1;
+    uint32_t first_vararg = format->first_to_check ? format->first_to_check - 1 : nargs;
     if(fmt_idx >= nargs) return 0;
     const char* fmt = NULL;
     uint32_t slen = 0;
@@ -8469,21 +8202,25 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
                 return cc_error(p, loc, "invalid length modifier for '%%%c' format specifier", conv);
         }
         switch(conv){
-            case 'd': case 'i':
+            case 'd': case 'i': case 'n':
                 switch(len_mod){
                     DRP_CASES_EXHAUSTED;
                     case LEN_NONE: expected = ccqt_basic(CCBT_int); break;
-                    case LEN_h:    expected = ccqt_basic(CCBT_int); break;
-                    case LEN_hh:   expected = ccqt_basic(CCBT_int); break;
+                    case LEN_h:    expected = ccqt_basic(conv == 'n' ? CCBT_short : CCBT_int); break;
+                    case LEN_hh:   expected = ccqt_basic(conv == 'n' ? CCBT_signed_char : CCBT_int); break;
                     case LEN_l:    expected = ccqt_basic(CCBT_long); break;
                     case LEN_ll:   expected = ccqt_basic(CCBT_long_long); break;
                     case LEN_z:    expected = ccqt_basic(ccbt_to_signed(tc->size_type)); break;
-                    case LEN_j:    expected = ccqt_basic(CCBT_long_long); break;
+                    case LEN_j:    expected = ccqt_basic(tc->intmax_type); break;
                     case LEN_t:    expected = ccqt_basic(tc->ptrdiff_type); break;
                     case LEN_I:    expected = ccqt_basic(ccbt_to_signed(tc->size_type)); break;
                     case LEN_I32:  expected = ccqt_basic(CCBT_int); break;
                     case LEN_I64:  expected = ccqt_basic(CCBT_long_long); break;
                     case LEN_L: break;
+                }
+                if(conv == 'n'){
+                    err = cc_pointer_of(p, expected, &expected);
+                    if(err) return err;
                 }
                 break;
             case 'u': case 'x': case 'X': case 'o':
@@ -8496,7 +8233,7 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
                     case LEN_l:    expected = ccqt_basic(CCBT_unsigned_long); break;
                     case LEN_ll:   expected = ccqt_basic(CCBT_unsigned_long_long); break;
                     case LEN_z:    expected = ccqt_basic(tc->size_type); break;
-                    case LEN_j:    expected = ccqt_basic(CCBT_unsigned_long_long); break;
+                    case LEN_j:    expected = ccqt_basic(ccbt_to_unsigned(tc->intmax_type)); break;
                     case LEN_t:    expected = ccqt_basic(ccbt_to_unsigned(tc->ptrdiff_type)); break;
                     case LEN_I:    expected = ccqt_basic(tc->size_type); break;
                     case LEN_I32:  expected = ccqt_basic(CCBT_unsigned); break;
@@ -8529,14 +8266,12 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
             case 'p':
                 expected = p->void_star;
                 break;
-            case 'n':
-                expected = (CcQualType){0};
-                break;
             default:
                 return cc_error(p, loc, "invalid format specifier '%%%c'", conv);
         }
         expected_args++;
         if(expected.bits && arg_idx < nargs){
+            expected = cc_default_promotion(expected);
             CcQualType actual = args[arg_idx]->type;
             uint32_t arg_num = arg_idx - first_vararg + 1;
             if(conv == 's'){
@@ -8547,9 +8282,13 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
                 if(!ok)
                     return cc_printf_format_error(p, loc, spec_start, spec_len, arg_num, expected, actual);
             }
+            else if(conv == 'n'){
+                if(ccqt_kind(actual) != CC_POINTER
+                    || !cc_types_compatible(ccqt_as_ptr(actual)->pointee, ccqt_as_ptr(expected)->pointee))
+                    return cc_printf_format_error(p, loc, spec_start, spec_len, arg_num, expected, actual);
+            }
             else if(conv == 'p'){
-                if(!ccqt_is_pointer_like(actual)
-                    && !(ccqt_is_basic(actual) && ccqt_basic_kind(actual) == CCBT_nullptr_t))
+                if(ccqt_kind(actual) != CC_POINTER && !ccqt_bt_eq(actual, CCBT_nullptr_t))
                     return cc_printf_format_error(p, loc, spec_start, spec_len, arg_num, expected, actual);
             }
             else {
@@ -8566,6 +8305,7 @@ cc_check_printf_format(CcParser* p, CcFunc* func, CcExpr*_Nonnull*_Nonnull args,
         }
         arg_idx++;
     }
+    if(!format->first_to_check) return 0;
     uint32_t provided = nargs - first_vararg;
     if(expected_args > provided)
         return cc_error(p, loc, "format specifies %u argument%s, but only %u provided",
@@ -9014,7 +8754,7 @@ cc_integer_bits_expr(CcParser* p, SrcLoc loc, CcQualType type, CiUint128 bits){
     CcExpr* node = cc_value_expr(p, loc, type);
     if(node){
         CcQualType t = type;
-        while(ccqt_kind(t) == CC_ENUM) t = ccqt_as_enum(t)->underlying;
+        t = ccqt_enum_underlying(t);
         if(ccqt_bt_eq(t, CCBT_int128) || ccqt_bt_eq(t, CCBT_unsigned_int128))
             node->uinteger128 = bits;
         else node->uinteger = ci_uint128_lo(bits);
@@ -9053,7 +8793,7 @@ cc_constexpr_string_slice_expr(CcParser* p, SrcLoc loc, Atom name, _Bool include
     il->count = 2;
     count = cc_uint64_expr(p, loc, ccqt_basic(cc_target(p)->size_type), name->length+include_nul);
     if(!count) goto oom;
-    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_as_ptr(p->const_char_star)->pointee, name->length + 1, 0, 0);
+    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_as_ptr(p->const_char_star)->pointee, name->length + 1, 0);
     if(!array) goto oom;
     literal = cc_value_expr(p, loc, (CcQualType){.bits=(uintptr_t)array});
     if(!literal) goto oom;
@@ -9100,6 +8840,8 @@ cc_binary_expr(CcParser* p, CcExprKind kind, SrcLoc loc, CcQualType type, CcExpr
 static
 int
 cc_pointer_of(CcParser* p, CcQualType pointee, CcQualType* out){
+    pointee = cc_intern_qualtype(p, pointee);
+    if(!pointee.bits) return CC_OOM_ERROR;
     CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), pointee, 0, 0);
     if(!ptr) return CC_OOM_ERROR;
     *out = (CcQualType){.bits = (uintptr_t)ptr};
@@ -9108,36 +8850,39 @@ cc_pointer_of(CcParser* p, CcQualType pointee, CcQualType* out){
 
 static
 int
-cc_slice_of(CcParser* p, CcQualType pointee, CcQualType* out){
+cc_slice_of(CcParser* p, CcQualType pointee, SrcLoc loc, CcQualType* out){
+    pointee = cc_intern_qualtype(p, pointee);
+    if(!pointee.bits) return CC_OOM_ERROR;
     CcSlice* slice = cc_intern_slice(&p->type_cache, cc_allocator(p), pointee, 0);
     if(!slice) return CC_OOM_ERROR;
     *out = (CcQualType){.bits = (uintptr_t)slice};
-    return 0;
+    return cc_check_derived_type(p, *out, loc);
 }
 
 static
 int
-cc_block_pointer_of(CcParser* p, CcQualType pointee, CcQualType* out){
-    CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), pointee, 0, 1);
-    if(!ptr) return CC_OOM_ERROR;
-    *out = (CcQualType){.bits = (uintptr_t)ptr};
-    return 0;
-}
-
-static
-int
-cc_va_list_to_ptr(CcParser* p, SrcLoc loc, CcExpr*_Nonnull*_Nonnull e){
+cc_va_list_to_ptr(CcParser* p, SrcLoc loc, CcExpr*_Nonnull*_Nonnull e, _Bool writable){
     CcExpr* expr = *e;
-    if(expr->type.bits == p->builtin_va_list_ptr.bits)
-        return 0;
-    if(expr->type.bits != p->builtin_va_list.bits)
-        return cc_error(p, loc, "expression does not have type va_list");
+    if(ccqt_kind(expr->type) == CC_POINTER){
+        CcQualType object = ccqt_as_ptr(expr->type)->pointee;
+        CcQualType expected = ccqt_as_ptr(p->builtin_va_list_ptr)->pointee;
+        if(writable ? cc_types_compatible(object, expected)
+            : cc_types_compatible_ignoring_cv(object, expected))
+            return 0;
+    }
+    if(!(writable ? cc_types_compatible(expr->type, p->builtin_va_list)
+        : cc_types_compatible_ignoring_cv(expr->type, p->builtin_va_list)))
+        return cc_type_error(p, loc, (*e)->type, "expression does not have type va_list");
+    CcQualType pointer;
+    int err = cc_pointer_of(p, ccqt_is_array(expr->type)
+        ? ccqt_qualified_array_element(expr->type) : expr->type, &pointer);
+    if(err) return err;
     if(ccqt_is_array(expr->type)){
-        return cc_implicit_cast(p, expr, p->builtin_va_list_ptr, e);
+        return cc_implicit_cast(p, expr, pointer, e);
     }
     if(!expr->is_lvalue)
         return cc_error(p, loc, "va_list argument must be an lvalue");
-    CcExpr* addr = cc_make_expr(p, CC_EXPR_ADDR, loc, p->builtin_va_list_ptr, 0);
+    CcExpr* addr = cc_make_expr(p, CC_EXPR_ADDR, loc, pointer, 0);
     if(!addr) return CC_OOM_ERROR;
     addr->lhs = expr;
     *e = addr;
@@ -9172,6 +8917,13 @@ cc_scratch_allocator(CcParser*p){
 }
 
 static
+void
+cc_add_alignment_attribute(CcAttributes* attrs, uint16_t alignment){
+    if(alignment > attrs->aligned) attrs->aligned = alignment;
+    attrs->has_aligned = 1;
+}
+
+static
 int
 cc_parse_alignment_argument(CcParser* p, CcParseFlags flags, SrcLoc loc, CcAttributes* attrs, const char* name){
     int err = cc_expect_punct(p, CC_lparen);
@@ -9194,8 +8946,7 @@ cc_parse_alignment_argument(CcParser* p, CcParseFlags flags, SrcLoc loc, CcAttri
         return cc_error(p, loc, "alignment must be a positive power of 2");
     if(align > UINT16_MAX)
         return cc_error(p, loc, "alignment too large");
-    attrs->aligned = (uint16_t)align;
-    attrs->has_aligned = 1;
+    cc_add_alignment_attribute(attrs, (uint16_t)align);
     return cc_expect_punct(p, CC_rparen);
 }
 
@@ -9246,8 +8997,7 @@ cc_match_gnu_attribute(CcParser* p, CcParseFlags flags, SrcLoc loc, StringView a
             if(err) return err;
         }
         else {
-            attrs->aligned = cc_target(p)->max_align;
-            attrs->has_aligned = 1;
+            cc_add_alignment_attribute(attrs, cc_target(p)->max_align);
         }
     }
     else if(sv_equals(attr_name, SV("vector_size"))){
@@ -9288,22 +9038,35 @@ cc_match_gnu_attribute(CcParser* p, CcParseFlags flags, SrcLoc loc, StringView a
             arch = sv_slice(arch, 2, arch.length);
         if(sv_endswith(arch, SV("__")))
             arch = sv_slice(arch, 0, arch.length-2);
-        if(sv_equals(arch, SV("printf")))
-            attrs->printf_like = 1;
-        err = cc_expect_punct(p, CC_comma);
-        if(err) return err;
-        CcExpr* expr = NULL;
-        err = cc_parse_assignment_expr(p, constexpr_flags, &expr, CCQT_NONE);
-        if(err) return err;
-        if(expr) cc_release_expr(p, expr);
-        err = cc_expect_punct(p, CC_comma);
-        if(err) return err;
-        expr = NULL;
-        err = cc_parse_assignment_expr(p, constexpr_flags, &expr, CCQT_NONE);
-        if(err) return err;
-        if(expr) cc_release_expr(p, expr);
+        _Bool printf_ = sv_equals(arch, SV("printf"));
+        uint32_t indices[2] = {0};
+        for(unsigned i = 0; i < 2; i++){
+            err = cc_expect_punct(p, CC_comma);
+            if(err) return err;
+            CcExpr* expr = NULL;
+            err = cc_parse_assignment_expr(p, constexpr_flags, &expr, CCQT_NONE);
+            if(err) return err;
+            if(!expr) return cc_error(p, loc, "expected format argument index");
+            if(printf_){
+                int64_t index = 0;
+                SrcLoc index_loc = expr->loc;
+                err = ccqt_is_integer(expr->type)
+                    ? cc_eval_integer(&(CcEvalCtx){.parser=p}, expr, &index) : CC_NOT_CONSTANT_ERROR;
+                cc_release_expr(p, expr);
+                if(err && err != CC_NOT_CONSTANT_ERROR && err != CC_OVERFLOW_ERROR) return err;
+                if(err || index < (i ? 0 : 1) || (uint64_t)index > UINT32_MAX)
+                    return cc_error(p, index_loc, "format argument index must be an integer constant in range");
+                indices[i] = (uint32_t)index;
+            }
+            else cc_release_expr(p, expr);
+        }
         err = cc_expect_punct(p, CC_rparen);
         if(err) return err;
+        if(printf_){
+            CcPrintfFormat format = {.string_index=indices[0], .first_to_check=indices[1], .loc=loc};
+            err = cc_merge_printf_formats(p, &format, &attrs->printf_formats);
+            if(err) return err;
+        }
     }
     else {
         err = cc_peek(p, &tok);
@@ -9720,7 +9483,7 @@ cc_sysv_classify_type(const CcTargetConfig* tc, CcQualType type, uint32_t off, C
             // so follow GCC on Linux (ignore FAMs) and Clang on AppleOS (MEMORY).
             if(arr->is_incomplete) return tc->os == CC_OS_MACOS;
             uint32_t sz, elem_sz;
-            if(cc_type_sizeof_complete(tc, type, &sz) || off > 64 || sz > 64-off || cc_type_sizeof_complete(tc, arr->element, &elem_sz))
+            if(cc_type_sizeof_complete(tc, type, &sz, NULL) || off > 64 || sz > 64-off || cc_type_sizeof_complete(tc, arr->element, &elem_sz, NULL))
                 return 1;
             if(!elem_sz) return 0;
             for(size_t i = 0; i < arr->length; i++)
@@ -9864,7 +9627,7 @@ cc_arm64_homogeneous(const CcTargetConfig* tc, CcQualType type, CcArm64Aggregate
                 return 0;
             CcArm64Aggregate elem;
             uint32_t stride;
-            if(!cc_arm64_homogeneous(tc, arr->element, &elem) || cc_type_sizeof_complete(tc, arr->element, &stride))
+            if(!cc_arm64_homogeneous(tc, arr->element, &elem) || cc_type_sizeof_complete(tc, arr->element, &stride, NULL))
                 return 0;
             if(!arr->length) return 1;
             if(!stride)
@@ -9913,7 +9676,7 @@ cc_arm64_homogeneous(const CcTargetConfig* tc, CcQualType type, CcArm64Aggregate
             return 0;
     }
     uint32_t size;
-    if(cc_type_sizeof_complete(tc, type, &size))
+    if(cc_type_sizeof_complete(tc, type, &size, NULL))
         return 0;
     uint32_t n = out->hfa_count + out->hva_count;
     if(size != n*out->member_size) return 0;
@@ -10010,6 +9773,18 @@ cc_classify_record(CcParser* p, CcStruct* s, uint32_t natural_alignment){
 
 static
 int
+cc_field_layout_alignment(CcParser* p, CcField* field, _Bool packed, uint16_t pack_value, uint32_t* out){
+    int err = cc_alignof_as_uint(p, field->type, field->loc, out);
+    if(err) return err;
+    if(packed || field->packed) *out = 1;
+    else if(pack_value && *out > pack_value) *out = pack_value;
+    if(field->alignment > *out) *out = field->alignment;
+    field->layout_alignment = *out;
+    return 0;
+}
+
+static
+int
 cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
     int err = 0;
     uint32_t offset = 0;
@@ -10017,12 +9792,12 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
     uint32_t bitfield_offset = 0;        // bit offset within current storage unit
     uint32_t bitfield_storage_end = 0;   // byte offset of end of current storage unit
     uint32_t bitfield_storage_start = 0; // byte offset of start of current storage unit
-    CcQualType bitfield_type = {0};      // type of current bitfield run (for microslop ABI)
+    uint32_t bitfield_storage_size = 0; // allocation unit size for the MS ABI
     CcBitfieldABI bf_abi = cc_target(p)->bitfield_abi;
     for(uint32_t i = 0; i < s->field_count; i++){
         CcField* f = &s->fields[i];
         if(ccqt_is_vm(f->type))
-            return cc_error(p, f->loc, "member cannot have variably modified type");
+            return cc_type_error(p, f->loc, f->type, "member cannot have variably modified type");
         if(ccqt_kind(f->type) == CC_ARRAY){
             CcArray* arr = ccqt_as_array(f->type);
             if(arr->is_incomplete){
@@ -10033,10 +9808,8 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
                     bitfield_offset = 0;
                 }
                 uint32_t field_align;
-                err = cc_alignof_as_uint(p, f->type, f->loc, &field_align);
+                err = cc_field_layout_alignment(p, f, s->packed, pack_value, &field_align);
                 if(err) return err;
-                if(s->packed) field_align = 1;
-                else if(pack_value > 0 && field_align > pack_value) field_align = pack_value;
                 err = cc_align_to(p, f->loc, offset, field_align, &offset);
                 if(err) return err;
                 f->offset = offset;
@@ -10051,21 +9824,14 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
                 if(!f->name && i + 1 == s->field_count)
                     s->has_fam = 1;
                 else
-                    return cc_error(p, f->loc, "struct with flexible array member cannot be embedded");
+                    return cc_type_error(p, f->loc, f->type, "struct with flexible array member cannot be embedded");
             }
         }
         uint32_t field_size, field_align;
         err = cc_sizeof_as_uint(p, f->type, f->loc, &field_size);
         if(err) return err;
-        err = cc_alignof_as_uint(p, f->type, f->loc, &field_align);
+        err = cc_field_layout_alignment(p, f, s->packed, pack_value, &field_align);
         if(err) return err;
-        if(s->packed)
-            field_align = 1;
-        else if(pack_value > 0 && field_align > pack_value)
-            field_align = pack_value;
-        // An explicit _Alignas/aligned on the field overrides packing.
-        if(f->alignment > field_align)
-            field_align = f->alignment;
         enum {char_bit=8};
         if(f->is_bitfield){
             uint32_t bw = f->bitwidth;
@@ -10083,16 +9849,21 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
                     if(cc_target(p)->arch == CC_ARCH_ARM64 && zero_align > max_align)
                         max_align = zero_align;
                 }
+                else if(bitfield_offset > 0){
+                    err = cc_align_to(p, f->loc, offset, field_align, &offset);
+                    if(err) return err;
+                    if(field_align > max_align) max_align = field_align;
+                }
                 bitfield_offset = 0;
                 bitfield_storage_end = 0;
-                bitfield_type = (CcQualType){0};
+                bitfield_storage_size = 0;
                 f->offset = offset;
                 f->bitoffset = 0;
                 continue;
             }
             if(bf_abi == CC_BITFIELD_SYSV){
                 uint64_t pos = bitfield_offset ?  (uint64_t)bitfield_storage_start*8 + bitfield_offset : (uint64_t)offset*8;
-                _Bool packed = s->packed || pack_value > 0;
+                _Bool packed = s->packed || f->packed || pack_value > 0;
                 uint64_t align_bits = (uint64_t)field_align*8;
                 if(f->alignment) pos = (pos+align_bits-1) & ~(align_bits-1);
                 uint64_t start = packed ? pos/8*8 : pos/align_bits*align_bits;
@@ -10115,9 +9886,7 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
             }
             _Bool fits;
             uint32_t f_offset = 0, f_bitoffset = 0;
-            CcQualType ft = f->type;
-            while(ccqt_kind(ft) == CC_ENUM) ft = ccqt_as_enum(ft)->underlying;
-            fits = bitfield_type.bits == ft.bits && bitfield_offset + bw <= storage_bits;
+            fits = bitfield_storage_size == field_size && bitfield_offset + bw <= storage_bits;
             f_offset = bitfield_storage_start;
             f_bitoffset = bitfield_offset;
             if(fits){
@@ -10141,7 +9910,7 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
                 if(add_overflow(offset, field_size, &bitfield_storage_end))
                     return cc_error(p, f->loc, "object size exceeds 32-bit layout limit");
 
-                bitfield_type = ft;
+                bitfield_storage_size = field_size;
             }
             if(field_align > max_align)
                 max_align = field_align;
@@ -10152,7 +9921,7 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
             bitfield_offset = 0;
             bitfield_storage_end = 0;
 
-            bitfield_type = (CcQualType){0};
+            bitfield_storage_size = 0;
         }
         err = cc_align_to(p, f->loc, offset, field_align, &offset);
         if(err) return err;
@@ -10170,6 +9939,7 @@ cc_compute_struct_layout(CcParser* p, CcStruct* s, uint16_t pack_value){
     s->alignment = max_align;
     err = cc_align_to(p, s->loc, offset, max_align, &s->size);
     if(err) return err;
+    s->is_incomplete = 0;
     cc_classify_record(p, s, natural_alignment);
     return 0;
 }
@@ -10183,13 +9953,11 @@ cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value){
     for(uint32_t i = 0; i < u->field_count; i++){
         CcField* f = &u->fields[i];
         if(ccqt_is_vm(f->type))
-            return cc_error(p, f->loc, "member cannot have variably modified type");
-        if(ccqt_kind(f->type) == CC_ARRAY && ccqt_as_array(f->type)->is_incomplete){
+            return cc_type_error(p, f->loc, f->type, "member cannot have variably modified type");
+        if(ccqt_array_incomplete(f->type)){
             uint32_t field_align;
-            err = cc_alignof_as_uint(p, f->type, f->loc, &field_align);
+            err = cc_field_layout_alignment(p, f, u->packed, pack_value, &field_align);
             if(err) return err;
-            if(pack_value > 0 && field_align > pack_value)
-                field_align = pack_value;
             f->offset = 0;
             if(field_align > max_align) max_align = field_align;
             continue;
@@ -10198,21 +9966,15 @@ cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value){
         err = cc_sizeof_as_uint(p, f->type, f->loc, &field_size);
         if(err) return err;
         uint32_t field_align;
-        err = cc_alignof_as_uint(p, f->type, f->loc, &field_align);
+        err = cc_field_layout_alignment(p, f, u->packed, pack_value, &field_align);
         if(err) return err;
-        if(pack_value > 0 && field_align > pack_value)
-            field_align = pack_value;
-        // An explicit _Alignas/aligned on the field overrides packing.
-        if(f->alignment > field_align)
-            field_align = f->alignment;
         f->offset = 0;
         if(f->is_bitfield){
             f->bitoffset = 0;
-            if(field_size > max_size) max_size = field_size;
+            if((u->packed || f->packed || pack_value) && cc_target(p)->bitfield_abi == CC_BITFIELD_SYSV)
+                field_size = (f->bitwidth + 7)/8;
         }
-        else {
-            if(field_size > max_size) max_size = field_size;
-        }
+        if(field_size > max_size) max_size = field_size;
         if(field_align > max_align) max_align = field_align;
     }
     uint32_t natural_alignment = max_align;
@@ -10221,6 +9983,7 @@ cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value){
     u->alignment = max_align;
     err = cc_align_to(p, u->loc, max_size, max_align, &u->size);
     if(err) return err;
+    u->is_incomplete = 0;
     cc_classify_record(p, (CcStruct*)u, natural_alignment);
     return 0;
 }
@@ -10475,11 +10238,11 @@ static
 int
 cc_append_method(CcParser* p, CcStruct* s, CcFunc* func, SrcLoc loc){
     if(!func->type->param_count)
-        return cc_error(p, loc, "method requires a receiver of its enclosing type or a pointer to it");
+        return cc_types_error(p, loc, (CcQualType){.bits=(uintptr_t)func->type}, (CcQualType){.bits=(uintptr_t)s}, "method requires a receiver of its enclosing type or a pointer to it");
     CcQualType receiver = func->type->params[0];
     if(ccqt_kind(receiver) == CC_POINTER) receiver = ccqt_as_ptr(receiver)->pointee;
     if(_ccqt_to_type_ptr(receiver) != s)
-        return cc_error(p, loc, "method requires a receiver of its enclosing type or a pointer to it");
+        return cc_types_error(p, loc, func->type->params[0], (CcQualType){.bits=(uintptr_t)s}, "method requires a receiver of its enclosing type or a pointer to it");
     CcQualType type;
     CcField* found;
     int err = cc_lookup_member(p, s, func->name, NULL, &type, NULL, &found);
@@ -10571,7 +10334,7 @@ cc_lookup_field_offset(CcParser* p, CcQualType type, Atom name, uint64_t* out_of
         if(err) return CC_OOM_ERROR;
         path = owner;
     }
-    err = cc_field_path_resolve(cc_target(p), type, path, out_offset);
+    err = cc_field_path_offset(cc_target(p), type, path, out_offset);
     cc_field_path_free(cc_allocator(p), path);
     return err;
 }
@@ -10579,7 +10342,7 @@ cc_lookup_field_offset(CcParser* p, CcQualType type, Atom name, uint64_t* out_of
 static
 int
 cc_push_scalar(CcParser* p, CcExpr* value, CcQualType target, Marray(CcInitEntry)* buf, Marray(uint32_t)* path){
-    if(ccqt_kind(target) == CC_ARRAY && ccqt_as_array(target)->is_incomplete){
+    if(ccqt_array_incomplete(target)){
         if((value->kind == CC_EXPR_INIT_LIST || value->kind == CC_EXPR_COMPOUND_LITERAL) && !value->init_list->count){
             cc_release_expr(p, value);
             return 0;
@@ -10689,7 +10452,7 @@ cc_parse_desig_tail(CcParser* p, CcParseFlags flags, CcQualType* sub, Marray(uin
             CcField*_Nullable sub_fields;
             uint32_t sub_count;
             if(cc_get_fields(*sub, &sub_fields, &sub_count))
-                return cc_error(p, peek.loc, "member designator into non-struct/union type");
+                return cc_type_error(p, peek.loc, *sub, "member designator into non-struct/union type");
             CcQualType inner_type;
             uint32_t index = cc_find_field_index(p, sub_fields, sub_count, field_tok.ident.ident, &inner_type, path);
             if(index == UINT32_MAX) return CC_OOM_ERROR;
@@ -10700,7 +10463,7 @@ cc_parse_desig_tail(CcParser* p, CcParseFlags flags, CcQualType* sub, Marray(uin
         else if(peek.punct.punct == CC_lbracket){
             cc_next_token(p, &peek);
             if(ccqt_kind(*sub) != CC_ARRAY)
-                return cc_error(p, peek.loc, "index designator into non-array type");
+                return cc_type_error(p, peek.loc, *sub, "index designator into non-array type");
             CcArray* a = ccqt_as_array(*sub);
             CcExpr* idx_expr;
             err = cc_parse_assignment_expr(p, constexpr_flags, &idx_expr, CCQT_NONE);
@@ -10737,34 +10500,22 @@ cc_init_apply_value(CcParser* p, CcParseFlags flags, CcQualType field_type, CcEx
     CcQualType unqual = {.unqual=field_type.unqual};
     CcTypeKind ftk = ccqt_kind(unqual);
     if(ftk == CC_STRUCT || ftk == CC_UNION || ftk == CC_ARRAY || ftk == CC_VECTOR){
-        if(cc_implicit_convertible(p, value->type, unqual))
+        if(cc_implicit_convertible(cc_target(p), value->type, unqual))
             return cc_push_scalar(p, value, unqual, buf, path);
         return cc_parse_init(p, flags, field_type, 0, loc, buf, NULL, value, path);
     }
     return cc_push_scalar(p, value, field_type, buf, path);
 }
 
-static
-_Bool
-cc_string_array_element(CcParser* p, CcQualType element){
-    CcBasicTypeKind kind = ccqt_is_basic(element) ? ccqt_basic_kind(element) : CCBT_COUNT;
-    return kind == CCBT_char || kind == CCBT_signed_char || kind == CCBT_unsigned_char
-        || kind == cc_target(p)->wchar_type || kind == cc_target(p)->char16_type
-        || kind == cc_target(p)->char32_type;
-}
 
 static
 int
 cc_check_string_array(CcParser* p, CcQualType target_type, CcExpr* value){
     if(value->kind != CC_EXPR_VALUE || ccqt_kind(value->type) != CC_ARRAY || !value->text)
-        return cc_error(p, value->loc, "array initializer requires a string literal");
-    CcQualType target = ccqt_array_element(target_type);
-    CcQualType source = ccqt_array_element(value->type);
-    if(cc_types_compatible((CcQualType){.unqual=target.unqual}, (CcQualType){.unqual=source.unqual}, 0)) return 0;
-    _Bool source_char = ccqt_bt_eq(source, CCBT_char) || ccqt_bt_eq(source, CCBT_signed_char) || ccqt_bt_eq(source, CCBT_unsigned_char);
-    _Bool target_char = ccqt_bt_eq(target, CCBT_char) || ccqt_bt_eq(target, CCBT_signed_char) || ccqt_bt_eq(target, CCBT_unsigned_char);
-    if(source_char && target_char) return 0;
-    return cc_error(p, value->loc, "string literal has incompatible array element type");
+        return cc_types_error(p, value->loc, value->type, target_type, "array initializer requires a string literal");
+    if(!cc_string_array_elements_compatible(ccqt_array_element(target_type), ccqt_array_element(value->type)))
+        return cc_types_error(p, value->loc, value->type, target_type, "string literal has incompatible array element type");
+    return 0;
 }
 
 static
@@ -10784,7 +10535,7 @@ cc_parse_init_value(CcParser* p, CcParseFlags flags, CcQualType field_type, _Boo
         }
         if(ftk == CC_ARRAY && peek.type == CC_STRING_LITERAL){
             CcArray* arr = ccqt_as_array(field_type);
-            if(cc_string_array_element(p, arr->element)){
+            if(cc_string_array_element(cc_target(p), arr->element)){
                 CcExpr* v;
                 err = cc_parse_assignment_expr(p, flags, &v, CCQT_NONE);
                 if(err) return err;
@@ -10881,7 +10632,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
     case CC_STRUCT: {
         CcStruct* s = ccqt_as_struct(unqual);
         if(s->is_incomplete)
-            return cc_error(p, loc, "initializer for incomplete struct type");
+            return cc_type_error(p, loc, target, "initializer for incomplete struct type");
         uint32_t fi = 0;
         for(;;){
             path->count = path_depth;
@@ -10984,7 +10735,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
     case CC_UNION: {
         CcUnion* u = ccqt_as_union(unqual);
         if(u->is_incomplete)
-            return cc_error(p, loc, "initializer for incomplete union type");
+            return cc_type_error(p, loc, target, "initializer for incomplete union type");
         CcToken peek;
         err = cc_peek(p, &peek);
         if(err) return err;
@@ -11150,9 +10901,9 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                     uint32_t n = (uint32_t)packed.embed.bytes.n_bytes;
                     if(!arr->is_incomplete && n > arr->length-ai) n = (uint32_t)(arr->length-ai);
                     uint32_t next, size;
-                    if(add_overflow(ai, n, &next) || cc_layout_array_size(elem_size, next, &size))
+                    if(add_overflow(ai, n, &next) || mul_overflow(elem_size, next, &size))
                         return cc_error(p, packed.loc, "object size exceeds 32-bit layout limit");
-                    CcArray* type = cc_intern_array(&p->type_cache, cc_allocator(p), elem, n, 0, 0);
+                    CcArray* type = cc_intern_array(&p->type_cache, cc_allocator(p), elem, n, 0);
                     if(!type) return CC_OOM_ERROR;
                     CcExpr* blob = cc_make_expr(p, CC_EXPR_BLOB, packed.loc, (CcQualType){.bits=(uintptr_t)type}, 0);
                     if(!blob) return CC_OOM_ERROR;
@@ -11247,7 +10998,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                     if(!arr->is_incomplete && idx >= arr->length)
                         return cc_error(p, desig_loc, "array index %u out of bounds (size %zu)", idx, arr->length);
                     uint32_t size;
-                    if(add_overflow(idx, 1u, &ai) || cc_layout_array_size(elem_size, ai, &size))
+                    if(add_overflow(idx, 1u, &ai) || mul_overflow(elem_size, ai, &size))
                         return cc_error(p, desig_loc, "object size exceeds 32-bit layout limit");
                     if(ai > max_ai) max_ai = ai;
                     CcQualType sub = elem;
@@ -11280,7 +11031,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                 break;
             }
             uint32_t size, next;
-            if(add_overflow(ai, 1u, &next) || cc_layout_array_size(elem_size, next, &size))
+            if(add_overflow(ai, 1u, &next) || mul_overflow(elem_size, next, &size))
                 return cc_error(p, peek.loc, "object size exceeds 32-bit layout limit");
             if(ma_push(uint32_t)(path, cc_allocator(p), ai)) return CC_OOM_ERROR;
             err = cc_parse_init_value(p, flags, elem, 1, loc, buf, path);
@@ -11308,9 +11059,28 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
     case CC_BLOCK_POINTER:
     case CC_FUNCTION:
     case CC_SLICE:
-        return cc_error(p, loc, "cannot initialize type with initializer list");
+        return cc_type_error(p, loc, target, "cannot initialize type with initializer list");
     }
     return 0;
+}
+
+static
+int
+cc_complete_array_type(CcParser* p, CcQualType type, size_t length, CcQualType* out){
+    if(ccqt_raw_kind(type) == CC_ALIGNED){
+        CcQualType underlying;
+        int err = cc_complete_array_type(p, ccqt_unaligned(type), length, &underlying);
+        if(err) return err;
+        CcAligned* aligned = cc_intern_aligned(&p->type_cache, cc_allocator(p), underlying, ccqt_as_aligned(type)->alignment);
+        if(!aligned) return CC_OOM_ERROR;
+        *out = (CcQualType){.bits=(uintptr_t)aligned | underlying.quals};
+        return 0;
+    }
+    CcArray completed = *ccqt_as_array(type);
+    completed.length = length;
+    completed.is_incomplete = 0;
+    *out = cc_intern_qualtype(p, (CcQualType){.bits=(uintptr_t)&completed | type.quals});
+    return out->bits ? 0 : CC_OOM_ERROR;
 }
 
 static
@@ -11320,11 +11090,13 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
     int err = cc_next_token(p, &brace);
     if(err) return err;
     SrcLoc loc = brace.loc;
+    if(!cc_type_is_initializable(target_type))
+        return cc_type_error(p, loc, target_type, "initializer requires a complete object type or an array of unknown bound");
     CcInitList* list = NULL;
     CcQualType resolved_type = target_type;
     CcTypeKind tk = ccqt_kind(target_type);
     CcExpr* first_value = NULL;
-    if(tk == CC_ARRAY && cc_string_array_element(p, ccqt_array_element(target_type))){
+    if(tk == CC_ARRAY && cc_string_array_element(cc_target(p), ccqt_array_element(target_type))){
         CcToken peek;
         err = cc_peek(p, &peek);
         if(err) return err;
@@ -11341,9 +11113,8 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
             CcArray* target = ccqt_as_array(target_type);
             CcArray* source = ccqt_as_array(value->type);
             if(target->is_incomplete){
-                CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), target->element, source->length, target->is_static, 0);
-                if(!array) return CC_OOM_ERROR;
-                resolved_type = (CcQualType){.bits = (uintptr_t)array | target_type.quals};
+                err = cc_complete_array_type(p, target_type, source->length, &resolved_type);
+                if(err) return err;
             }
             else if(target->length < source->length - 1)
                 return cc_error(p, value->loc, "initializer string too long for array");
@@ -11432,20 +11203,8 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
         if(tk == CC_ARRAY){
             CcArray* arr = ccqt_as_array(target_type);
             if(arr->is_incomplete){
-                CcArray* new_arr = cc_intern_array(&p->type_cache, cc_allocator(p), arr->element, max_index, arr->is_static, 0);
-                if(!new_arr){
-                    err = CC_OOM_ERROR;
-                    goto release_list;
-                }
-                resolved_type = (CcQualType){.bits = (uintptr_t)new_arr | target_type.quals};
-                if(ccqt_raw_kind(target_type) == CC_ALIGNED){
-                    CcAligned* aligned = cc_intern_aligned(&p->type_cache, cc_allocator(p), resolved_type, ccqt_as_aligned(target_type)->alignment);
-                    if(!aligned){
-                        err = CC_OOM_ERROR;
-                        goto release_list;
-                    }
-                    resolved_type = (CcQualType){.bits=(uintptr_t)aligned | target_type.quals};
-                }
+                err = cc_complete_array_type(p, target_type, max_index, &resolved_type);
+                if(err) goto release_list;
             }
         }
     }
@@ -11453,11 +11212,11 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
     for(uint32_t i = 0; i < list->count; i++){
         CcInitEntry* entry = &list->entries[i];
         uint64_t offset;
-        err = cc_field_path_resolve(cc_target(p), resolved_type, entry->path, &offset);
+        err = cc_field_path_offset(cc_target(p), resolved_type, entry->path, &offset);
         if(err) goto release_list;
         CcQualType sub = resolved_type;
         for(uint32_t j = 0, n = cc_field_path_count(entry->path);; j++){
-            if(ccqt_kind(sub) == CC_ARRAY && ccqt_as_array(sub)->is_incomplete){
+            if(ccqt_array_incomplete(sub)){
                 // Empty braces are permitted, but no storage is allocated
                 // beyond the declared struct for flexible member contents.
                 if(j < n || (entry->value && !(entry->value->kind == CC_EXPR_INIT_LIST && !entry->value->init_list->count))){
@@ -11534,13 +11293,14 @@ cc_check_anon_member_duplicates(CcParser* p, CcField* existing, uint32_t existin
 
 static
 int
-cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_union, CcQualType* base_type){
+cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_union, _Bool member, CcQualType* base_type){
     CcParseFlags constexpr_flags = flags;
     constexpr_flags.vc = CC_CONSTEXPR_VALUE;
     constexpr_flags.unevaluated = 1;
     int err = 0;
     CcToken tok;
-    CcAttributes attrs = p->attributes;
+    CcAttributes declaration_attrs = p->attributes;
+    CcAttributes attrs = declaration_attrs;
     cc_clear_attributes(&p->attributes);
     err = cc_parse_attributes(p, flags, &attrs);
     if(err) return err;
@@ -11634,7 +11394,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
             }
             CcAttributes member_attrs = {0};
             cc_clear_attributes(&p->attributes);
-            CcDeclBase member_base = {0};
+            CcDeclBase member_base = {.member=1};
             err = cc_parse_declaration_specifier(p, flags, &member_base);
             if(err) goto struct_err;
             member_attrs = p->attributes;
@@ -11668,11 +11428,14 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                         continue;
                     err = cc_check_anon_member_duplicates(p, fields_arr.data, (uint32_t)fields_arr.count, member_base.type, tok.loc);
                     if(err) goto struct_err;
-                    err = ma_push(CcField)(&fields_arr, cc_allocator(p), ((CcField){
+                    CcField field = {
                         .type = member_base.type,
                         .name = NULL, // anonymous
                         .loc = tok.loc,
-                    }));
+                    };
+                    err = cc_apply_field_attributes(p, &member_base, &member_attrs, &field);
+                    if(err) goto struct_err;
+                    err = ma_push(CcField)(&fields_arr, cc_allocator(p), field);
                     if(err){
                         err = CC_OOM_ERROR;
                         goto struct_err;
@@ -11685,7 +11448,10 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                 continue;
             }
             // Parse member declarators: name [: bitwidth] [, name [: bitwidth]]* ;
+            CcAttributes member_base_attrs = member_attrs;
             for(;;){
+                member_attrs = member_base_attrs;
+                p->attributes = member_attrs;
                 Atom member_name = NULL;
                 CcQualType member_type;
                 uint64_t bitwidth = 0;
@@ -11694,43 +11460,8 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                 err = cc_peek(p, &tok);
                 if(err) goto struct_err;
                 if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ':'){
-                    // Anonymous bitfield
-                    err = cc_next_token(p, &tok); // consume ':'
-                    if(err) goto struct_err;
-                    CcExpr* bw_expr = NULL;
-                    err = cc_parse_assignment_expr(p, constexpr_flags, &bw_expr, CCQT_NONE);
-                    if(err) goto struct_err;
-                    if(!bw_expr){
-                        err = cc_error(p, tok.loc, "expected constant expression for bitfield width");
-                        goto struct_err;
-                    }
-                    int64_t bw_i;
-                    err = cc_eval_integer(&(CcEvalCtx){p}, bw_expr, &bw_i);
-                    cc_release_expr(p, bw_expr);
-                    if(err){
-                        if(err == CC_NOT_CONSTANT_ERROR)
-                            err = cc_error(p, tok.loc, "bitfield width must be a constant integral expression");
-                        goto struct_err;
-                    }
-                    bitwidth = (uint64_t)bw_i;
+                    // Anonymous bitfields omit only the declarator.
                     member_type = member_base.type;
-                    is_bitfield = 1;
-                    if(member_type.is_atomic){
-                        err = cc_error(p, tok.loc, "atomic bitfields are not supported");
-                        goto struct_err;
-                    }
-                    if(!ccqt_is_integer(member_type)){
-                        err = cc_error(p, tok.loc, "bitfield must have integer or enum type");
-                        goto struct_err;
-                    }
-                    uint32_t type_size;
-                    err = cc_sizeof_as_uint(p, member_type, tok.loc, &type_size);
-                    if(err) goto struct_err;
-                    uint32_t max_width = ccqt_is_bool(member_type) ? 1 : type_size * 8;
-                    if(bitwidth > max_width){
-                        err = cc_error(p, tok.loc, "bitfield width (%llu) exceeds size of type (%u bits)", (unsigned long long)bitwidth, max_width);
-                        goto struct_err;
-                    }
                 }
                 else {
                     // Parse declarator
@@ -11743,15 +11474,28 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                         ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
                         goto struct_err;
                     }
+                    member_attrs = p->attributes;
+                    cc_clear_attributes(&p->attributes);
                     *tail = member_base.type;
                     member_type = cc_intern_qualtype(p, head);
-                    err = cc_check_derived_type(p, member_type, member_base.loc);
+                    err = member_type.bits ? cc_check_derived_type(p, member_type, member_base.loc) : CC_OOM_ERROR;
                     if(err){
                         ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
                         goto struct_err;
                     }
                     // Method: member type is a function type (not pointer to function)
                     if(ccqt_kind(member_type) == CC_FUNCTION){
+                        err = cc_check_decl_alignment(p, &member_base, member_type, 0);
+                        if(err){
+                            ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
+                            goto struct_err;
+                        }
+                        err = cc_parse_attributes(p, flags, &member_attrs);
+                        if(!err) err = cc_apply_vector_type(p, &member_type, member_attrs.vector_size, member_base.loc);
+                        if(err){
+                            ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
+                            goto struct_err;
+                        }
                         if(!member_name){
                             ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
                             err = cc_error(p, tok.loc, "expected method name");
@@ -11800,14 +11544,13 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                                 goto struct_err;
                             }
                             CcQualType previous_type = {.bits=(uintptr_t)func->type};
-                            CcTypePair owners = {func->_Self_type, p->current_tag_type, NULL};
                             // Matching file-scope tags across TUs can denote the
                             // same opaque receiver even when only one TU has its layout.
                             _Bool owner_matches = func->_Self_type.bits
                                 && (ccqt_as_struct(func->_Self_type)->is_incomplete
                                     || record->is_incomplete
-                                    || cc_types_compatible(func->_Self_type, p->current_tag_type, 0));
-                            if(!owner_matches || !cc_types_match(previous_type, member_type, 0, &owners, (CcTypesMatchFlags){0})){
+                                    || cc_types_compatible(func->_Self_type, p->current_tag_type));
+                            if(!owner_matches || !cc_method_types_compatible(previous_type, member_type, func->_Self_type, p->current_tag_type)){
                                 err = cc_error(p, name_loc, "conflicting declaration of method '%s'", member_name->data);
                                 goto struct_err;
                             }
@@ -11887,6 +11630,8 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                         // Parse optional attributes after method
                         err = cc_parse_attributes(p, flags, &member_attrs);
                         if(err) goto struct_err;
+                        err = cc_apply_printf_formats(p, func, member_attrs.printf_formats);
+                        if(err) goto struct_err;
                         cc_clear_attributes(&p->attributes);
                         if(cc_has_field(p, fields_arr.data, (uint32_t)fields_arr.count, func->name)){
                             err = cc_error(p, tok.loc, "duplicate member '%s'", func->name->data);
@@ -11906,71 +11651,69 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                         break; // fall through to ';' expect
                     }
                     ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
-
-                    // Check for bitfield
-                    err = cc_peek(p, &tok);
+                }
+                // Named and unnamed bitfields use the same width/type rules.
+                err = cc_peek(p, &tok);
+                if(err) goto struct_err;
+                if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ':'){
+                    err = cc_next_token(p, &tok); // consume ':'
                     if(err) goto struct_err;
-                    if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ':'){
-                        err = cc_next_token(p, &tok); // consume ':'
-                        if(err) goto struct_err;
-                        CcExpr* bw_expr = NULL;
-                        err = cc_parse_assignment_expr(p, constexpr_flags, &bw_expr, CCQT_NONE);
-                        if(err) goto struct_err;
-                        if(!bw_expr){
-                            err = cc_error(p, tok.loc, "expected constant expression for bitfield width");
-                            goto struct_err;
-                        }
-                        int64_t bw_i;
-                        err = cc_eval_integer(&(CcEvalCtx){p}, bw_expr, &bw_i);
-                        cc_release_expr(p, bw_expr);
-                        if(err){
-                            if(err == CC_NOT_CONSTANT_ERROR)
-                                err = cc_error(p, tok.loc, "bitfield width must be a constant integral expression");
-                            goto struct_err;
-                        }
-                        bitwidth = (uint64_t)bw_i;
-                        is_bitfield = 1;
-                        if(member_type.is_atomic){
-                            err = cc_error(p, tok.loc, "atomic bitfields are not supported");
-                            goto struct_err;
-                        }
-                        if(!ccqt_is_integer(member_type)){
-                            err = cc_error(p, tok.loc, "bitfield must have integer or enum type");
-                            goto struct_err;
-                        }
-                        uint32_t type_size;
-                        err = cc_sizeof_as_uint(p, member_type, tok.loc, &type_size);
-                        if(err) goto struct_err;
-                        if(bitwidth == 0){
-                            err = cc_error(p, tok.loc, "named bitfield '%s' cannot have zero width", member_name->data);
-                            goto struct_err;
-                        }
-                        uint32_t max_width = ccqt_is_bool(member_type) ? 1 : type_size * 8;
-                        if(bitwidth > max_width){
-                            err = cc_error(p, tok.loc, "bitfield width (%llu) exceeds size of type (%u bits)", (unsigned long long)bitwidth, max_width);
-                            goto struct_err;
-                        }
+                    CcExpr* bw_expr = NULL;
+                    err = cc_parse_assignment_expr(p, constexpr_flags, &bw_expr, CCQT_NONE);
+                    if(err) goto struct_err;
+                    if(!bw_expr){
+                        err = cc_error(p, tok.loc, "expected constant expression for bitfield width");
+                        goto struct_err;
+                    }
+                    int64_t bw_i;
+                    err = cc_eval_integer(&(CcEvalCtx){p}, bw_expr, &bw_i);
+                    cc_release_expr(p, bw_expr);
+                    if(err){
+                        if(err == CC_NOT_CONSTANT_ERROR)
+                            err = cc_error(p, tok.loc, "bitfield width must be a constant integral expression");
+                        goto struct_err;
+                    }
+                    bitwidth = (uint64_t)bw_i;
+                    is_bitfield = 1;
+                    if(member_type.is_atomic){
+                        err = cc_type_error(p, tok.loc, member_type, "atomic bitfields are not supported");
+                        goto struct_err;
+                    }
+                    if(!ccqt_is_integer(member_type)){
+                        err = cc_type_error(p, tok.loc, member_type, "bitfield must have integer or enum type");
+                        goto struct_err;
+                    }
+                    uint32_t type_size;
+                    err = cc_sizeof_as_uint(p, member_type, tok.loc, &type_size);
+                    if(err) goto struct_err;
+                    if(member_name && bitwidth == 0){
+                        err = cc_error(p, tok.loc, "named bitfield '%s' cannot have zero width", member_name->data);
+                        goto struct_err;
+                    }
+                    uint32_t max_width = ccqt_is_bool(member_type) ? 1 : type_size * 8;
+                    if(bitwidth > max_width){
+                        err = cc_type_error(p, tok.loc, member_type, "bitfield width (%llu) exceeds size of type (%u bits)", (unsigned long long)bitwidth, max_width);
+                        goto struct_err;
                     }
                 }
                 // Parse optional attributes after the declarator
                 err = cc_parse_attributes(p, flags, &member_attrs);
                 if(err) goto struct_err;
                 cc_clear_attributes(&p->attributes);
-                // Create field
-                err = cc_check_decl_alignment(p, &member_base, member_type);
-                if(err) goto struct_err;
                 if(member_name && cc_has_field(p, fields_arr.data, (uint32_t)fields_arr.count, member_name)){
                     err = cc_error(p, tok.loc, "duplicate member '%s'", member_name->data);
                     goto struct_err;
                 }
-                err = ma_push(CcField)(&fields_arr, cc_allocator(p), ((CcField){
+                CcField field = {
                     .type = member_type,
                     .name = member_name,
                     .bitwidth = (uint32_t)bitwidth,
                     .is_bitfield = is_bitfield,
-                    .alignment = member_base.alignment,
                     .loc = tok.loc,
-                }));
+                };
+                err = cc_apply_field_attributes(p, &member_base, &member_attrs, &field);
+                if(err) goto struct_err;
+                err = ma_push(CcField)(&fields_arr, cc_allocator(p), field);
                 if(err){
                     err = CC_OOM_ERROR;
                     goto struct_err;
@@ -12015,7 +11758,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                 .alignment = attrs.has_aligned ? attrs.aligned : 0};
             err = is_union ? cc_compute_union_layout(p, (CcUnion*)&candidate, p->pragma_pack)
                 : cc_compute_struct_layout(p, &candidate, p->pragma_pack);
-            if(!err && !cc_record_members_match(existing, &candidate, 0, NULL, 1))
+            if(!err && !cc_record_members_match(existing, &candidate, 1))
                 err = cc_error(p, loc, "Redefinition of %s '%s'", is_union ? "union" : "struct", name->data);
             goto struct_err;
         }
@@ -12032,6 +11775,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
             }
             *s = (CcStruct){
                 .kind = CC_STRUCT,
+                .is_incomplete = 1,
                 .name = name,
                 .loc = loc,
                 .field_count = field_count,
@@ -12059,10 +11803,12 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
             }
             *u = (CcUnion){
                 .kind = CC_UNION,
+                .is_incomplete = 1,
                 .name = name,
                 .loc = loc,
                 .field_count = field_count,
                 .fields = flat_fields,
+                .packed = attrs.packed,
                 .methods.data = u->methods.data,
                 .methods.count = u->methods.count,
                 .methods.capacity = u->methods.capacity,
@@ -12087,12 +11833,14 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
         return err;
     }
 
-    // No body — just a reference: struct/union name
+    p->attributes = declaration_attrs;
     if(!name)
         return cc_error(p, loc, "expected %s name or '{'", !is_union ? "struct" : "union");
 
+    _Bool standalone = !member && tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_semi;
+    CcScope* tag_scope = standalone ? cc_scope_declarations(p->current) : p->current;
     if(!is_union){
-        CcStruct* s = cc_scope_lookup_struct_tag(p->current, name, CC_SCOPE_WALK_CHAIN);
+        CcStruct* s = cc_scope_lookup_struct_tag(tag_scope, name, standalone ? CC_SCOPE_NO_WALK : CC_SCOPE_WALK_CHAIN);
         if(!s){
             // Forward declaration — create incomplete struct
             s = Allocator_zalloc(cc_allocator(p), sizeof *s);
@@ -12109,7 +11857,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
         *base_type = (CcQualType){.bits = (uintptr_t)s};
     }
     else {
-        CcUnion* u = cc_scope_lookup_union_tag(p->current, name, CC_SCOPE_WALK_CHAIN);
+        CcUnion* u = cc_scope_lookup_union_tag(tag_scope, name, standalone ? CC_SCOPE_NO_WALK : CC_SCOPE_WALK_CHAIN);
         if(!u){
             u = Allocator_zalloc(cc_allocator(p), sizeof *u);
             if(!u) return CC_OOM_ERROR;
@@ -12127,30 +11875,25 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
     return 0;
 }
 
+
+
 static
 _Bool
-cc_enum_negative(CcParser* p, CcQualType type, CiUint128 bits){
-    return !ccqt_is_unsigned(type, !cc_target(p)->char_is_signed)
+cc_enumerator_value_is_negative(const CcTargetConfig* target, CcQualType type, CiUint128 bits){
+    return !ccqt_is_unsigned(type, !target->char_is_signed)
         && (ci_uint128_hi(bits) >> 63);
 }
 
 static
 _Bool
-cc_enum_value_fits(CcParser* p, CcQualType type, CiUint128 bits, _Bool negative){
-    while(ccqt_kind(type) == CC_ENUM) type = ccqt_as_enum(type)->underlying;
+cc_enumerator_value_fits(const CcTargetConfig* target, CcQualType type, CiUint128 bits, _Bool negative){
+    type = ccqt_enum_underlying(type);
     if(ccqt_bt_eq(type, CCBT_bool))
         return !negative && ci_uint128_le(bits, ci_uint128_from_uint64(1));
-    uint32_t width = cc_target(p)->sizeof_[ccqt_basic_kind(type)] * 8;
-    _Bool unsigned_ = ccqt_is_unsigned(type, !cc_target(p)->char_is_signed);
-    CiUint128 one = ci_uint128_from_uint64(1);
-    if(negative){
-        if(unsigned_) return 0;
-        CiUint128 min = ci_uint128_sub(ci_uint128_from_uint64(0), ci_uint128_shl(one, width-1));
-        return ci_uint128_ge(bits, min);
-    }
-    CiUint128 max = unsigned_ && width == 128 ? ci_uint128_not(ci_uint128_from_uint64(0))
-        : ci_uint128_sub(ci_uint128_shl(one, width - !unsigned_), one);
-    return ci_uint128_le(bits, max);
+    uint32_t width = target->sizeof_[ccqt_basic_kind(type)] * 8;
+    _Bool unsigned_ = ccqt_is_unsigned(type, !target->char_is_signed);
+    CiUint128 magnitude = negative ? ci_uint128_sub(ci_uint128_from_uint64(0), bits) : bits;
+    return ci_uint128_magnitude_fits_integer(magnitude, negative, width, unsigned_);
 }
 
 static const CcBasicTypeKind cc_enum_signed_types[] = {
@@ -12168,9 +11911,9 @@ cc_finalize_enum(CcParser* p, CcEnum* e, _Bool fixed, _Bool packed){
     _Bool all_int = 1, negative = 0;
     for(size_t i = 0; i < e->enumerator_count; i++){
         CcEnumerator* en = e->enumerators[i];
-        _Bool neg = cc_enum_negative(p, en->type, en->value);
+        _Bool neg = cc_enumerator_value_is_negative(cc_target(p), en->type, en->value);
         negative |= neg;
-        all_int &= cc_enum_value_fits(p, ccqt_basic(CCBT_int), en->value, neg);
+        all_int &= cc_enumerator_value_fits(cc_target(p), ccqt_basic(CCBT_int), en->value, neg);
     }
     CcQualType underlying = CCQT_NONE;
     if(all_int && !packed) underlying = ccqt_basic(CCBT_int);
@@ -12183,7 +11926,7 @@ cc_finalize_enum(CcParser* p, CcEnum* e, _Bool fixed, _Bool packed){
             _Bool fits = 1;
             for(size_t j = 0; j < e->enumerator_count; j++){
                 CcEnumerator* en = e->enumerators[j];
-                if(!cc_enum_value_fits(p, candidate, en->value, cc_enum_negative(p, en->type, en->value))){
+                if(!cc_enumerator_value_fits(cc_target(p), candidate, en->value, cc_enumerator_value_is_negative(cc_target(p), en->type, en->value))){
                     fits = 0;
                     break;
                 }
@@ -12204,7 +11947,7 @@ cc_finalize_enum(CcParser* p, CcEnum* e, _Bool fixed, _Bool packed){
 
 static
 int
-cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type){
+cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool member, CcQualType* base_type){
     CcParseFlags constexpr_flags = flags;
     constexpr_flags.vc = CC_CONSTEXPR_VALUE;
     constexpr_flags.unevaluated = 1;
@@ -12230,7 +11973,18 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
     // Optional fixed underlying type: enum name : int { ... }
     err = cc_peek(p, &tok);
     if(err) return err;
-    if(tok.type == CC_PUNCTUATOR && tok.punct.punct == ':'){
+    _Bool underlying_colon = tok.type == CC_PUNCTUATOR && tok.punct.punct == ':';
+    if(underlying_colon && (member || flags.generic_association)){
+        CcToken next;
+        err = cc_next_token(p, &tok);
+        if(err) return err;
+        err = cc_peek(p, &next);
+        if(err) return err;
+        underlying_colon = cc_is_type_start(p, &next);
+        err = cc_unget(p, &tok);
+        if(err) return err;
+    }
+    if(underlying_colon){
         err = cc_next_token(p, &tok); // consume ':'
         if(err) return err;
         has_fixed_underlying = 1;
@@ -12239,7 +11993,7 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
         if(err) return err;
         CcSpecifier type_spec = ub.spec;
         type_spec.sp_const = type_spec.sp_volatile = type_spec.sp_atomic = 0;
-        if(type_spec.sp_typebits != type_spec.bits)
+        if(ub.has_alignas || type_spec.sp_typebits != type_spec.bits)
             return cc_error(p, loc, "Underlying type does not allow non-type specifiers");
         if(ub.spec.sp_infer_type)
             return cc_error(p, loc, "__auto_type not allowed as underlying type of enum");
@@ -12248,7 +12002,7 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
         err = cc_resolve_specifiers(p, &ub);
         if(err) return err;
         if(!ccqt_is_basic(ub.type) || !ccbt_is_integer(ccqt_basic_kind(ub.type)))
-            return cc_error(p, loc, "enum underlying type must be an integer type");
+            return cc_type_error(p, loc, ub.type, "enum underlying type must be an integer type");
         // An aligned typedef selects the integer representation, but its
         // alignment override does not become part of the enum's type.
         underlying = (CcQualType){.unqual=ccqt_unaligned(ub.type).unqual};
@@ -12270,7 +12024,7 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
                 if(redefining && !existing->has_fixed_underlying && has_fixed_underlying)
                     return cc_error(p, loc, "Redefinition of enum '%s' with fixed underlying type", name->data);
                 if(existing->has_fixed_underlying && has_fixed_underlying && existing->underlying.bits != underlying.bits)
-                    return cc_error(p, loc, "Redefinition of enum '%s' with differing underlying types", name->data);
+                    return cc_types_error(p, loc, existing->underlying, underlying, "Redefinition of enum '%s' with differing underlying types", name->data);
                 if(existing->has_fixed_underlying){
                     underlying = existing->underlying;
                     has_fixed_underlying = 1;
@@ -12368,10 +12122,10 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
                 if(!err){
                     if(!ccqt_is_integer(value->type)) err = CC_NOT_CONSTANT_ERROR;
                     else {
-                        next_value = cc_eval_u128(p, value);
+                        next_value = cc_eval_u128(cc_target(p), value);
                         next_type = value->type;
-                        if(!has_fixed_underlying && cc_enum_value_fits(p, ccqt_basic(CCBT_int), next_value,
-                            cc_enum_negative(p, next_type, next_value))) next_type = ccqt_basic(CCBT_int);
+                        if(!has_fixed_underlying && cc_enumerator_value_fits(cc_target(p), ccqt_basic(CCBT_int), next_value,
+                            cc_enumerator_value_is_negative(cc_target(p), next_type, next_value))) next_type = ccqt_basic(CCBT_int);
                     }
                     cc_release_expr(p, value);
                 }
@@ -12389,8 +12143,8 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
                     : "implicit enumerator value exceeds supported integer range");
                 goto enum_err;
             }
-            _Bool negative = cc_enum_negative(p, next_type, next_value);
-            if(has_fixed_underlying && !cc_enum_value_fits(p, underlying, next_value, negative)){
+            _Bool negative = cc_enumerator_value_is_negative(cc_target(p), next_type, next_value);
+            if(has_fixed_underlying && !cc_enumerator_value_fits(cc_target(p), underlying, next_value, negative)){
                 err = cc_error(p, eloc, ccqt_bt_eq(underlying, CCBT_bool)
                     ? "enumerator value is out of range for bool underlying type"
                     : "enumerator value is out of range for underlying type");
@@ -12431,14 +12185,14 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
             next_overflow = !negative && ci_uint128_eq(next_value, ci_uint128_not(ci_uint128_from_uint64(0)));
             next_value = ci_uint128_add(next_value, ci_uint128_from_uint64(1));
             _Bool next_negative = negative && ci_uint128_nonzero(next_value);
-            if(!next_overflow && !cc_enum_value_fits(p, next_type, next_value, next_negative)){
+            if(!next_overflow && !cc_enumerator_value_fits(cc_target(p), next_type, next_value, next_negative)){
                 next_overflow = 1;
                 if(!has_fixed_underlying){
                     _Bool unsigned_ = ccqt_is_unsigned(next_type, !cc_target(p)->char_is_signed);
                     const CcBasicTypeKind* types = unsigned_ ? cc_enum_unsigned_types : cc_enum_signed_types;
                     for(size_t i = 0; i < sizeof cc_enum_signed_types / sizeof *cc_enum_signed_types; i++){
                         CcQualType candidate = ccqt_basic(types[i]);
-                        if(cc_enum_value_fits(p, candidate, next_value, next_negative)){
+                        if(cc_enumerator_value_fits(cc_target(p), candidate, next_value, next_negative)){
                             next_type = candidate;
                             next_overflow = 0;
                             break;
@@ -12487,11 +12241,12 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
     // No body — just a reference: enum name
     if(!name)
         return cc_error(p, loc, "expected enum name or '{'");
-    CcEnum* e = cc_scope_lookup_enum_tag(has_fixed_underlying ? cc_scope_declarations(p->current) : p->current, name,
-        has_fixed_underlying ? CC_SCOPE_NO_WALK : CC_SCOPE_WALK_CHAIN);
+    _Bool local_tag = has_fixed_underlying || (tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_semi);
+    CcEnum* e = cc_scope_lookup_enum_tag(local_tag ? cc_scope_declarations(p->current) : p->current, name,
+        local_tag ? CC_SCOPE_NO_WALK : CC_SCOPE_WALK_CHAIN);
     if(e && has_fixed_underlying){
         if(e->has_fixed_underlying && e->underlying.bits != underlying.bits)
-            return cc_error(p, loc, "Redefinition of enum '%s' with differing underlying types", name->data);
+            return cc_types_error(p, loc, e->underlying, underlying, "Redefinition of enum '%s' with differing underlying types", name->data);
         if(e->has_definition && !e->has_fixed_underlying)
             return cc_error(p, loc, "Redefinition of enum '%s' with fixed underlying type", name->data);
         e->underlying = underlying;
@@ -12520,8 +12275,6 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType* base_type
 static
 int
 cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base){
-    CcParseFlags runtime_flags = flags;
-    runtime_flags.vc = CC_RUNTIME_VALUE;
     CcParseFlags constexpr_flags = flags;
     constexpr_flags.vc = CC_CONSTEXPR_VALUE;
     constexpr_flags.unevaluated = 1;
@@ -12679,7 +12432,7 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_typebits)
                             return cc_error(p, tok.loc, "enum with other type specifiers");
-                        err = cc_parse_enum(p, flags, tok.loc, base_type);
+                        err = cc_parse_enum(p, flags, tok.loc, base->member, base_type);
                         if(err) return err;
                         continue;
                     }
@@ -12720,7 +12473,7 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_typebits)
                             return cc_error(p, tok.loc, "union with other type specifiers");
-                        err = cc_parse_struct_or_union(p, flags, tok.loc, 1, base_type);
+                        err = cc_parse_struct_or_union(p, flags, tok.loc, 1, base->member, base_type);
                         if(err) return err;
                         continue;
                     }
@@ -12757,14 +12510,21 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                         spec->sp_inline = 1;
                         continue;
                     case CC_signed:
+                    case CC_unsigned: {
+                        _Bool uns = tok.kw.kw == CC_unsigned;
+                        const char* spelling = uns ? "unsigned" : "signed";
                         if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
-                        if(spec->sp_unsigned)
-                            return cc_error(p, tok.loc, "signed after unsigned");
+                        if(uns ? spec->sp_unsigned : spec->sp_signed)
+                            return cc_error(p, tok.loc, "Duplicate %s in declaration", spelling);
+                        if(uns ? spec->sp_signed : spec->sp_unsigned)
+                            return cc_error(p, tok.loc, "%s after %s", spelling, uns ? "signed" : "unsigned");
                         if(spec->sp___auto_type)
-                            return cc_error(p, tok.loc, "signed after __auto_type");
-                        spec->sp_signed = 1;
+                            return cc_error(p, tok.loc, "%s after __auto_type", spelling);
+                        if(uns) spec->sp_unsigned = 1;
+                        else spec->sp_signed = 1;
                         continue;
+                    }
                     case CC_static:
                         if(spec->sp_static)
                             return cc_error(p, tok.loc, "duplicate storage class specifier: static");
@@ -12781,7 +12541,7 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(spec->sp_typebits)
                             return cc_error(p, tok.loc, "struct with other type specifiers");
-                        err = cc_parse_struct_or_union(p, flags, tok.loc, 0, base_type);
+                        err = cc_parse_struct_or_union(p, flags, tok.loc, 0, base->member, base_type);
                         if(err) return err;
                         continue;
                     }
@@ -12888,15 +12648,6 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                     case CC_restrict:
                         spec->sp_restrict = 1;
                         continue;
-                    case CC_unsigned:
-                        if(base_type->bits)
-                            return cc_error(p, tok.loc, "Second type in declaration");
-                        if(spec->sp_signed)
-                            return cc_error(p, tok.loc, "unsigned after signed");
-                        if(spec->sp___auto_type)
-                            return cc_error(p, tok.loc, "unsigned after __auto_type");
-                        spec->sp_unsigned = 1;
-                        continue;
                     case CC_volatile:
                         spec->sp_volatile = 1;
                         continue;
@@ -12999,22 +12750,10 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                         _Bool unqual = tok.kw.kw == CC_typeof_unqual;
                         err = cc_expect_punct(p, CC_lparen);
                         if(err) return err;
-                        // Determine if argument is a type-name or expression.
-                        CcToken peek;
-                        err = cc_peek(p, &peek);
+                        CcExpr* expr = NULL;
+                        err = cc_parse_type_query_operand(p, flags, CC_rparen, 1, base_type, &expr);
                         if(err) return err;
-                        _Bool is_typename = cc_is_type_start(p, &peek);
-                        if(is_typename){
-                            err = cc_parse_type_name(p, flags, base_type, NULL);
-                            if(err) return err;
-                        }
-                        else {
-                            CcExpr* expr = NULL;
-                            err = cc_parse_expr(p, runtime_flags, &expr);
-                            if(err) return err;
-                            if(!expr)
-                                return cc_error(p, tok.loc, "Expected expression in typeof");
-                            *base_type = expr->type;
+                        if(expr){
                             if(ccqt_is_vm(expr->type) && !flags.unevaluated){
                                 CcStmtNode* effect = cc_stmt_node(p, CC_STMT_EXPR, expr->loc, 0);
                                 if(!effect) return CC_OOM_ERROR;
@@ -13270,7 +13009,7 @@ cc_eval_case_range(CcParser* p, SrcLoc loc, CcQualType type, CcExpr* low, CcExpr
         if(err == CC_NOT_CONSTANT_ERROR || err == CC_OVERFLOW_ERROR)
             err = cc_error(p, loc, "case range endpoints must be constant integer expressions");
         if(err) goto done;
-        bits[i] = cc_eval_u128(p, values[i]);
+        bits[i] = cc_eval_u128(cc_target(p), values[i]);
         negative[i] = !ccqt_is_unsigned(values[i]->type, !cc_target(p)->char_is_signed) && (ci_uint128_hi(bits[i]) >> 63);
     }
     // Compare mathematical values without applying the usual arithmetic conversions.
@@ -13287,7 +13026,7 @@ cc_eval_case_range(CcParser* p, SrcLoc loc, CcQualType type, CcExpr* low, CcExpr
         if(err) goto done;
         err = cc_eval_expr(&(CcEvalCtx){.parser=p}, values[i], &converted);
         if(err) goto done;
-        CiUint128 after = cc_eval_u128(p, converted);
+        CiUint128 after = cc_eval_u128(cc_target(p), converted);
         _Bool after_negative = !ccqt_is_unsigned(type, !cc_target(p)->char_is_signed) && (ci_uint128_hi(after) >> 63);
         cc_release_expr(p, converted);
         if(!ci_uint128_eq(bits[i], after) || negative[i] != after_negative){
@@ -13396,8 +13135,9 @@ cc_parse_label(CcParser* p, CcParseFlags flags, CcStmtNode*_Nullable*_Nonnull ou
         if(err)
             return cc_error(p, tok.loc, "case label must be a constant _Type expression");
         if(!ccqt_bt_eq(case_val_expr->type, CCBT__Type)){
+            err = cc_types_error(p, tok.loc, case_val_expr->type, p->switch_ctx->type, "case label type does not match _Type switch expression");
             cc_release_expr(p, case_val_expr);
-            return cc_error(p, tok.loc, "case label type does not match _Type switch expression");
+            return err;
         }
         case_val = case_val_expr->type_value.bits;
         cc_release_expr(p, case_val_expr);
@@ -13709,6 +13449,8 @@ cc_parse_selection_header_inner(CcParser* p, CcParseFlags flags, const char* sta
             return 0;
         }
         if(expr){
+            err = cc_implicit_cast(p, expr, ccqt_basic(CCBT_void), &expr);
+            if(err) goto expr_error;
             if(flags.static_header){
                 CcExpr* value = NULL;
                 err = cc_eval_expr(&(CcEvalCtx){.parser=p}, expr, &value);
@@ -13770,9 +13512,9 @@ cc_parse_selection(CcParser* p, CcParseFlags flags, CcToken tok, CcControlLabel*
     }
     else {
         CcQualType st = cond->type;
-        if(ccqt_kind(st) == CC_ENUM) st = ccqt_as_enum(st)->underlying;
+        st = ccqt_enum_underlying(st);
         if(!ccqt_is_basic(st) || (!ccbt_is_integer(ccqt_basic_kind(st)) && ccqt_basic_kind(st) != CCBT__Type)){
-            err = cc_error(p, tok.loc, "switch requires integer or _Type expression");
+            err = cc_type_error(p, tok.loc, cond->type, "switch requires integer or _Type expression");
             goto cleanup;
         }
         if(ccqt_basic_kind(st) == CCBT_int128 || ccqt_basic_kind(st) == CCBT_unsigned_int128){
@@ -13781,7 +13523,7 @@ cc_parse_selection(CcParser* p, CcParseFlags flags, CcToken tok, CcControlLabel*
         }
         if(ccqt_basic_kind(st) != CCBT__Type){
             CcQualType promoted;
-            err = cc_integer_promote(p, cc_arithmetic_operand_type(p, cond), &promoted, tok.loc);
+            err = cc_integer_promote_expr(p, cond, &promoted, tok.loc);
             if(err) goto cleanup;
             err = cc_implicit_cast(p, cond, promoted, &cond);
             if(err) goto cleanup;
@@ -13860,6 +13602,8 @@ cc_parse_statement(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullable lab
         }
         // Merge for the next declaration/statement
         p->attributes.bits |= stmt_attrs.bits;
+        err = cc_merge_printf_formats(p, stmt_attrs.printf_formats, &p->attributes.printf_formats);
+        if(err) return err;
         // Fall through
     }
     err = cc_peek(p, &tok);
@@ -14048,6 +13792,11 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
                                 CcExpr* init_expr;
                                 err = cc_parse_expr(p, flags, &init_expr);
                                 if(err) goto init_done;
+                                err = cc_implicit_cast(p, init_expr, ccqt_basic(CCBT_void), &init_expr);
+                                if(err){
+                                    cc_release_expr(p, init_expr);
+                                    goto init_done;
+                                }
                                 err = cc_expect_punct(p, ';');
                                 if(err){
                                     cc_release_expr(p, init_expr);
@@ -14089,6 +13838,8 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
                         if(err) goto for_end;
                         if(!(peek.type == CC_PUNCTUATOR && peek.punct.punct == ')')){
                             err = cc_parse_expr(p, flags, &inc_expr);
+                            if(err) goto for_end;
+                            err = cc_implicit_cast(p, inc_expr, ccqt_basic(CCBT_void), &inc_expr);
                             if(err) goto for_end;
                         }
                         err = cc_expect_punct(p, ')');
@@ -14494,6 +14245,11 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
             CcExpr* expr;
             err = cc_parse_expr(p, flags, &expr);
             if(err) return err;
+            err = cc_implicit_cast(p, expr, ccqt_basic(CCBT_void), &expr);
+            if(err){
+                cc_release_expr(p, expr);
+                return err;
+            }
             err = cc_expect_punct(p, ';');
             if(err){
                 cc_release_expr(p, expr);
@@ -14510,6 +14266,17 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
         }
     }
     return CC_UNREACHABLE_ERROR;
+}
+
+static
+int
+cc_check_decl_type_qualifiers(CcParser* p, CcQualType type, CcSpecifier spec, SrcLoc loc){
+    const char* failure;
+    if(spec.sp_restrict && !cc_restrict_qualifiable(type))
+        return cc_type_error(p, loc, type, "restrict requires a pointer type");
+    if(type.is_atomic && cc_check_atomic_qualifier(type, &failure))
+        return cc_type_error(p, loc, type, "%s", failure);
+    return 0;
 }
 
 static
@@ -14548,20 +14315,15 @@ cc_resolve_specifiers(CcParser* p, CcDeclBase* declbase){
     if(b.spec.sp_complex){
         if(!ccqt_is_basic(b.type) || b.spec.sp_infer_type
             || ccbt_complex_kind(ccqt_basic_kind(b.type)) == CCBT_INVALID)
-            return cc_error(p, b.loc, "invalid scalar type for _Complex");
+            return cc_type_error(p, b.loc, b.type, "invalid scalar type for _Complex");
         b.type.basic.kind = ccbt_complex_kind(ccqt_basic_kind(b.type));
     }
     if(b.spec.sp_const) b.type.is_const = 1;
     if(b.spec.sp_volatile) b.type.is_volatile = 1;
     if(b.spec.sp_atomic) b.type.is_atomic = 1;
-    if(b.spec.sp_restrict && !ccqt_is_some_kind_of_pointer(b.type))
-        return cc_error(p, b.loc, "restrict requires a pointer type");
-    if(b.type.is_atomic){
-        CcTypeKind tk = ccqt_kind(b.type);
-        if(tk == CC_ARRAY || tk == CC_VECTOR || tk == CC_VLA)
-            return cc_error(p, b.loc, "_Atomic qualifier shall not modify an array type");
-        if(tk == CC_FUNCTION)
-            return cc_error(p, b.loc, "_Atomic qualifier shall not modify a function type");
+    if(!b.spec.sp_infer_type){
+        int err = cc_check_decl_type_qualifiers(p, b.type, b.spec, b.loc);
+        if(err) return err;
     }
     *declbase = b;
     return 0;
@@ -14590,11 +14352,17 @@ static
 int
 cc_capture_vla_bound(CcParser* p, CcParseFlags flags, CcExpr* dim, CcExpr*_Nonnull*_Nonnull out){
     if(!ccqt_is_integer(dim->type))
-        return cc_error(p, dim->loc, "array dimension must have integer type");
+        return cc_type_error(p, dim->loc, dim->type, "array dimension must have integer type");
     CcQualType type = ccqt_basic(cc_target(p)->size_type);
     CcExpr* init;
     int err = cc_implicit_cast(p, dim, type, &init);
     if(err) return err;
+    uint32_t width;
+    err = cc_sizeof_as_uint(p, dim->type, dim->loc, &width);
+    if(err) return err;
+    if(!ccqt_is_unsigned(dim->type, !cc_target(p)->char_is_signed)
+        || width > cc_target(p)->sizeof_[cc_target(p)->size_type])
+        init->cast.checked_bound = 1;
     if(flags.unevaluated){
         *out = init;
         return 0;
@@ -14635,6 +14403,8 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
         CcTypeKind ptr_kind = tok.punct.punct == '^' ? CC_BLOCK_POINTER : CC_POINTER;
         _Bool const_ = 0, volatile_ = 0, atomic_ = 0;
         for(;;){
+            err = cc_parse_attributes(p, flags, &p->attributes);
+            if(err) return err;
             err = cc_next_token(p, &tok);
             if(err) return err;
             if(tok.type == CC_KEYWORD){
@@ -14648,12 +14418,6 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
             }
             err = cc_unget(p, &tok);
             if(err) return err;
-            {
-                CcAttributes ptr_attrs = {0};
-                err = cc_parse_attributes(p, flags, &ptr_attrs);
-                if(err) return err;
-                if(ptr_attrs.bits) continue;
-            }
             break;
         }
         err = cc_parse_declarator_inner(p, flags, out_head, out_tail, out_name, out_name_loc, out_param_names);
@@ -14758,10 +14522,16 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                 }
                 else if(peek.kw.kw == CC_const
                      || peek.kw.kw == CC_volatile
+                     || peek.kw.kw == CC__Atomic
                      || peek.kw.kw == CC_restrict){
+                    if(!flags.parameter_type || *out_tail != out_head)
+                        return cc_error(p, peek.loc, "array bracket qualifiers require an outermost parameter array");
                     cc_next_token(p, &peek);
-                    // qualifiers on array parameter (apply to decayed pointer)
-                    // ignored for now
+                    CcQualType quals = {0};
+                    quals.is_const = peek.kw.kw == CC_const;
+                    quals.is_volatile = peek.kw.kw == CC_volatile;
+                    quals.is_atomic = peek.kw.kw == CC__Atomic;
+                    arr->parameter_quals |= quals.quals;
                 }
                 else break;
             }
@@ -14792,6 +14562,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                 if(!vla) return CC_OOM_ERROR;
                 vla->kind = CC_VLA;
                 vla->unspecified = 1;
+                vla->parameter_quals = arr->parameter_quals;
                 vla->loc = tok.loc;
                 CcExpr* bound = cc_uint64_expr(p, peek.loc, ccqt_basic(cc_target(p)->size_type), 1);
                 if(!bound) return CC_OOM_ERROR;
@@ -14815,7 +14586,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                 if(err) return err;
                 if(!dim) return cc_error(p, tok.loc, "Expected array dimension");
                 if(!ccqt_is_integer(dim->type))
-                    return cc_error(p, tok.loc, "array dimension must have integer type");
+                    return cc_type_error(p, tok.loc, dim->type, "array dimension must have integer type");
                 int64_t length;
                 err = cc_eval_integer(&(CcEvalCtx){p}, dim, &length);
                 if(err && err != CC_NOT_CONSTANT_ERROR) return err;
@@ -14830,6 +14601,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                     CcVla* vla = Allocator_zalloc(cc_allocator(p), sizeof *vla);
                     if(!vla) return CC_OOM_ERROR;
                     vla->kind = CC_VLA;
+                    vla->parameter_quals = arr->parameter_quals;
                     vla->loc = tok.loc;
                     err = cc_capture_vla_bound(p, flags, dim, &vla->bound);
                     if(err) return err;
@@ -14865,6 +14637,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
             // The statement array grows only when a bound emits an initializer.
             CcStmtSink bounds_sink = {.prev = p->stmt_sink};
             p->stmt_sink = &bounds_sink;
+            CcAttributes saved_param_attributes = p->attributes;
             Marray(CcQualType) param_types = {0};
             _Bool variadic = 0;
             _Bool no_prototype = 0;
@@ -14875,19 +14648,6 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                 // () — no prototype
                 no_prototype = 1;
                 goto param_done;
-            }
-            // Check for (void)
-            if(peek.type == CC_KEYWORD && peek.kw.kw == CC_void){
-                CcToken ahead;
-                err = cc_next_token(p, &ahead);
-                if(err) goto param_err;
-                err = cc_peek(p, &peek);
-                if(err) goto param_err;
-                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ')'){
-                    goto param_done;
-                }
-                err = cc_unget(p, &ahead);
-                if(err) goto param_err;
             }
             for(;;){
                 err = cc_peek(p, &peek);
@@ -14900,6 +14660,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                     break;
                 }
                 // Parse parameter: declaration-specifiers [declarator]
+                cc_clear_attributes(&p->attributes);
                 CcDeclBase param_base = {0};
                 CcParseFlags param_flags = flags;
                 param_flags.parameter_type = 1;
@@ -14912,6 +14673,10 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                 }
                 if(param_base.spec.sp_typedef){
                     err = cc_error(p, peek.loc, "typedef not allowed in function parameter");
+                    goto param_err;
+                }
+                if(param_base.spec.sp_funcbits){
+                    err = cc_error(p, peek.loc, "function specifier is not allowed on parameters");
                     goto param_err;
                 }
                 if(param_base.spec.sp_thread_local){
@@ -14957,14 +14722,31 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                     }
                 }
                 if(ccqt_is_basic(param_head) && ccqt_basic_kind(param_head) == CCBT_void){
+                    CcToken end;
+                    err = cc_peek(p, &end);
+                    if(err) goto param_err;
+                    if(!param_name && !param_types.count && !param_head.quals
+                        && !param_base.spec.sp_storagebits
+                        && end.type == CC_PUNCTUATOR && end.punct.punct == CC_rparen)
+                        goto param_done;
                     err = cc_error(p, peek.loc, "parameter cannot have void type");
                     goto param_err;
                 }
                 // consume trailing __attribute__
                 {
-                    CcAttributes param_attrs = {0};
-                    err = cc_parse_attributes(p, flags, &param_attrs);
+                    err = cc_parse_attributes(p, flags, &p->attributes);
                     if(err) goto param_err;
+                    if(p->attributes.vector_size){
+                        err = cc_check_derived_type(p, param_head, param_base.loc);
+                        if(err) goto param_err;
+                        err = cc_adjust_parameter_type(p, param_head, &param_head);
+                        if(err) goto param_err;
+                    }
+                    err = cc_apply_vector_type(p, &param_head, p->attributes.vector_size, param_base.loc);
+                    if(err) goto param_err;
+                    if(p->attributes.has_aligned && p->attributes.aligned > param_base.alignment)
+                        param_base.alignment = p->attributes.aligned;
+                    p->attributes = saved_param_attributes;
                 }
 
                 SrcLoc param_loc = peek.loc;
@@ -14986,15 +14768,18 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                     }
                     out_param_names->typed_pack_loc = peek.loc;
                     CcQualType element = cc_intern_qualtype(p, param_head);
+                    if(!element.bits){ err = CC_OOM_ERROR; goto param_err; }
                     err = cc_check_derived_type(p, element, param_loc);
                     if(err) goto param_err;
                     uint32_t size;
-                    if(ccqt_bt_eq(element, CCBT_void) || ccqt_kind(element) == CC_FUNCTION
-                        || cc_type_sizeof_complete(cc_target(p), element, &size)){
-                        err = cc_error(p, peek.loc, "typed varargs require a complete object element type");
+                    if(ccqt_bt_eq(element, CCBT_void)
+                    || ccqt_kind(element) == CC_FUNCTION
+                    || cc_type_sizeof_complete(cc_target(p), element, &size, NULL)
+                    ){
+                        err = cc_type_error(p, peek.loc, element, "typed varargs require a complete object element type");
                         goto param_err;
                     }
-                    err = cc_slice_of(p, element, &param_head);
+                    err = cc_slice_of(p, element, peek.loc, &param_head);
                     if(err) goto param_err;
                     typed_pack = 1;
                 }
@@ -15012,16 +14797,11 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                     }
                 }
                 CcQualType param_type = cc_intern_qualtype(p, param_head);
+                if(!param_type.bits){ err = CC_OOM_ERROR; goto param_err; }
                 err = cc_check_derived_type(p, param_type, param_loc);
                 if(err) goto param_err;
-                if(ccqt_is_array(param_type)){
-                    err = cc_pointer_of(p, cc_array_element_type(param_type), &param_type);
-                    if(err) goto param_err;
-                }
-                else if(ccqt_kind(param_type) == CC_FUNCTION){
-                    err = cc_pointer_of(p, param_type, &param_type);
-                    if(err) goto param_err;
-                }
+                err = cc_adjust_parameter_type(p, param_head, &param_type);
+                if(err) goto param_err;
                 CcVariable* var = Allocator_zalloc(cc_allocator(p), sizeof *var);
                 if(!var){
                     err = CC_OOM_ERROR;
@@ -15034,6 +14814,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                     .type = param_type,
                     .automatic = 1,
                     .register_ = param_base.spec.sp_register,
+                    .alignment = param_base.alignment,
                 };
                 err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), param_name, var);
                 if(err){
@@ -15069,7 +14850,12 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                     err = cc_parse_assignment_expr(p, default_flags, &value, param_type);
                     if(err) goto param_err;
                     out_param_names->names.data[out_param_names->names.count-1].default_value = value;
-                    err = cc_implicit_cast(p, value, (CcQualType){.unqual=param_type.unqual}, &out_param_names->names.data[out_param_names->names.count-1].default_value);
+                    err = cc_implicit_cast(p, value, (CcQualType){.unqual=param_type.unqual}, &value);
+                    if(err) goto param_err;
+                    out_param_names->names.data[out_param_names->names.count-1].default_value = value;
+                    Parray captures = {0};
+                    err = cc_prepare_default_arg(p, value, 0, &captures, 0);
+                    pa_cleanup(&captures, cc_scratch_allocator(p));
                     if(err) goto param_err;
                     err = cc_peek(p, &peek);
                     if(err) goto param_err;
@@ -15107,6 +14893,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                 }
                 p->stmt_sink = bounds_sink.prev;
                 p->function_scope = saved_function_scope;
+                p->attributes = saved_param_attributes;
                 for(size_t i = 0; i < bounds_sink.stmts.count; i++)
                     cc_free_stmt_tree(p, bounds_sink.stmts.data[i]);
                 pa_cleanup(&bounds_sink.stmts, cc_allocator(p));
@@ -15117,6 +14904,7 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
             param_err:
             p->stmt_sink = bounds_sink.prev;
             p->function_scope = saved_function_scope;
+            p->attributes = saved_param_attributes;
             for(size_t i = 0; i < bounds_sink.stmts.count; i++)
                 cc_free_stmt_tree(p, bounds_sink.stmts.data[i]);
             pa_cleanup(&bounds_sink.stmts, cc_allocator(p));
@@ -15201,33 +14989,6 @@ cc_merge_default_args(CcParser* p, CcFunc* func, CcParsedParams* params, _Bool r
 
 static
 int
-cc_const_object_type(CcParser* p, CcQualType type, CcQualType* out){
-    if(ccqt_raw_kind(type) == CC_ALIGNED){
-        CcQualType underlying;
-        int err = cc_const_object_type(p, ccqt_unaligned(type), &underlying);
-        if(err) return err;
-        CcAligned* aligned = cc_intern_aligned(&p->type_cache, cc_allocator(p), underlying, ccqt_as_aligned(type)->alignment);
-        if(!aligned) return CC_OOM_ERROR;
-        *out = (CcQualType){.bits=(uintptr_t)aligned | underlying.quals};
-        return 0;
-    }
-    if(ccqt_kind(type) != CC_ARRAY){
-        type.is_const = 1;
-        *out = type;
-        return 0;
-    }
-    CcArray* old = ccqt_as_array(type);
-    CcQualType element;
-    int err = cc_const_object_type(p, old->element, &element);
-    if(err) return err;
-    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element, old->length, old->is_static, old->is_incomplete);
-    if(!array) return CC_OOM_ERROR;
-    *out = (CcQualType){.bits=(uintptr_t)array | type.quals};
-    return 0;
-}
-
-static
-int
 cc_qualify_object_type(CcParser* p, CcQualType type, uintptr_t quals, CcQualType* out){
     int err;
     if(ccqt_raw_kind(type) == CC_ALIGNED){
@@ -15248,19 +15009,25 @@ cc_qualify_object_type(CcParser* p, CcQualType type, uintptr_t quals, CcQualType
     err = cc_qualify_object_type(p, ccqt_array_element(type), quals, &element);
     if(err) return err;
     if(ccqt_kind(type) == CC_VLA){
-        CcVla* vla = Allocator_alloc(cc_allocator(p), sizeof *vla);
+        CcVla* vla = cc_intern_vla(&p->type_cache, cc_allocator(p), ccqt_as_vla(type), element);
         if(!vla) return CC_OOM_ERROR;
-        *vla = *ccqt_as_vla(type);
-        vla->element = element;
         *out = (CcQualType){.bits=(uintptr_t)vla};
     }
     else {
         CcArray* old = ccqt_as_array(type);
-        CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element, old->length, old->is_static, old->is_incomplete);
+        CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), element, old->length, old->is_incomplete);
         if(!array) return CC_OOM_ERROR;
         *out = (CcQualType){.bits=(uintptr_t)array};
     }
     return 0;
+}
+
+static
+int
+cc_const_object_type(CcParser* p, CcQualType type, CcQualType* out){
+    CcQualType object = ccqt_array_object_type(type);
+    object.is_const = 1;
+    return cc_qualify_object_type(p, type, object.quals, out);
 }
 
 static
@@ -15270,97 +15037,110 @@ cc_unqual_object_type(CcParser* p, CcQualType type, CcQualType* out){
 }
 
 static
+int
+cc_adjust_parameter_type(CcParser* p, CcQualType type, CcQualType* out){
+    // Bracket qualifiers describe the adjusted pointer, not the array or its
+    // elements. Read this declarator metadata before canonicalizing the type.
+    uintptr_t quals = ccqt_kind(type) == CC_ARRAY ? ccqt_as_array(type)->parameter_quals
+        : ccqt_kind(type) == CC_VLA ? ccqt_as_vla(type)->parameter_quals : 0;
+    type = cc_intern_qualtype(p, type);
+    if(!type.bits) return CC_OOM_ERROR;
+    if(ccqt_is_array(type) || ccqt_kind(type) == CC_FUNCTION){
+        CcQualType pointee = ccqt_is_array(type) ? ccqt_qualified_array_element(type) : type;
+        CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), pointee, 0, 0);
+        if(!ptr) return CC_OOM_ERROR;
+        type = (CcQualType){.bits=(uintptr_t)ptr | quals};
+    }
+    *out = type;
+    return 0;
+}
+
+static
 CcQualType
 cc_intern_qualtype(CcParser* p, CcQualType t){
+    // Return no type on allocation failure. A parsed node may live in scratch
+    // storage and must never escape as a substitute for a canonical type.
     uintptr_t quals = t.quals;
     if(ccqt_raw_kind(t) == CC_ALIGNED){
         CcQualType underlying = cc_intern_qualtype(p, ccqt_unaligned(t));
+        if(!underlying.bits) return CCQT_NONE;
         CcAligned* aligned = cc_intern_aligned(&p->type_cache, cc_allocator(p), underlying, ccqt_as_aligned(t)->alignment);
-        if(!aligned) return t;
+        if(!aligned) return CCQT_NONE;
         return (CcQualType){.bits=(uintptr_t)aligned | underlying.quals};
     }
     switch(ccqt_kind(t)){
         case CC_VLA: {
             CcVla* old = ccqt_as_vla(t);
-            CcQualType element = cc_intern_qualtype(p, cc_array_element_type(t));
-            if(!quals && element.bits == old->element.bits)
-                return t;
-            CcVla* vla = Allocator_alloc(cc_allocator(p), sizeof *vla);
-            if(!vla) return t;
-            *vla = *old;
-            vla->element = element;
+            CcQualType element = cc_intern_qualtype(p, ccqt_qualified_array_element(t));
+            if(!element.bits) return CCQT_NONE;
+            CcVla* vla = cc_intern_vla(&p->type_cache, cc_allocator(p), old, element);
+            if(!vla) return CCQT_NONE;
             return (CcQualType){.bits=(uintptr_t)vla};
         }
         case CC_ALIGNED: cc_unsafe_unreachable();
         case CC_BASIC:
             return t;
-        case CC_POINTER: {
+        case CC_POINTER:
+        case CC_BLOCK_POINTER: {
             CcPointer* old = ccqt_as_ptr(t);
             CcQualType pointee = cc_intern_qualtype(p, old->pointee);
-            CcQualType ptr_type;
-            if(cc_pointer_of(p, pointee, &ptr_type)) return t;
-            ptr_type.quals |= quals;
-            return ptr_type;
+            if(!pointee.bits) return CCQT_NONE;
+            CcPointer* ptr = cc_intern_pointer(&p->type_cache, cc_allocator(p), pointee, old->restrict_, ccqt_kind(t)==CC_BLOCK_POINTER);
+            if(!ptr) return CCQT_NONE;
+            return (CcQualType){.bits=(uintptr_t)ptr | quals};
         }
         case CC_SLICE: {
             CcSlice* old = ccqt_as_slice(t);
             CcQualType pointee = cc_intern_qualtype(p, old->pointee);
-            CcQualType ptr_type;
-            if(cc_slice_of(p, pointee, &ptr_type)) return t;
-            ptr_type.quals |= quals;
-            return ptr_type;
-        }
-        case CC_BLOCK_POINTER: {
-            CcPointer* old = ccqt_as_ptr(t);
-            CcQualType pointee = cc_intern_qualtype(p, old->pointee);
-            CcQualType ptr_type;
-            if(cc_block_pointer_of(p, pointee, &ptr_type)) return t;
-            ptr_type.quals |= quals;
-            return ptr_type;
+            if(!pointee.bits) return CCQT_NONE;
+            CcSlice* slice = cc_intern_slice(&p->type_cache, cc_allocator(p), pointee, old->restrict_);
+            if(!slice) return CCQT_NONE;
+            return (CcQualType){.bits=(uintptr_t)slice | quals};
         }
         case CC_VECTOR: {
             CcVector* old = ccqt_as_vector(t);
-            CcVector* vector = cc_intern_vector(&p->type_cache, cc_allocator(p), cc_intern_qualtype(p, old->element), old->length, old->vector_size);
-            if(!vector) return t;
+            CcQualType element = cc_intern_qualtype(p, old->element);
+            if(!element.bits) return CCQT_NONE;
+            CcVector* vector = cc_intern_vector(&p->type_cache, cc_allocator(p), element, old->length, old->vector_size);
+            if(!vector) return CCQT_NONE;
             return (CcQualType){.bits=(uintptr_t)vector | quals};
         }
         case CC_ARRAY: {
             CcArray* old = ccqt_as_array(t);
-            CcQualType elem = cc_intern_qualtype(p, cc_array_element_type(t));
+            CcQualType elem = cc_intern_qualtype(p, ccqt_qualified_array_element(t));
+            if(!elem.bits) return CCQT_NONE;
             if(ccqt_kind(elem) == CC_VLA && !old->is_incomplete){
                 CcVla* vla = Allocator_zalloc(cc_allocator(p), sizeof *vla);
-                if(!vla) return t;
+                if(!vla) return CCQT_NONE;
                 vla->kind = CC_VLA;
                 vla->element = elem;
                 vla->loc = old->declarator_loc;
                 CcExpr* bound = cc_uint64_expr(p, vla->loc, ccqt_basic(cc_target(p)->size_type), old->length);
-                if(!bound) return t;
+                if(!bound) return CCQT_NONE;
                 vla->bound = bound;
-                return (CcQualType){.bits=(uintptr_t)vla};
+                CcVla* canonical = cc_intern_vla(&p->type_cache, cc_allocator(p), vla, elem);
+                if(!canonical) return CCQT_NONE;
+                return (CcQualType){.bits=(uintptr_t)canonical};
             }
-            CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), elem, old->length, old->is_static, old->is_incomplete);
-            if(!arr) return t;
+            CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), elem, old->length, old->is_incomplete);
+            if(!arr) return CCQT_NONE;
             return (CcQualType){.bits = (uintptr_t)arr};
         }
         case CC_FUNCTION: {
             CcFunction* old = ccqt_as_function(t);
-            // Adjust and intern param types — the old node is throwaway.
+            size_t size = old->param_count * sizeof(CcQualType);
+            CcQualType* params = size ? Allocator_alloc(cc_scratch_allocator(p), size) : NULL;
+            if(size && !params) return CCQT_NONE;
             for(uint32_t i = 0; i < old->param_count; i++){
-                CcQualType pt = old->params[i];
-                // C11 6.7.6.3p7: array params decay to pointers.
-                if(ccqt_is_array(pt)){
-                    if(cc_pointer_of(p, cc_array_element_type(pt), &pt))
-                        return t;
+                if(cc_adjust_parameter_type(p, old->params[i], &params[i])){
+                    if(params) Allocator_free(cc_scratch_allocator(p), params, size);
+                    return CCQT_NONE;
                 }
-                // C11 6.7.6.3p7: function params decay to function pointers.
-                else if(ccqt_kind(pt) == CC_FUNCTION){
-                    if(cc_pointer_of(p, pt, &pt)) return t;
-                }
-                old->params[i] = cc_intern_qualtype(p, pt);
             }
             CcQualType ret = cc_intern_qualtype(p, old->return_type);
-            CcFunction* func = cc_intern_function(&p->type_cache, cc_allocator(p), ret, old->params, old->param_count, old->param_count, old->is_variadic, old->no_prototype);
-            if(!func) return t;
+            CcFunction* func = ret.bits ? cc_intern_function(&p->type_cache, cc_allocator(p), ret, params, old->param_count, old->param_count, old->is_variadic, old->no_prototype) : NULL;
+            if(params) Allocator_free(cc_scratch_allocator(p), params, size);
+            if(!func) return CCQT_NONE;
             return (CcQualType){.bits = (uintptr_t)func | quals};
         }
         case CC_ENUM:
@@ -15447,7 +15227,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             is_fndef = name && tail != &head && ccqt_kind(head) == CC_FUNCTION;
             *tail = declbase->type;
             type = cc_intern_qualtype(p, head);
-            err = cc_check_derived_type(p, type, declbase->loc);
+            err = type.bits ? cc_check_derived_type(p, type, declbase->loc) : CC_OOM_ERROR;
             if(err){
                 ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
                 return err;
@@ -15460,51 +15240,13 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
         // trailing __attribute__
         err = cc_parse_attributes(p, flags, &p->attributes);
         if(err) return err;
-        if(p->attributes.vector_size){
-            CcQualType base = type;
-            if(!ccqt_is_basic(base))
-                return cc_error(p, declbase->loc, "vector_size attribute requires a scalar type");
-            uint32_t elem_size = cc_target(p)->sizeof_[ccqt_basic_kind(base)];
-            if(p->attributes.vector_size < elem_size)
-                return cc_error(p, declbase->loc, "vector_size is smaller than the element type");
-            if(p->attributes.vector_size % elem_size != 0)
-                return cc_error(p, declbase->loc, "vector_size must be a multiple of the element size");
-            uint32_t vs = p->attributes.vector_size;
-            CcVector* v = cc_intern_vector(&p->type_cache, cc_allocator(p), base, vs / elem_size, vs);
-            if(!v) return CC_OOM_ERROR;
-            type = (CcQualType){.bits = (uintptr_t)v | base.quals};
-        }
-        if(p->attributes.has_aligned || p->attributes.packed || p->attributes.transparent_union){
-            CcTypeKind tk = ccqt_kind(type);
-            if(p->attributes.has_aligned){
-                if(declbase->spec.sp_typedef){
-                    if(tk == CC_FUNCTION || (ccqt_is_basic(type) && ccqt_basic_kind(type) == CCBT_void))
-                        return cc_error(p, declbase->loc, "aligned typedef requires an object type");
-                    CcAligned* aligned = cc_intern_aligned(&p->type_cache, cc_allocator(p), type, p->attributes.aligned);
-                    if(!aligned) return CC_OOM_ERROR;
-                    type = (CcQualType){.bits=(uintptr_t)aligned | type.quals};
-                }
-                else if(p->attributes.aligned > decl_alignment)
-                    decl_alignment = p->attributes.aligned;
-                p->attributes.has_aligned = 0;
-                p->attributes.aligned = 0;
-            }
-            if(p->attributes.packed && tk != CC_STRUCT)
-                return cc_error(p, declbase->loc, "packed attribute on non-struct type is not supported");
-            if(p->attributes.transparent_union && tk != CC_UNION)
-                return cc_error(p, declbase->loc, "transparent_union attribute on non-union type is not supported");
-        }
-        _Bool is_printf_like = p->attributes.printf_like;
-        _Bool is_always_inline = decl_always_inline || p->attributes.always_inline;
-        cc_clear_attributes(&p->attributes);
-        // asm label: asm("symbol")
         Atom asm_label = NULL;
         {
             CcToken peek_asm;
             err = cc_peek(p, &peek_asm);
             if(err) return err;
             if(peek_asm.type == CC_KEYWORD && peek_asm.kw.kw == CC_asm){
-                cc_next_token(p, &tok); // consume asm
+                cc_next_token(p, &tok);
                 err = cc_next_token(p, &tok);
                 if(err) return err;
                 if(tok.type != CC_PUNCTUATOR || tok.punct.punct != '(')
@@ -15521,12 +15263,41 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                     return cc_error(p, tok.loc, "Expected ')' after asm label");
             }
         }
-        // trailing __attribute__ after asm label
         err = cc_parse_attributes(p, flags, &p->attributes);
         if(err) return err;
-        is_printf_like = is_printf_like || p->attributes.printf_like;
-        is_always_inline = is_always_inline || p->attributes.always_inline;
-        p->attributes.always_inline = 0;
+        err = cc_apply_vector_type(p, &type, p->attributes.vector_size, declbase->loc);
+        if(err) return err;
+        if(ccqt_kind(type) == CC_FUNCTION){
+            err = cc_check_decl_alignment(p, declbase, type, 0);
+            if(err) return err;
+        }
+        if(p->attributes.has_aligned || p->attributes.packed || p->attributes.transparent_union){
+            CcTypeKind tk = ccqt_kind(type);
+            if(p->attributes.has_aligned){
+                if(declbase->spec.sp_typedef){
+                    if(tk == CC_FUNCTION || (ccqt_is_basic(type) && ccqt_basic_kind(type) == CCBT_void))
+                        return cc_type_error(p, declbase->loc, type, "aligned typedef requires an object type");
+                    CcAligned* aligned = cc_intern_aligned(&p->type_cache, cc_allocator(p), type, p->attributes.aligned);
+                    if(!aligned) return CC_OOM_ERROR;
+                    type = (CcQualType){.bits=(uintptr_t)aligned | type.quals};
+                }
+                else if(p->attributes.aligned > decl_alignment)
+                    decl_alignment = p->attributes.aligned;
+                p->attributes.has_aligned = 0;
+                p->attributes.aligned = 0;
+            }
+            if(p->attributes.packed && tk != CC_STRUCT)
+                return cc_type_error(p, declbase->loc, type, "packed attribute on non-struct type is not supported");
+            if(p->attributes.transparent_union && tk != CC_UNION)
+                return cc_type_error(p, declbase->loc, type, "transparent_union attribute on non-union type is not supported");
+        }
+        const CcPrintfFormat* printf_formats = p->attributes.printf_formats;
+        _Bool is_always_inline = decl_always_inline || p->attributes.always_inline;
+        cc_clear_attributes(&p->attributes);
+        if(type.bits){
+            err = cc_check_derived_type(p, type, declbase->loc);
+            if(err) return err;
+        }
         // postfix processing
         _Bool stop = 0;
         err = cc_next_token(p, &tok);
@@ -15587,7 +15358,8 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             }
             func->inline_ = func->inline_ || declbase->spec.sp_inline;
             func->always_inline = func->always_inline || is_always_inline;
-            func->printf_like = func->printf_like || is_printf_like;
+            err = cc_apply_printf_formats(p, func, printf_formats);
+            if(err) return err;
             err = cc_merge_default_args(p, func, &param_names, 1, name_loc);
             if(err) return err;
             func->param_scope = param_names.scope;
@@ -15651,11 +15423,11 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             return cc_error(p, name_loc, "invalid storage class in block-scope function declaration");
         if(ccqt_is_vm(type)){
             if(declbase->spec.sp_extern)
-                return cc_error(p, name_loc, "variably modified declaration cannot have external linkage");
+                return cc_type_error(p, name_loc, type, "variably modified declaration cannot have external linkage");
             if(ccqt_kind(type) == CC_VLA
             && !declbase->spec.sp_typedef
             && (declbase->spec.sp_static || declbase->spec.sp_thread_local || declbase->spec.sp_constexpr))
-                return cc_error(p, name_loc, "VLA object requires automatic storage duration");
+                return cc_type_error(p, name_loc, type, "VLA object requires automatic storage duration");
             CcDefer* marker = Allocator_zalloc(cc_allocator(p), sizeof *marker);
             if(!marker) return CC_OOM_ERROR;
             marker->prev = p->defer_context.active;
@@ -15755,7 +15527,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             if(initializer->kind == CC_EXPR_INIT_LIST){
                 // Init list type-checking is done during parsing.
                 // For incomplete arrays, update the variable type from the resolved init list type.
-                if(ccqt_kind(type) == CC_ARRAY && ccqt_as_array(type)->is_incomplete){
+                if(ccqt_array_incomplete(type)){
                     uintptr_t quals = type.quals;
                     type = initializer->type;
                     type.quals |= quals;
@@ -15767,7 +15539,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 if(!ccqt_is_array(type)) type.quals = 0;
                 // Decay array to pointer, function to function pointer
                 if(ccqt_is_array(type)){
-                    err = cc_pointer_of(p, cc_array_element_type(type), &type);
+                    err = cc_pointer_of(p, ccqt_qualified_array_element(type), &type);
                     if(err) return err;
                     err = cc_implicit_cast(p, initializer, type, &initializer);
                     if(err) return err;
@@ -15793,17 +15565,8 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 if(err) return err;
                 if(target_arr->is_incomplete){
                     // char s[] = "abc" -> size from string literal.
-                    // Intern a new complete array with the original element type.
-                    CcArray* arr = cc_intern_array(&p->type_cache, cc_allocator(p), target_arr->element, init_arr->length, target_arr->is_static, 0);
-                    if(!arr) return CC_OOM_ERROR;
-                    uintptr_t quals = type.quals;
-                    CcQualType completed = {.bits=(uintptr_t)arr | quals};
-                    if(ccqt_raw_kind(type) == CC_ALIGNED){
-                        CcAligned* aligned = cc_intern_aligned(&p->type_cache, cc_allocator(p), completed, ccqt_as_aligned(type)->alignment);
-                        if(!aligned) return CC_OOM_ERROR;
-                        completed = (CcQualType){.bits=(uintptr_t)aligned | quals};
-                    }
-                    type = completed;
+                    err = cc_complete_array_type(p, type, init_arr->length, &type);
+                    if(err) return err;
                 }
                 else if(target_arr->length < init_arr->length - 1)
                     return cc_error(p, tok.loc, "initializer string too long for array");
@@ -15813,9 +15576,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             }
             else {
                 // Check compatibility and insert implicit cast
-                err = cc_check_atomic_object_access(p, initializer->type, initializer->loc);
-                if(err) return err;
-                err = cc_check_atomic_object_access(p, type, tok.loc);
+                err = cc_check_atomic_object_type(p, type, tok.loc);
                 if(err) return err;
                 CcQualType target = {.unqual=type.unqual};
                 err = cc_implicit_cast(p, initializer, target, &initializer);
@@ -15825,13 +15586,17 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
         else if(declbase->spec.sp_infer_type){
             return cc_error(p, tok.loc, "type-inferred declaration requires initializer");
         }
+        if(declbase->spec.sp_infer_type){
+            err = cc_check_decl_type_qualifiers(p, type, declbase->spec, declbase->loc);
+            if(err) return err;
+        }
         if(declbase->spec.sp_constexpr){
             if(!initializer)
                 return cc_error(p, name_loc, "constexpr object requires an initializer");
             if(cc_constexpr_forbidden_qualifiers(type))
-                return cc_error(p, name_loc, "constexpr object cannot have volatile or atomic subobjects");
+                return cc_type_error(p, name_loc, type, "constexpr object cannot have volatile or atomic subobjects");
         }
-        err = cc_check_decl_alignment(p, declbase, type);
+        err = cc_check_decl_alignment(p, declbase, type, 0);
         if(err) return err;
         if(tok.type == CC_EOF || (tok.type == CC_PUNCTUATOR && (tok.punct.punct == ';' || tok.punct.punct == ')'))){
             err = cc_unget(p, &tok);
@@ -15859,7 +15624,9 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             if(found){
                 switch(sym.kind){
                     case CC_SYM_TYPEDEF:
-                        if(sym.type.bits != type.bits){
+                        if(ccqt_is_vm(sym.type) || ccqt_is_vm(type))
+                            return cc_error(p, tok.loc, "redefinition of variably modified typedef '%.*s'", name->length, name->data);
+                        if(!cc_types_same(sym.type, type)){
                             cpp_include_backtrace(&p->cpp, LOG_PRINT_ERROR);
                             cpp_msg_preamble(&p->cpp, tok.loc, "error");
                             MStringBuilder* buff = &p->cpp.logger->buff;
@@ -15924,7 +15691,8 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             }
             func->inline_ = func->inline_ || declbase->spec.sp_inline;
             func->always_inline = func->always_inline || is_always_inline;
-            func->printf_like = func->printf_like || is_printf_like;
+            err = cc_apply_printf_formats(p, func, printf_formats);
+            if(err) return err;
             err = cc_merge_default_args(p, func, &param_names, !func->defined && !keep_prototype, name_loc);
             if(err) return err;
         }
@@ -15934,13 +15702,13 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 if(tk == CC_BASIC && ccqt_basic_kind(type) == CCBT_void)
                     return cc_error(p, tok.loc, "variable has incomplete type 'void'");
                 if(tk == CC_ARRAY && ccqt_as_array(type)->is_incomplete && p->current_func)
-                    return cc_error(p, tok.loc, "variable '%.*s' has incomplete array type", name->length, name->data);
+                    return cc_type_error(p, tok.loc, type, "variable '%.*s' has incomplete array type", name->length, name->data);
                 if(tk == CC_STRUCT && ccqt_as_struct(type)->is_incomplete)
                     return cc_error(p, tok.loc, "variable has incomplete type 'struct %s'", ccqt_as_struct(type)->name ? ccqt_as_struct(type)->name->data : "(anonymous)");
                 if(tk == CC_UNION && ccqt_as_union(type)->is_incomplete)
                     return cc_error(p, tok.loc, "variable has incomplete type 'union %s'", ccqt_as_union(type)->name ? ccqt_as_union(type)->name->data : "(anonymous)");
                 if(tk == CC_ENUM && ccqt_as_enum(type)->is_incomplete)
-                    return cc_error(p, tok.loc, "variable has incomplete enum type");
+                    return cc_type_error(p, tok.loc, type, "variable has incomplete enum type");
             }
             if(var){
                 if(initializer && var->initializer)
@@ -16238,11 +16006,11 @@ cc_define_builtin_types(CcParser* p){
         const_char.is_const = 1;
         err = cc_pointer_of(p, const_char, &p->const_char_star);
         if(err) return err;
-        err = cc_slice_of(p, ccqt_basic(CCBT_char), &p->char_slice);
+        err = cc_slice_of(p, ccqt_basic(CCBT_char), (SrcLoc){0}, &p->char_slice);
         if(err) return err;
-        err = cc_slice_of(p, const_char, &p->const_char_slice);
+        err = cc_slice_of(p, const_char, (SrcLoc){0}, &p->const_char_slice);
         if(err) return err;
-        CcArray* mark_type = cc_intern_array(&p->type_cache, al, ccqt_basic(t->size_type), 2, 0, 0);
+        CcArray* mark_type = cc_intern_array(&p->type_cache, al, ccqt_basic(t->size_type), 2, 0);
         if(!mark_type) return CC_OOM_ERROR;
         p->stack_mark_type = (CcQualType){.bits=(uintptr_t)mark_type};
     }
@@ -16288,7 +16056,7 @@ cc_define_builtin_types(CcParser* p){
 
             // typedef __va_list_tag __builtin_va_list[1];
             CcQualType struct_type = {.bits = (uintptr_t)s};
-            CcArray* arr = cc_intern_array(&p->type_cache, al, struct_type, 1, 0, 0);
+            CcArray* arr = cc_intern_array(&p->type_cache, al, struct_type, 1, 0);
             if(!arr) return CC_OOM_ERROR;
             va_list_type = (CcQualType){.bits = (uintptr_t)arr};
             break;
@@ -16841,7 +16609,11 @@ cc_define_builtin_types(CcParser* p){
             func->type = ftype;
             func->extern_ = 1;
             func->libc_builtin = 1;
-            func->printf_like = b->printf_like;
+            if(b->printf_like){
+                CcPrintfFormat format = {.string_index=(uint32_t)b->nargs, .first_to_check=(uint32_t)b->nargs+1};
+                err = cc_apply_printf_formats(p, func, &format);
+                if(err) return err;
+            }
             err = cc_scope_insert_func(al, &p->global, key, func);
             if(err) return CC_OOM_ERROR;
             err = cc_scope_insert_func(al, &p->global, name, func);
@@ -17005,30 +16777,39 @@ cc_parse_func_body(CcParser* p, CcFunc* f){
     return err;
 }
 
+static
+_Bool
+cc_eval_size_product_valid(CiUint128 length, CiUint128 element_size,
+    unsigned size_bits, uint32_t element_alignment){
+    uint64_t stride = ci_uint128_lo(element_size);
+    return ci_uint128_fits_integer(ci_uint128_mul(length, element_size), size_bits, 1)
+        && (!element_alignment || (stride != 0 && stride % element_alignment == 0));
+}
+
 // Wide constants retain the target representation in the expression payload.
 static
 _Bool
 cc_eval_wide(CcQualType t){
-    while(ccqt_kind(t) == CC_ENUM) t = ccqt_as_enum(t)->underlying;
+    t = ccqt_enum_underlying(t);
     return ccqt_bt_eq(t, CCBT_long_double) || ccqt_bt_eq(t, CCBT_float128)
         || ccqt_bt_eq(t, CCBT_int128) || ccqt_bt_eq(t, CCBT_unsigned_int128);
 }
 
 static
 CiUint128
-cc_eval_u128(CcParser* p, CcExpr* v){
+cc_eval_u128(const CcTargetConfig* target, CcExpr* v){
     if(cc_eval_wide(v->type) && ccqt_is_integer(v->type))
         return v->uinteger128;
-    if(ccqt_kind(v->type) == CC_POINTER)
+    if(ccqt_has_pointer_representation(v->type))
         return ci_uint128_from_uint64(v->uinteger);
-    if(ccqt_is_unsigned(v->type, !cc_target(p)->char_is_signed))
+    if(ccqt_is_unsigned(v->type, !target->char_is_signed))
         return ci_uint128_from_uint64(v->uinteger);
     return ci_uint128_from_int64(v->integer);
 }
 
 static
 CiFloat128
-cc_eval_quad(CcParser* p, CcExpr* v){
+cc_eval_quad(const CcTargetConfig* target, CcExpr* v){
     if(ccqt_bt_eq(v->type, CCBT_bfloat16)){
         uint32_t bits = (uint32_t)v->uinteger << 16;
         float value;
@@ -17037,7 +16818,7 @@ cc_eval_quad(CcParser* p, CcExpr* v){
     }
     if(ccqt_bt_eq(v->type, CCBT_float128)) return v->quad;
     if(ccqt_bt_eq(v->type, CCBT_long_double)){
-        switch(cc_target(p)->long_double_format){
+        switch(target->long_double_format){
             case CC_LONG_DOUBLE_X87: return ci_float128_from_float80(v->x87);
             case CC_LONG_DOUBLE_BINARY128: return v->quad;
             case CC_LONG_DOUBLE_BINARY64: return ci_float128_from_double(v->double_);
@@ -17045,14 +16826,14 @@ cc_eval_quad(CcParser* p, CcExpr* v){
     }
     if(ccqt_bt_eq(v->type, CCBT_float)) return ci_float128_from_float(v->float_);
     if(ccqt_bt_eq(v->type, CCBT_double)) return ci_float128_from_double(v->double_);
-    return ci_float128_from_uint128(cc_eval_u128(p, v), ccqt_is_unsigned(v->type, !cc_target(p)->char_is_signed));
+    return ci_float128_from_uint128(cc_eval_u128(target, v), ccqt_is_unsigned(v->type, !target->char_is_signed));
 }
 
 static
 void
-cc_eval_store_quad(CcParser* p, CcExpr* v, CiFloat128 q){
+cc_eval_store_quad(const CcTargetConfig* target, CcExpr* v, CiFloat128 q){
     if(ccqt_bt_eq(v->type, CCBT_long_double)){
-        switch(cc_target(p)->long_double_format){
+        switch(target->long_double_format){
             case CC_LONG_DOUBLE_X87: v->x87 = ci_float80_from_float128(q); return;
             case CC_LONG_DOUBLE_BINARY64: v->double_ = ci_float128_to_double(q); return;
             case CC_LONG_DOUBLE_BINARY128: break;
@@ -17063,9 +16844,11 @@ cc_eval_store_quad(CcParser* p, CcExpr* v, CiFloat128 q){
 
 static
 _Bool
-cc_eval_value_truth(CcParser* p, CcExpr* v){
+cc_eval_value_truth(const CcTargetConfig* target, CcExpr* v){
+    if(ccqt_is_narrow_float(v->type))
+        return ci_narrow_float_nonzero((uint16_t)v->uinteger);
     if(ccqt_bt_eq(v->type, CCBT_long_double) || ccqt_bt_eq(v->type, CCBT_float128))
-        return ci_float128_nonzero(cc_eval_quad(p, v));
+        return ci_float128_nonzero(cc_eval_quad(target, v));
     if(ccqt_bt_eq(v->type, CCBT_float)) return v->float_ != 0;
     if(ccqt_bt_eq(v->type, CCBT_double)) return v->double_ != 0;
     if(cc_eval_wide(v->type)) return ci_uint128_nonzero(v->uinteger128);
@@ -17074,30 +16857,48 @@ cc_eval_value_truth(CcParser* p, CcExpr* v){
 
 static
 int
-cc_eval_wide_cast(CcParser* p, CcExpr* v, CcExpr* out){
+cc_eval_numeric_cast(CcParser* p, CcExpr* v, CcExpr* out, _Bool allow_inexact){
     CcQualType t = out->type;
-    if(ccqt_bt_eq(t, CCBT_float16) || ccqt_bt_eq(v->type, CCBT_float16) || ccqt_bt_eq(t, CCBT_bfloat16) || ccqt_bt_eq(v->type, CCBT_bfloat16))
-        return CC_UNIMPLEMENTED_ERROR;
-    if(ccqt_bt_eq(t, CCBT_bool)){
-        out->integer = cc_eval_value_truth(p, v);
+    if(ccqt_is_bool(t)){
+        out->integer = cc_eval_value_truth(cc_target(p), v);
         return 0;
     }
+    if(ccqt_is_narrow_float(t) || ccqt_is_narrow_float(v->type))
+        return CC_NOT_CONSTANT_ERROR;
     _Bool from_float = ccqt_is_basic(v->type) && ccbt_is_float(ccqt_basic_kind(v->type));
     if(ccqt_is_basic(t) && ccbt_is_float(ccqt_basic_kind(t))){
-        CiFloat128 q = cc_eval_quad(p, v);
-        if(ccqt_bt_eq(t, CCBT_float)) out->float_ = ci_float128_to_float(q);
-        else if(ccqt_bt_eq(t, CCBT_double)) out->double_ = ci_float128_to_double(q);
-        else cc_eval_store_quad(p, out, q);
-        CiFloat128 back = cc_eval_quad(p, out);
+        CiFloat128 q = cc_eval_quad(cc_target(p), v);
+        if(from_float){
+            if(ccqt_bt_eq(t, CCBT_float)) out->float_ = ci_float128_to_float(q);
+            else if(ccqt_bt_eq(t, CCBT_double)) out->double_ = ci_float128_to_double(q);
+            else cc_eval_store_quad(cc_target(p), out, q);
+        }
+        else {
+            // Convert integers directly to the destination precision. Rounding
+            // through quad first can double-round a 128-bit integer.
+            CiUint128 n = cc_eval_u128(cc_target(p), v);
+            _Bool uns = ccqt_is_unsigned(v->type, !cc_target(p)->char_is_signed);
+            if(ccqt_bt_eq(t, CCBT_float)) out->float_ = ci_uint128_to_float(n, uns);
+            else if(ccqt_bt_eq(t, CCBT_double)
+                || (ccqt_bt_eq(t, CCBT_long_double)
+                    && cc_target(p)->long_double_format == CC_LONG_DOUBLE_BINARY64))
+                out->double_ = ci_uint128_to_double(n, uns);
+            else if(ccqt_bt_eq(t, CCBT_long_double)
+                && cc_target(p)->long_double_format == CC_LONG_DOUBLE_X87)
+                out->x87 = ci_float80_from_uint128(n, uns);
+            else out->quad = ci_float128_from_uint128(n, uns);
+        }
+        if(allow_inexact) return 0;
+        CiFloat128 back = cc_eval_quad(cc_target(p), out);
         if(!ci_float128_eq(back, q)) return CC_NOT_CONSTANT_ERROR;
-        if(!from_float && !ci_uint128_eq(ci_float128_to_uint128(back), cc_eval_u128(p, v)))
+        if(!from_float && !ci_uint128_eq(ci_float128_to_uint128(back), cc_eval_u128(cc_target(p), v)))
             return CC_NOT_CONSTANT_ERROR;
         return 0;
     }
     if(!ccqt_is_integer(t)) return CC_NOT_CONSTANT_ERROR;
     CiUint128 u;
     if(from_float){
-        CiFloat128 q = cc_eval_quad(p, v);
+        CiFloat128 q = cc_eval_quad(cc_target(p), v);
         uint32_t size;
         int err = cc_sizeof_as_uint(p, t, out->loc, &size);
         if(err) return err;
@@ -17110,7 +16911,7 @@ cc_eval_wide_cast(CcParser* p, CcExpr* v, CcExpr* out){
             || !ci_float128_lt(q, bound)) return CC_OVERFLOW_ERROR;
         u = ci_float128_to_uint128(q);
     }
-    else u = cc_eval_u128(p, v);
+    else u = cc_eval_u128(cc_target(p), v);
     if(cc_eval_wide(t)) out->uinteger128 = u;
     else out->uinteger = ci_uint128_lo(u);
     return 0;
@@ -17118,7 +16919,7 @@ cc_eval_wide_cast(CcParser* p, CcExpr* v, CcExpr* out){
 
 static
 int
-cc_eval_wide_binary(CcParser* p, CcExprKind op, CcExpr* l, CcExpr* r, CcExpr* out){
+cc_eval_wide_binary(const CcTargetConfig* target, CcExprKind op, CcExpr* l, CcExpr* r, CcExpr* out){
     if(ccqt_bt_eq(l->type, CCBT_long_double) || ccqt_bt_eq(l->type, CCBT_float128)){
         // Perform arithmetic in the target format, avoiding double rounding.
         #define FLOAT_OPS(prefix, a, b, field) \
@@ -17135,10 +16936,10 @@ cc_eval_wide_binary(CcParser* p, CcExprKind op, CcExpr* l, CcExpr* r, CcExpr* ou
                 case CC_EXPR_GE: out->integer = prefix##_le(b,a); return 0; \
                 default: return CC_NOT_CONSTANT_ERROR; \
             }
-        if(ccqt_bt_eq(l->type, CCBT_long_double) && cc_target(p)->long_double_format == CC_LONG_DOUBLE_X87){
+        if(ccqt_bt_eq(l->type, CCBT_long_double) && target->long_double_format == CC_LONG_DOUBLE_X87){
             FLOAT_OPS(ci_float80, l->x87, r->x87, x87);
         }
-        if(ccqt_bt_eq(l->type, CCBT_long_double) && cc_target(p)->long_double_format == CC_LONG_DOUBLE_BINARY64){
+        if(ccqt_bt_eq(l->type, CCBT_long_double) && target->long_double_format == CC_LONG_DOUBLE_BINARY64){
             // Binary64 operands/results are rounded by the host double operations.
             switch((unsigned)op){
                 case CC_EXPR_ADD: out->double_ = l->double_ + r->double_; return 0;
@@ -17148,13 +16949,13 @@ cc_eval_wide_binary(CcParser* p, CcExprKind op, CcExpr* l, CcExpr* r, CcExpr* ou
                 default: break;
             }
         }
-        CiFloat128 a = cc_eval_quad(p,l), b = cc_eval_quad(p,r);
+        CiFloat128 a = cc_eval_quad(target,l), b = cc_eval_quad(target,r);
         FLOAT_OPS(ci_float128, a, b, quad);
         #undef FLOAT_OPS
     }
-    CiUint128 a = cc_eval_u128(p,l), b = cc_eval_u128(p,r), z = ci_uint128_from_uint64(0), u = z;
+    CiUint128 a = cc_eval_u128(target,l), b = cc_eval_u128(target,r), z = ci_uint128_from_uint64(0), u = z;
     CiInt128 sa = ci_int128_from_uint128(a), sb = ci_int128_from_uint128(b);
-    _Bool uns = ccqt_is_unsigned(l->type, !cc_target(p)->char_is_signed);
+    _Bool uns = ccqt_is_unsigned(l->type, !target->char_is_signed);
     _Bool an = ci_uint128_hi(a)>>63, bn = ci_uint128_hi(b)>>63;
     switch((unsigned)op){
         case CC_EXPR_ADD:
@@ -17205,20 +17006,19 @@ cc_eval_wide_binary(CcParser* p, CcExprKind op, CcExpr* l, CcExpr* r, CcExpr* ou
 static
 int
 cc_eval_to_i(CcParser* p, CcExpr* v, int64_t* out){
-    if(ccqt_kind(v->type) == CC_POINTER){
+    if(ccqt_has_pointer_representation(v->type)){
         *out = (int64_t)v->uinteger;
         return 0;
     }
     if(cc_eval_wide(v->type)){
         CcExpr converted = {.type = ccqt_basic(CCBT_long_long)};
-        int err = cc_eval_wide_cast(p, v, &converted);
+        int err = cc_eval_numeric_cast(p, v, &converted, 0);
         if(!err) *out = converted.integer;
         return err;
     }
     (void)p;
     CcQualType t = v->type;
-    while(ccqt_kind(t) == CC_ENUM)
-        t = ccqt_as_enum(t)->underlying;
+    t = ccqt_enum_underlying(t);
     if(!ccqt_is_basic(t)) return CC_NOT_CONSTANT_ERROR;
     CcBasicTypeKind k = ccqt_basic_kind(t);
     switch(k){
@@ -17288,20 +17088,19 @@ cc_eval_to_i(CcParser* p, CcExpr* v, int64_t* out){
 static
 int
 cc_eval_to_u(CcParser* p, CcExpr* v, uint64_t* out){
-    if(ccqt_kind(v->type) == CC_POINTER){
+    if(ccqt_has_pointer_representation(v->type)){
         *out = v->uinteger;
         return 0;
     }
     if(cc_eval_wide(v->type)){
         CcExpr converted = {.type = ccqt_basic(CCBT_unsigned_long_long)};
-        int err = cc_eval_wide_cast(p, v, &converted);
+        int err = cc_eval_numeric_cast(p, v, &converted, 0);
         if(!err) *out = converted.uinteger;
         return err;
     }
     (void)p;
     CcQualType t = v->type;
-    while(ccqt_kind(t) == CC_ENUM)
-        t = ccqt_as_enum(t)->underlying;
+    t = ccqt_enum_underlying(t);
     if(!ccqt_is_basic(t)) return CC_NOT_CONSTANT_ERROR;
     CcBasicTypeKind k = ccqt_basic_kind(t);
     switch(k){
@@ -17372,13 +17171,12 @@ int
 cc_eval_to_f(CcParser* p, CcExpr* v, float* out){
     if(cc_eval_wide(v->type)){
         CcExpr converted = {.type = ccqt_basic(CCBT_float)};
-        int err = cc_eval_wide_cast(p, v, &converted);
+        int err = cc_eval_numeric_cast(p, v, &converted, 0);
         if(!err) *out = converted.float_;
         return err;
     }
     CcQualType t = v->type;
-    while(ccqt_kind(t) == CC_ENUM)
-        t = ccqt_as_enum(t)->underlying;
+    t = ccqt_enum_underlying(t);
     if(!ccqt_is_basic(t)) return CC_NOT_CONSTANT_ERROR;
     CcBasicTypeKind k = ccqt_basic_kind(t);
     switch(k){
@@ -17464,13 +17262,12 @@ int
 cc_eval_to_d(CcParser* p, CcExpr* v, double* out){
     if(cc_eval_wide(v->type)){
         CcExpr converted = {.type = ccqt_basic(CCBT_double)};
-        int err = cc_eval_wide_cast(p, v, &converted);
+        int err = cc_eval_numeric_cast(p, v, &converted, 0);
         if(!err) *out = converted.double_;
         return err;
     }
     CcQualType t = v->type;
-    while(ccqt_kind(t) == CC_ENUM)
-        t = ccqt_as_enum(t)->underlying;
+    t = ccqt_enum_underlying(t);
     if(!ccqt_is_basic(t)) return CC_NOT_CONSTANT_ERROR;
     CcBasicTypeKind k = ccqt_basic_kind(t);
     switch(k){
@@ -17550,8 +17347,7 @@ static
 void
 cc_eval_truncate(CcParser* p, CcExpr* node){
     CcQualType t = node->type;
-    while(ccqt_kind(t) == CC_ENUM)
-        t = ccqt_as_enum(t)->underlying;
+    t = ccqt_enum_underlying(t);
     if(!ccqt_is_basic(t)) return;
     CcBasicTypeKind k = ccqt_basic_kind(t);
     if(!ccbt_is_integer(k)) return;
@@ -17581,7 +17377,7 @@ cc_eval_check_shift_count(CcParser* p, CcQualType left, CcExpr* right){
     uint32_t size;
     int err = cc_sizeof_as_uint(p, left, right->loc, &size);
     if(err) return err;
-    CiUint128 count = cc_eval_u128(p, right);
+    CiUint128 count = cc_eval_u128(cc_target(p), right);
     return ci_uint128_hi(count) || ci_uint128_lo(count) >= (uint64_t)size * 8 ? CC_OVERFLOW_ERROR : 0;
 }
 
@@ -17638,17 +17434,10 @@ cc_eval_address_nonnull(CcEvalAddress address){
 
 static
 _Bool
-cc_eval_address_type(CcQualType type){
-    return ccqt_kind(type) == CC_POINTER || ccqt_kind(type) == CC_BLOCK_POINTER
-        || ccqt_bt_eq(type, CCBT_nullptr_t);
-}
-
-static
-_Bool
 cc_eval_pointer_binary_expr(CcExpr* e){
     switch((unsigned)e->kind){
         case CC_EXPR_EQ: case CC_EXPR_NE:
-            return cc_eval_address_type(e->lhs->type) && cc_eval_address_type(e->values[0]->type);
+            return ccqt_has_pointer_representation(e->lhs->type) && ccqt_has_pointer_representation(e->values[0]->type);
         case CC_EXPR_SUB:
         case CC_EXPR_LT: case CC_EXPR_LE: case CC_EXPR_GT: case CC_EXPR_GE:
             return ccqt_kind(e->lhs->type) == CC_POINTER
@@ -17711,7 +17500,7 @@ cc_eval_object_source(CcEvalCtx* ctx, CcExpr* e, unsigned depth, CcExpr*_Nonnull
             e = e->var->initializer;
         }
         else if(e->kind == CC_EXPR_OBJECT_VIEW
-            || (e->kind == CC_EXPR_CAST && e->type.unqual == e->lhs->type.unqual))
+            || (e->kind == CC_EXPR_CAST && cc_conversion_preserves_representation(e->lhs->type, e->type)))
             e = e->lhs;
         else if(e->kind == CC_EXPR_TERNARY){
             _Bool truth;
@@ -17785,7 +17574,7 @@ cc_eval_object_address(CcEvalCtx* ctx, CcExpr* e, uint64_t offset, uint32_t size
         for(uint32_t i = list->count; i; i--){
             CcInitEntry* entry = &list->entries[i-1];
             uint64_t entry_offset;
-            err = cc_field_path_resolve(cc_target(p), e->type, entry->path, &entry_offset);
+            err = cc_field_path_offset(cc_target(p), e->type, entry->path, &entry_offset);
             if(err) return err;
             if(!entry->value) continue;
             uint32_t entry_size;
@@ -17802,7 +17591,7 @@ cc_eval_object_address(CcEvalCtx* ctx, CcExpr* e, uint64_t offset, uint32_t size
         return 0;
     }
     if(!offset && size == object_size
-        && cc_eval_address_type(e->type))
+        && ccqt_has_pointer_representation(e->type))
         return cc_eval_address(ctx, e, 0, depth + 1, out);
     return CC_NOT_CONSTANT_ERROR;
 }
@@ -17906,7 +17695,7 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
                 if(e->var->automatic || e->var->thread_local_) return CC_NOT_CONSTANT_ERROR;
                 *out = (CcEvalAddress){.kind = CC_EVAL_VAR, .symbol = e->var};
                 uint32_t size;
-                if(!cc_type_sizeof_complete(cc_target(p), e->type, &size)){
+                if(!cc_type_sizeof_complete(cc_target(p), e->type, &size, NULL)){
                     out->has_range = 1;
                     out->range_size = size;
                 }
@@ -17930,13 +17719,13 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
                     .has_range=1, .range_size=size};
                 return 0;
             }
-            if(!lvalue && cc_eval_address_type(e->type)){
+            if(!lvalue && ccqt_has_pointer_representation(e->type)){
                 *out = (CcEvalAddress){.offset = (int64_t)e->uinteger};
                 return 0;
             }
             return CC_NOT_CONSTANT_ERROR;
         case CC_EXPR_INIT_LIST: case CC_EXPR_COMPOUND_LITERAL:
-            if(!lvalue && cc_eval_address_type(e->type)){
+            if(!lvalue && ccqt_has_pointer_representation(e->type)){
                 uint32_t size;
                 err = cc_sizeof_as_uint(p, e->type, e->loc, &size);
                 if(err) return err;
@@ -17946,19 +17735,22 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
         case CC_EXPR_ADDR:
             return cc_eval_address(ctx, e->lhs, 1, depth + 1, out);
         case CC_EXPR_DEREF:
-            if(!lvalue && cc_eval_address_type(e->type))
+            if(!lvalue && ccqt_has_pointer_representation(e->type))
                 return cc_eval_address_value(ctx, e, out);
             return lvalue || ccqt_is_fixed_sequence(e->type)
                 ? cc_eval_address(ctx, e->lhs, 0, depth + 1, out) : CC_NOT_CONSTANT_ERROR;
         case CC_EXPR_DOT: case CC_EXPR_ARROW:
-            if(!lvalue && cc_eval_address_type(e->type))
+            if(!lvalue && ccqt_has_pointer_representation(e->type))
                 return cc_eval_address_value(ctx, e, out);
             if((!lvalue && !ccqt_is_fixed_sequence(e->type)) || cc_expr_field_bit_width(e))
                 return CC_NOT_CONSTANT_ERROR;
             err = cc_eval_address(ctx, e->values[0], e->kind == CC_EXPR_DOT, depth + 1, out);
             if(err) return err;
-            if(cc_expr_field_offset(cc_target(p), e) > INT64_MAX
-                || add_overflow(out->offset, (int64_t)cc_expr_field_offset(cc_target(p), e), &out->offset))
+            uint64_t field_offset;
+            err = cc_expr_field_offset(cc_target(p), e, &field_offset);
+            if(err) return err;
+            if(field_offset > INT64_MAX
+                || add_overflow(out->offset, (int64_t)field_offset, &out->offset))
                 return CC_OVERFLOW_ERROR;
             if(!(ccqt_is_fixed_sequence(e->type) && ccqt_array_incomplete(e->type))){
                 out->has_range = 1;
@@ -17977,7 +17769,7 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
             err = cc_eval_integer(ctx, e->values[0], &index);
             if(err) return err;
             uint32_t size;
-            if(cc_type_sizeof_complete(cc_target(p), e->type, &size))
+            if(cc_type_sizeof_complete(cc_target(p), e->type, &size, NULL))
                 return CC_NOT_CONSTANT_ERROR;
             if(ccqt_kind(e->lhs->type) == CC_SLICE){
                 uint64_t count;
@@ -18000,15 +17792,15 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
             return 0;
         }
         case CC_EXPR_CAST:
-            if(!cc_eval_address_type(e->type)) return CC_NOT_CONSTANT_ERROR;
-            if(cc_eval_address_type(e->lhs->type) || ccqt_is_fixed_sequence(e->lhs->type)
+            if(!ccqt_has_pointer_representation(e->type)) return CC_NOT_CONSTANT_ERROR;
+            if(ccqt_has_pointer_representation(e->lhs->type) || ccqt_is_fixed_sequence(e->lhs->type)
                 || ccqt_kind(e->lhs->type) == CC_FUNCTION)
                 return cc_eval_address(ctx, e->lhs, ccqt_is_fixed_sequence(e->lhs->type), depth + 1, out);
             if(ccqt_is_integer(e->lhs->type)){
                 CcExpr* value;
                 err = cc_eval_expr(ctx, e, &value);
                 if(err) return err;
-                if(value->kind == CC_EXPR_VALUE && cc_eval_address_type(value->type))
+                if(value->kind == CC_EXPR_VALUE && ccqt_has_pointer_representation(value->type))
                     *out = (CcEvalAddress){.offset = (int64_t)value->uinteger};
                 else err = CC_NOT_CONSTANT_ERROR;
                 cc_release_expr(p, value);
@@ -18029,7 +17821,7 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
             uint32_t size = 1;
             CcQualType pointee = ccqt_as_ptr(base->type)->pointee;
             if(!ccqt_bt_eq(pointee, CCBT_void)){
-                if(cc_type_sizeof_complete(cc_target(p), pointee, &size))
+                if(cc_type_sizeof_complete(cc_target(p), pointee, &size, NULL))
                     return CC_NOT_CONSTANT_ERROR;
             }
             err = cc_eval_address(ctx, base, 0, depth + 1, out);
@@ -18089,7 +17881,7 @@ cc_eval_pointer_binary(CcEvalCtx* ctx, CcExpr* e, int64_t* result){
             uint32_t size = 1;
             CcQualType pointee = ccqt_as_ptr(e->lhs->type)->pointee;
             if(!ccqt_bt_eq(pointee, CCBT_void)){
-                if(cc_type_sizeof_complete(cc_target(ctx->parser), pointee, &size))
+                if(cc_type_sizeof_complete(cc_target(ctx->parser), pointee, &size, NULL))
                     return CC_NOT_CONSTANT_ERROR;
             }
             int64_t delta;
@@ -18117,9 +17909,16 @@ cc_eval_symbolic_binary(CcParser* p, CcExpr* e, _Bool allow_const, int64_t* resu
 }
 
 static
+CcEvalCtx
+cc_linktime_eval_ctx(CcParser* p){
+    return (CcEvalCtx){.parser=p, .allow_const=1, .allow_inexact_float_casts=1};
+}
+
+static
 int
 cc_eval_linktime_expr(CcParser* p, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
-    return cc_eval_expr(&(CcEvalCtx){.parser = p, .allow_const = 1}, e, result);
+    CcEvalCtx ctx = cc_linktime_eval_ctx(p);
+    return cc_eval_expr(&ctx, e, result);
 }
 
 static
@@ -18153,7 +17952,7 @@ cc_eval_integer_address(CcEvalCtx* ctx, CcExpr* e, unsigned depth, CcEvalAddress
     if(err) return err;
     if(source != e) return cc_eval_integer_address(ctx, source, depth+1, out);
     if(e->kind == CC_EXPR_CAST){
-        if(cc_eval_address_type(e->lhs->type)
+        if(ccqt_has_pointer_representation(e->lhs->type)
         || ccqt_is_fixed_sequence(e->lhs->type)
         || ccqt_kind(e->lhs->type) == CC_FUNCTION)
             return cc_eval_address(ctx, e->lhs, ccqt_is_fixed_sequence(e->lhs->type), depth+1, out);
@@ -18188,7 +17987,7 @@ cc_eval_integer_address(CcEvalCtx* ctx, CcExpr* e, unsigned depth, CcEvalAddress
         cc_release_expr(p, value);
         return CC_NOT_CONSTANT_ERROR;
     }
-    CiUint128 bits = cc_eval_u128(p, value);
+    CiUint128 bits = cc_eval_u128(cc_target(p), value);
     _Bool positive = !ci_uint128_hi(bits) && ci_uint128_lo(bits) <= INT64_MAX;
     _Bool negative = !ccqt_is_unsigned(value->type, !cc_target(p)->char_is_signed)
         && ci_uint128_hi(bits) == UINT64_MAX && ci_uint128_lo(bits) > INT64_MAX;
@@ -18210,7 +18009,7 @@ _Bool
 cc_eval_opaque_region(CcParser* p, CcQualType type, uint64_t offset, uint32_t size, _Bool metadata, unsigned depth){
     if(depth >= 256 || size != cc_target(p)->sizeof_[metadata ? CCBT__Type : CCBT_nullptr_t]) return 0;
     if(metadata && ccqt_bt_eq(type, CCBT__Type)) return !offset;
-    if(!metadata && cc_eval_address_type(type)) return !offset;
+    if(!metadata && ccqt_has_pointer_representation(type)) return !offset;
     if(!metadata && ccqt_kind(type) == CC_SLICE)
         return offset == cc_target(p)->sizeof_[CCBT_nullptr_t];
     if(ccqt_bt_eq(type, CCBT__Any))
@@ -18219,7 +18018,7 @@ cc_eval_opaque_region(CcParser* p, CcQualType type, uint64_t offset, uint32_t si
     if(kind == CC_ARRAY || kind == CC_VECTOR){
         if(ccqt_array_incomplete(type)) return 0;
         uint32_t stride;
-        if(cc_type_sizeof_complete(cc_target(p), ccqt_array_element(type), &stride))
+        if(cc_type_sizeof_complete(cc_target(p), ccqt_array_element(type), &stride, NULL))
             return 0;
         if(!stride || offset/stride >= ccqt_sequence_length(type))
             return 0;
@@ -18294,7 +18093,7 @@ cc_check_linktime_default_view(CcEvalCtx* ctx, CcExpr*_Nullable root, CcQualType
     }
     if(depth >= 256) return CC_NOT_CONSTANT_ERROR;
     CcParser* p = ctx->parser;
-    if(ccqt_bt_eq(type, CCBT__Type) || cc_eval_address_type(type)){
+    if(ccqt_bt_eq(type, CCBT__Type) || ccqt_has_pointer_representation(type)){
         if(!root) return CC_NOT_CONSTANT_ERROR;
         return cc_check_linktime_opaque_view(ctx, (CcExpr*_Nonnull)root, root_offset, size);
     }
@@ -18317,7 +18116,7 @@ cc_check_linktime_default_view(CcEvalCtx* ctx, CcExpr*_Nullable root, CcQualType
     CcTypeKind kind = ccqt_kind(type);
     if(kind == CC_ARRAY || kind == CC_VECTOR){
         uint32_t stride;
-        int err = cc_type_sizeof_complete(cc_target(p), ccqt_array_element(type), &stride);
+        int err = cc_type_sizeof_complete(cc_target(p), ccqt_array_element(type), &stride, NULL);
         if(err) return err;
         if(!stride) return CC_NOT_CONSTANT_ERROR;
         uint64_t first = offset/stride, last = (offset+size-1)/stride;
@@ -18350,7 +18149,7 @@ cc_check_linktime_default_view(CcEvalCtx* ctx, CcExpr*_Nullable root, CcQualType
                 continue;
             uint64_t start = field->offset;
             uint32_t field_size;
-            int err = cc_type_sizeof_complete(cc_target(p), field->type, &field_size);
+            int err = cc_type_sizeof_complete(cc_target(p), field->type, &field_size, NULL);
             if(err) return err;
             uint64_t end = start + field_size;
             uint64_t lo = offset > start ? offset : start;
@@ -18417,7 +18216,7 @@ cc_check_linktime_view(CcEvalCtx* ctx, CcExpr* root, CcExpr* e, uint64_t offset,
         for(uint32_t i = 0; i < list->count; i++){
             CcInitEntry* entry = &list->entries[i];
             uint64_t entry_offset;
-            err = cc_field_path_resolve(cc_target(p), e->type, entry->path, &entry_offset);
+            err = cc_field_path_offset(cc_target(p), e->type, entry->path, &entry_offset);
             if(err) return err;
             if(!entry->value || cc_field_path_bit_width(e->type, entry->path)) continue;
             uint32_t entry_size;
@@ -18442,7 +18241,7 @@ cc_check_linktime_view(CcEvalCtx* ctx, CcExpr* root, CcExpr* e, uint64_t offset,
     }
     if(ccqt_bt_eq(e->type, CCBT__Type))
         return cc_check_linktime_opaque_view(ctx, root, root_offset, size);
-    if(cc_eval_address_type(e->type))
+    if(ccqt_has_pointer_representation(e->type))
         return cc_check_linktime_opaque_view(ctx, root, root_offset, size);
     if(ccqt_kind(e->type) == CC_SLICE
         && (e->kind == CC_EXPR_SLICE || e->kind == CC_EXPR_SLICE_LO || e->kind == CC_EXPR_SLICE_HI
@@ -18476,7 +18275,7 @@ static
 int
 cc_check_linktime_subobject(CcParser* p, CcExpr* e, unsigned depth){
     if(depth >= 256) return CC_NOT_CONSTANT_ERROR;
-    CcEvalCtx ctx = {.parser=p, .allow_const=1};
+    CcEvalCtx ctx = cc_linktime_eval_ctx(p);
     _Bool handled;
     CcExpr* selected = NULL;
     int selection_err = cc_eval_object_view_select(&ctx, e, 1, &handled, &selected);
@@ -18487,16 +18286,16 @@ cc_check_linktime_subobject(CcParser* p, CcExpr* e, unsigned depth){
         return selection_err;
     }
     _Bool metadata = ccqt_bt_eq(e->type, CCBT__Type);
-    if(cc_eval_address_type(e->type)){
+    if(ccqt_has_pointer_representation(e->type)){
         CcEvalAddress address;
-        return cc_eval_address(&(CcEvalCtx){.parser = p, .allow_const = 1}, e, 0, 0, &address);
+        return cc_eval_address(&ctx, e, 0, 0, &address);
     }
     CcTypeKind kind = ccqt_kind(e->type);
     if(kind == CC_STRUCT || kind == CC_UNION || kind == CC_SLICE || ccqt_bt_eq(e->type, CCBT__Any)){
         uint32_t size;
         int err = cc_sizeof_as_uint(p, e->type, e->loc, &size);
         if(err) return err;
-        return cc_check_linktime_view(&(CcEvalCtx){.parser = p, .allow_const = 1}, e, e, 0, size, 0, 0);
+        return cc_check_linktime_view(&ctx, e, e, 0, size, 0, 0);
     }
     _Bool floating = ccqt_is_basic(e->type) && ccbt_is_float(ccqt_basic_kind(e->type));
     if(!metadata && !floating && !ccqt_is_integer(e->type)) return 0;
@@ -18520,12 +18319,13 @@ cc_check_linktime_expr(CcParser* p, CcExpr* e, _Bool address, unsigned depth){
 static
 int
 cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool selected, unsigned depth){
+    CcEvalCtx ctx = cc_linktime_eval_ctx(p);
     if(depth > 256) return CC_NOT_CONSTANT_ERROR;
     if(!address && e->is_lvalue && (e->type.is_volatile || e->type.is_atomic))
         return CC_NOT_CONSTANT_ERROR;
     if(cc_eval_pointer_binary_expr(e)){
         int64_t value;
-        return cc_eval_pointer_binary(&(CcEvalCtx){.parser = p, .allow_const = 1}, e, &value);
+        return cc_eval_pointer_binary(&ctx, e, &value);
     }
     int err;
     switch(e->kind){
@@ -18557,7 +18357,7 @@ cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool select
             return cc_check_linktime_expr(p, e->lhs, 0, depth + 1);
         case CC_EXPR_DOT:
             if(!address){
-                err = cc_eval_check_any_view(&(CcEvalCtx){.parser = p, .allow_const = 1}, e);
+                err = cc_eval_check_any_view(&ctx, e);
                 if(err == CC_NOT_CONSTANT_ERROR)
                     return cc_error(p, e->loc, "constant _Any.as requires the stored type, ignoring top-level qualifiers");
                 if(err) return err;
@@ -18577,7 +18377,7 @@ cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool select
         case CC_EXPR_SUBSCRIPT:
             if(address && ccqt_kind(e->lhs->type) == CC_SLICE){
                 CcEvalAddress value;
-                return cc_eval_address(&(CcEvalCtx){.parser = p, .allow_const = 1}, e, 1, depth + 1, &value);
+                return cc_eval_address(&ctx, e, 1, depth + 1, &value);
             }
             if(!address && !selected){
                 err = cc_check_linktime_subobject(p, e, depth);
@@ -18589,8 +18389,8 @@ cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool select
         case CC_EXPR_CAST:
             err = cc_check_linktime_expr_inner(
                 p, e->lhs,
-                (ccqt_kind(e->type) == CC_POINTER || ccqt_kind(e->type) == CC_SLICE) && ccqt_is_fixed_sequence(e->lhs->type),
-                selected && e->type.unqual == e->lhs->type.unqual,
+                (ccqt_has_pointer_representation(e->type) || ccqt_kind(e->type) == CC_SLICE) && ccqt_is_fixed_sequence(e->lhs->type),
+                selected && cc_conversion_preserves_representation(e->lhs->type, e->type),
                 depth + 1
             );
             if(err) return err;
@@ -18598,7 +18398,7 @@ cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool select
             && ccqt_is_integer(e->type)
             && !ccqt_is_bool(e->type)
             && (ccqt_is_integer(e->lhs->type)
-                || cc_eval_address_type(e->lhs->type)
+                || ccqt_has_pointer_representation(e->lhs->type)
                 || ccqt_is_fixed_sequence(e->lhs->type)
                 || ccqt_kind(e->lhs->type) == CC_FUNCTION)
             ){
@@ -18607,7 +18407,7 @@ cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool select
                 if(!err) cc_release_expr(p, value);
                 if(err == CC_NOT_CONSTANT_ERROR){
                     CcEvalAddress relocation;
-                    err = cc_eval_integer_address(&(CcEvalCtx){.parser=p, .allow_const=1}, e, 0, &relocation);
+                    err = cc_eval_integer_address(&ctx, e, 0, &relocation);
                 }
                 return err == CC_OVERFLOW_ERROR ? CC_NOT_CONSTANT_ERROR : err;
             }
@@ -18616,31 +18416,22 @@ cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool select
                     || (ccqt_is_basic(e->lhs->type) && ccbt_is_float(ccqt_basic_kind(e->lhs->type))))
                 && (ccqt_is_integer(e->type) || (ccqt_is_basic(e->type) && ccbt_is_float(ccqt_basic_kind(e->type))))){
                 CcExpr* value;
-                err = cc_eval_expr(&(CcEvalCtx){.parser = p, .allow_const = 1}, e->lhs, &value);
+                err = cc_eval_linktime_expr(p, e->lhs, &value);
                 if(!err) cc_release_expr(p, value);
                 if(err) return err;
             }
-            if(ccqt_is_integer(e->type) && !ccqt_bt_eq(e->type, CCBT_bool)
+            if(ccqt_is_integer(e->type) && !ccqt_is_bool(e->type)
                 && ccqt_is_basic(e->lhs->type) && ccbt_is_float(ccqt_basic_kind(e->lhs->type))){
                 CcExpr* value;
-                err = cc_eval_expr(&(CcEvalCtx){.parser = p, .allow_const = 1}, e->lhs, &value);
+                err = cc_eval_linktime_expr(p, e->lhs, &value);
                 if(err && err != CC_NOT_CONSTANT_ERROR) return err;
                 if(!err){
-                    uint32_t size;
-                    err = cc_sizeof_as_uint(p, e->type, e->loc, &size);
-                    if(err){
-                        cc_release_expr(p, value);
-                        return err;
-                    }
-                    _Bool uns = ccqt_is_unsigned(e->type, !cc_target(p)->char_is_signed);
-                    CiFloat128 q = cc_eval_quad(p, value);
-                    CiFloat128 bound = ci_float128_from_uint128(ci_uint128_shl(ci_uint128_from_uint64(1), size * 8 - 1), 1);
-                    if(uns) bound = ci_float128_add(bound, bound);
-                    CiFloat128 low = uns ? ci_float128_from_int64(0) : ci_float128_neg(bound);
-                    CiFloat128 below = ci_float128_sub(low, ci_float128_from_int64(1));
-                    _Bool in_range = (ci_float128_le(low, q) || ci_float128_lt(below, q)) && ci_float128_lt(q, bound);
+                    CcExpr converted = {.type=e->type, .loc=e->loc};
+                    err = cc_eval_numeric_cast(p, value, &converted, 1);
                     cc_release_expr(p, value);
-                    if(!in_range) return cc_error(p, e->loc, "static initializer conversion is out of range");
+                    if(err == CC_OVERFLOW_ERROR)
+                        return cc_error(p, e->loc, "static initializer conversion is out of range");
+                    if(err) return err;
                 }
             }
             return 0;
@@ -18656,15 +18447,22 @@ cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool select
             err = cc_check_linktime_expr(p, e->lhs, 0, depth + 1);
             if(err) return err;
             return cc_check_linktime_expr_inner(p, e->values[0], address, selected, depth + 1);
-        case CC_EXPR_SLICE: case CC_EXPR_SLICE_ALL: case CC_EXPR_SLICE_LO: case CC_EXPR_SLICE_HI:
+        case CC_EXPR_SLICE: case CC_EXPR_SLICE_ALL: case CC_EXPR_SLICE_LO: case CC_EXPR_SLICE_HI: {
             err = cc_check_linktime_expr(p, e->lhs, ccqt_is_fixed_sequence(e->lhs->type), depth + 1);
             if(err) return err;
-            break;
+            for(size_t i = 0, n = cc_expr_nvalues(e); i < n; i++){
+                err = cc_check_linktime_expr_inner(p, e->values[i], 0, selected, depth + 1);
+                if(err) return err;
+            }
+            uint64_t count;
+            CcEvalAddress data;
+            return cc_eval_slice(&ctx, e, depth, &count, &data);
+        }
         case CC_EXPR_LOGAND: case CC_EXPR_LOGOR: case CC_EXPR_TERNARY: {
             err = cc_check_linktime_expr(p, e->lhs, 0, depth + 1);
             if(err) return err;
             _Bool truth;
-            err = cc_eval_truthy(&(CcEvalCtx){.parser = p, .allow_const = 1}, e->lhs, &truth);
+            err = cc_eval_truthy(&ctx, e->lhs, &truth);
             if(err) return err;
             if(e->kind == CC_EXPR_TERNARY)
                 return cc_check_linktime_expr_inner(p, e->values[truth ? 0 : 1], address, selected, depth + 1);
@@ -18713,7 +18511,7 @@ cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool select
                 // Other integer operations need a concrete numeric value.
                 if(err == CC_NOT_CONSTANT_ERROR && (e->kind == CC_EXPR_ADD || e->kind == CC_EXPR_SUB)){
                     CcEvalAddress relocation;
-                    err = cc_eval_integer_address(&(CcEvalCtx){.parser=p, .allow_const=1}, e, 0, &relocation);
+                    err = cc_eval_integer_address(&ctx, e, 0, &relocation);
                     return err == CC_OVERFLOW_ERROR ? CC_NOT_CONSTANT_ERROR : err;
                 }
                 return err;
@@ -18865,7 +18663,7 @@ cc_eval_object_bytes_inner(CcEvalCtx* ctx, CcExpr* e, uint32_t offset, uint32_t 
             int err = cc_sizeof_as_uint(p, ent->value->type, e->loc, &sz);
             if(err) return err;
             uint64_t entry_offset;
-            err = cc_field_path_resolve(cc_target(p), e->type, ent->path, &entry_offset);
+            err = cc_field_path_offset(cc_target(p), e->type, ent->path, &entry_offset);
             if(err) return err;
             uint64_t start = entry_offset;
             uint64_t end = start + sz;
@@ -18886,7 +18684,7 @@ cc_eval_object_bytes_inner(CcEvalCtx* ctx, CcExpr* e, uint32_t offset, uint32_t 
                 CcExpr* value;
                 err = cc_eval_expr(ctx, ent->value, &value);
                 if(err) return err;
-                CiUint128 bits = cc_eval_u128(p, value);
+                CiUint128 bits = cc_eval_u128(cc_target(p), value);
                 cc_release_expr(p, value);
                 // Merge only this field's bits: adjacent fields can share bytes.
                 for(uint32_t byte = lo; byte < hi; byte++){
@@ -18937,7 +18735,7 @@ cc_eval_object_bytes_inner(CcEvalCtx* ctx, CcExpr* e, uint32_t offset, uint32_t 
         err = CC_NOT_CONSTANT_ERROR;
     else {
         CcQualType t = v->type;
-        if(ccqt_kind(t) == CC_ENUM) t = ccqt_as_enum(t)->underlying;
+        t = ccqt_enum_underlying(t);
         if(!ccqt_is_basic(t) || !(ccbt_is_integer(ccqt_basic_kind(t)) || ccbt_is_float(ccqt_basic_kind(t)))
             || (uint64_t)offset + size > cc_target(p)->sizeof_[ccqt_basic_kind(t)] || (uint64_t)offset + size > sizeof v->data)
             err = CC_NOT_CONSTANT_ERROR;
@@ -19008,7 +18806,7 @@ cc_eval_object_type(CcEvalCtx* ctx, CcExpr* e, uint64_t offset, unsigned depth, 
         for(uint32_t i = list->count; i; i--){
             CcInitEntry* entry = &list->entries[i-1];
             uint64_t entry_offset;
-            err = cc_field_path_resolve(cc_target(p), e->type, entry->path, &entry_offset);
+            err = cc_field_path_offset(cc_target(p), e->type, entry->path, &entry_offset);
             if(err) return err;
             if(!entry->value) continue;
             uint32_t entry_size;
@@ -19042,7 +18840,7 @@ int
 cc_eval_object_scalar(CcEvalCtx* ctx, CcExpr* base, uint32_t offset, CcQualType type, SrcLoc loc, const unsigned char*_Nullable mask, CcExpr*_Nullable*_Nonnull result){
     CcParser* p = ctx->parser;
     CcQualType t = type;
-    if(ccqt_kind(t) == CC_ENUM) t = ccqt_as_enum(t)->underlying;
+    t = ccqt_enum_underlying(t);
     _Bool pointer = ccqt_kind(t) == CC_POINTER || ccqt_kind(t) == CC_BLOCK_POINTER;
     if(!pointer && (!ccqt_is_basic(t) || !(ccbt_is_integer(ccqt_basic_kind(t)) || ccqt_bt_eq(t, CCBT_float)
         || ccqt_bt_eq(t, CCBT_double) || cc_eval_wide(t) || ccqt_bt_eq(t, CCBT__Type) || ccqt_bt_eq(t, CCBT_nullptr_t))))
@@ -19146,7 +18944,7 @@ cc_source_location_expr(CcParser* p, CcBuiltinOp op, SrcLoc loc, CcExpr*_Nullabl
     else return CC_UNREACHABLE_ERROR;
     Atom atom = AT_atomize(p->cpp.at, text.text, text.length);
     if(!atom) return CC_OOM_ERROR;
-    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), text.length+1, 0, 0);
+    CcArray* array = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), text.length+1, 0);
     if(!array) return CC_OOM_ERROR;
     CcExpr* value = cc_value_expr(p, loc, (CcQualType){.bits=(uintptr_t)array});
     if(!value) return CC_OOM_ERROR;
@@ -19165,43 +18963,48 @@ cc_clone_default_type(CcParser* p, CcQualType type, unsigned depth, SrcLoc call_
     *out = type;
     if(!ccqt_is_vm(type)) return 0;
     if(depth >= 256) return CC_NOT_CONSTANT_ERROR;
+    // Rebuild only temporary nodes here, then intern the transformed graph.
+    // Captures are remapped by variable identity; unrelated typedefs retain
+    // their canonical nodes and repeated references share the remapped type.
+    union {
+        CcAligned aligned;
+        CcPointer pointer;
+        CcSlice slice;
+        CcArray array;
+        CcVla vla;
+    } storage;
     CcQualType* element;
     switch(ccqt_raw_kind(type)){
         case CC_ALIGNED: {
-            CcAligned* copy = Allocator_alloc(cc_allocator(p), sizeof *copy);
-            if(!copy) return CC_OOM_ERROR;
+            CcAligned* copy = &storage.aligned;
             *copy = *ccqt_as_aligned(type);
             out->bits = (uintptr_t)copy;
             element = &copy->underlying;
             break;
         }
         case CC_POINTER: case CC_BLOCK_POINTER: {
-            CcPointer* copy = Allocator_alloc(cc_allocator(p), sizeof *copy);
-            if(!copy) return CC_OOM_ERROR;
+            CcPointer* copy = &storage.pointer;
             *copy = *ccqt_as_ptr(type);
             out->bits = (uintptr_t)copy;
             element = &copy->pointee;
             break;
         }
         case CC_SLICE: {
-            CcSlice* copy = Allocator_alloc(cc_allocator(p), sizeof *copy);
-            if(!copy) return CC_OOM_ERROR;
+            CcSlice* copy = &storage.slice;
             *copy = *ccqt_as_slice(type);
             out->bits = (uintptr_t)copy;
             element = &copy->pointee;
             break;
         }
         case CC_ARRAY: {
-            CcArray* copy = Allocator_alloc(cc_allocator(p), sizeof *copy);
-            if(!copy) return CC_OOM_ERROR;
+            CcArray* copy = &storage.array;
             *copy = *ccqt_as_array(type);
             out->bits = (uintptr_t)copy;
             element = &copy->element;
             break;
         }
         case CC_VLA: {
-            CcVla* copy = Allocator_alloc(cc_allocator(p), sizeof *copy);
-            if(!copy) return CC_OOM_ERROR;
+            CcVla* copy = &storage.vla;
             *copy = *ccqt_as_vla(type);
             int err = cc_clone_expr_inner(p, copy->bound, depth+1, call_loc, defer_storage, vars, (CcExpr*_Nullable*)&copy->bound);
             if(err) return err;
@@ -19212,18 +19015,26 @@ cc_clone_default_type(CcParser* p, CcQualType type, unsigned depth, SrcLoc call_
         default: return CC_UNREACHABLE_ERROR;
     }
     out->quals = type.quals;
-    return cc_clone_default_type(p, *element, depth+1, call_loc, defer_storage, vars, element);
+    int err = cc_clone_default_type(p, *element, depth+1, call_loc, defer_storage, vars, element);
+    if(err){
+        *out = CCQT_NONE;
+        return err;
+    }
+    *out = cc_intern_qualtype(p, *out);
+    return out->bits ? 0 : CC_OOM_ERROR;
 }
 
 static
 int
-cc_clone_default_bound(CcParser* p, Parray* vars, CcVariable* source){
+cc_map_default_bound(CcParser* p, Parray* vars, CcVariable* source, _Bool clone){
     for(size_t i=0; i<vars->count; i+=2){
         if(vars->data[i] == source) return 0;
     }
-    CcVariable* var;
-    int err = cc_new_vla_bound(p, source->loc, source->type, &var);
-    if(err) return err;
+    CcVariable* var = source;
+    if(clone){
+        int err = cc_new_vla_bound(p, source->loc, source->type, &var);
+        if(err) return err;
+    }
     if(pa_push(vars, cc_scratch_allocator(p), source) || pa_push(vars, cc_scratch_allocator(p), var))
         return CC_OOM_ERROR;
     return 0;
@@ -19237,14 +19048,21 @@ cc_clone_expr(CcParser* p, CcExpr* e, unsigned depth, SrcLoc call_loc, _Bool def
 
 static
 int
-cc_collect_default_bounds(CcParser* p, CcExpr* e, unsigned depth, Parray* vars){
-    if(depth >= 256 || e->kind == CC_EXPR_STATEMENT_EXPRESSION)
-        return CC_NOT_CONSTANT_ERROR;
+cc_prepare_default_arg(CcParser* p, CcExpr* e, unsigned depth, Parray* vars, _Bool clone){
+    if(depth >= 256) return CC_NOT_CONSTANT_ERROR;
+    if(e->kind == CC_EXPR_STATEMENT_EXPRESSION)
+        return cc_error(p, e->loc, "default argument may not use a statement expression");
     int err;
     switch(e->kind){
+        case CC_EXPR_VA:
+            if(e->va.op == CC_VA_START){
+                err = cc_check_va_start_context(p, e->loc);
+                if(err) return err;
+            }
+            goto visit_lhs;
         case CC_EXPR_ASSIGN:
             if(e->lhs->kind == CC_EXPR_VARIABLE && e->lhs->var->vla_bound){
-                err = cc_clone_default_bound(p, vars, e->lhs->var);
+                err = cc_map_default_bound(p, vars, e->lhs->var, clone);
                 if(err) return err;
             }
             goto visit_lhs;
@@ -19253,13 +19071,23 @@ cc_collect_default_bounds(CcParser* p, CcExpr* e, unsigned depth, Parray* vars){
             for(uint32_t i = 0; i < e->init_list->count; i++){
                 CcExpr* value = e->init_list->entries[i].value;
                 if(!value) continue;
-                err = cc_collect_default_bounds(p, value, depth+1, vars);
+                err = cc_prepare_default_arg(p, value, depth+1, vars, clone);
                 if(err) return err;
             }
             return 0;
+        case CC_EXPR_VARIABLE: {
+            CcVariable* var = e->var;
+            if(!var->automatic || var->constexpr_) break;
+            _Bool owned = 0;
+            for(size_t i=0; i<vars->count; i+=2)
+                if(vars->data[i] == var){ owned = 1; break; }
+            if(!owned)
+                return cc_error(p, e->loc, "default argument may not use automatic variable '%.*s'",
+                    var->name->length, var->name->data);
+            break;
+        }
         case CC_EXPR_BLOB:
         case CC_EXPR_VALUE:
-        case CC_EXPR_VARIABLE:
         case CC_EXPR_FUNCTION:
         case CC_EXPR_BUILTIN:
         case CC_EXPR_DOT:
@@ -19268,14 +19096,14 @@ cc_collect_default_bounds(CcParser* p, CcExpr* e, unsigned depth, Parray* vars){
         default:
         visit_lhs:
             if(e->lhs){
-                err = cc_collect_default_bounds(p, e->lhs, depth+1, vars);
+                err = cc_prepare_default_arg(p, e->lhs, depth+1, vars, clone);
                 if(err) return err;
             }
             break;
     }
     for(size_t i = 0, n = cc_expr_nvalues(e); i < n; i++){
         if(!e->values[i]) continue;
-        err = cc_collect_default_bounds(p, e->values[i], depth+1, vars);
+        err = cc_prepare_default_arg(p, e->values[i], depth+1, vars, clone);
         if(err) return err;
     }
     return 0;
@@ -19288,7 +19116,7 @@ cc_clone_default_arg(CcParser* p, CcExpr* e, SrcLoc call_loc, CcParseFlags flags
     if(flags.unevaluated)
         return cc_clone_expr(p, e, 0, call_loc, flags.parsing_default_arg, out);
     Parray vars = {0};
-    int err = cc_collect_default_bounds(p, e, 0, &vars);
+    int err = cc_prepare_default_arg(p, e, 0, &vars, 1);
     if(err) goto cleanup;
     err = cc_clone_expr_inner(p, e, 0, call_loc, flags.parsing_default_arg, vars.count ? &vars : NULL, out);
     cleanup:
@@ -19813,7 +19641,7 @@ cc_eval_object_view_open(CcEvalCtx* ctx, CcExpr* e, CcEvalObjectView* view){
             err = cc_eval_check_any_view(ctx, base);
             if(err) goto cleanup;
             step = base->field_path;
-            err = cc_field_path_resolve(cc_target(p), cc_expr_field_owner(base), step, &step_offset);
+            err = cc_field_path_offset(cc_target(p), cc_expr_field_owner(base), step, &step_offset);
             if(err) goto cleanup;
             if(base->kind == CC_EXPR_ARROW){
                 indirect = base->values[0];
@@ -19834,7 +19662,7 @@ cc_eval_object_view_open(CcEvalCtx* ctx, CcExpr* e, CcEvalObjectView* view){
                 err = CC_OOM_ERROR;
                 goto cleanup;
             }
-            err = cc_field_path_resolve(cc_target(p), base->lhs->type, step, &step_offset);
+            err = cc_field_path_offset(cc_target(p), base->lhs->type, step, &step_offset);
             if(err) goto cleanup;
             base = base->lhs;
         }
@@ -19869,7 +19697,7 @@ cc_eval_object_view_open(CcEvalCtx* ctx, CcExpr* e, CcEvalObjectView* view){
 static
 int
 cc_eval_linktime_object_view(CcParser* p, CcExpr* e, CcEvalObjectView* view){
-    CcEvalCtx ctx = {.parser=p, .allow_const=1};
+    CcEvalCtx ctx = cc_linktime_eval_ctx(p);
     return cc_eval_object_view_open(&ctx, e, view);
 }
 
@@ -19960,7 +19788,7 @@ cc_eval_object_view_select(CcEvalCtx* ctx, CcExpr* e, _Bool expression, _Bool* h
         err = CC_UNREACHABLE_ERROR;
         goto cleanup;
     }
-    if(value->type.unqual != e->type.unqual){
+    if(!cc_types_compatible_unqualified(value->type, e->type)){
         cc_release_expr(p, value);
         *out = NULL;
         *handled = 0;
@@ -19969,7 +19797,7 @@ cc_eval_object_view_select(CcEvalCtx* ctx, CcExpr* e, _Bool expression, _Bool* h
     value->type = e->type;
     uint32_t width = expression ? 0 : cc_expr_field_bit_width(e);
     if(width){
-        CiUint128 bits = cc_eval_u128(p, value);
+        CiUint128 bits = cc_eval_u128(cc_target(p), value);
         if(bit_shift) bits = ci_uint128_shr(bits, bit_shift);
         CiUint128 mask = width == 128 ? ci_uint128_from_int64(-1)
             : ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), width), ci_uint128_from_uint64(1));
@@ -20049,7 +19877,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     if(ccqt_bt_eq(operand->type, CCBT_int128) && ci_uint128_eq(u, ci_uint128_shl(ci_uint128_from_uint64(1),127))) err = CC_OVERFLOW_ERROR;
                     else wide->uinteger128 = ci_uint128_sub(ci_uint128_from_uint64(0), u);
                 }
-                else cc_eval_store_quad(p, wide, ci_float128_neg(cc_eval_quad(p, operand)));
+                else cc_eval_store_quad(cc_target(p), wide, ci_float128_neg(cc_eval_quad(cc_target(p), operand)));
                 if(err) cc_release_expr(p, wide);
                 else *result = wide;
                 goto fini_neg;
@@ -20314,6 +20142,13 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             if(err) return err;
             err = cc_eval_expr(ctx, e->values[0], &R);
             if(err) { cc_release_expr(p, L); return err; }
+            if(e->kind == CC_EXPR_MUL && e->binary.checked_size
+                && !cc_eval_size_product_valid(cc_eval_u128(cc_target(p), L), cc_eval_u128(cc_target(p), R),
+                    cc_target(p)->sizeof_[cc_target(p)->size_type]*8, e->binary.element_alignment)){
+                cc_release_expr(p, L);
+                cc_release_expr(p, R);
+                return CC_NOT_CONSTANT_ERROR;
+            }
             // Type equality/inequality
             if((e->kind == CC_EXPR_EQ || e->kind == CC_EXPR_NE)
             && (ccqt_kind(L->type) == CC_POINTER || ccqt_bt_eq(L->type, CCBT_nullptr_t))
@@ -20341,8 +20176,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             // For arithmetic ops, result type == operand type.
             // For comparisons, result type is int, operand type is L->type.
             CcQualType optype = L->type;
-            while(ccqt_kind(optype) == CC_ENUM)
-                optype = ccqt_as_enum(optype)->underlying;
+            optype = ccqt_enum_underlying(optype);
             if(!ccqt_is_basic(optype)){
                 err = CC_UNREACHABLE_ERROR;
                 goto fini_binary;
@@ -20354,7 +20188,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             node = cc_value_expr(p, e->loc, e->type);
             if(!node) {err = CC_OOM_ERROR; goto fini_binary;}
             if(cc_eval_wide(optype)){
-                err = cc_eval_wide_binary(p, e->kind, L, R, node);
+                err = cc_eval_wide_binary(cc_target(p), e->kind, L, R, node);
                 goto fini_binary;
             }
             #define ARITH(op, lv, rv, field, type) node->field = (type)((type)(lv) op (type)(rv)); break
@@ -20584,10 +20418,8 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             return err;
         }
         case CC_EXPR_CAST: {
-            if(e->type.unqual != e->lhs->type.unqual && (ccqt_bt_eq(e->type, CCBT_bfloat16) || ccqt_bt_eq(e->lhs->type, CCBT_bfloat16)))
-                return CC_NOT_CONSTANT_ERROR;
             CcQualType target = e->type;
-            while(ccqt_kind(target) == CC_ENUM) target = ccqt_as_enum(target)->underlying;
+            target = ccqt_enum_underlying(target);
             if(ccqt_bt_eq(target, CCBT_bool)){
                 _Bool truth;
                 int err = cc_eval_truthy(ctx, e->lhs, &truth);
@@ -20595,24 +20427,33 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 *result = cc_int64_expr(p, e->loc, e->type, truth);
                 return *result ? 0 : CC_OOM_ERROR;
             }
+            if(ccqt_unaligned(e->type).unqual != ccqt_unaligned(e->lhs->type).unqual
+                && (ccqt_is_narrow_float(e->type) || ccqt_is_narrow_float(e->lhs->type)))
+                return CC_NOT_CONSTANT_ERROR;
             CcExpr* operand, *node = NULL;
             int err = cc_eval_expr(ctx, e->lhs, &operand);
             if(err) return err;
+            if((e->cast.checked_index || e->cast.checked_bound) && !ci_uint128_fits_integer(cc_eval_u128(cc_target(p), operand),
+                cc_target(p)->sizeof_[cc_target(p)->size_type]*8,
+                ccqt_is_unsigned(e->type, !cc_target(p)->char_is_signed))){
+                cc_release_expr(p, operand);
+                return CC_NOT_CONSTANT_ERROR;
+            }
             if(ccqt_unaligned(operand->type).unqual == ccqt_unaligned(e->type).unqual){
                 operand->type = e->type;
                 *result = operand;
                 return 0;
             }
-            if(!ccqt_is_basic(target)){
-                if(cc_eval_address_type(e->type) && operand->kind == CC_EXPR_VALUE
-                    && (ccqt_is_integer(operand->type) || cc_eval_address_type(operand->type))){
+            if(!ccqt_is_basic(target) || ccqt_has_pointer_representation(target)){
+                if(ccqt_has_pointer_representation(e->type) && operand->kind == CC_EXPR_VALUE
+                    && (ccqt_is_integer(operand->type) || ccqt_has_pointer_representation(operand->type))){
                     node = cc_value_expr(p, e->loc, e->type);
                     if(!node){
                         cc_release_expr(p, operand);
                         return CC_OOM_ERROR;
                     }
                     node->uinteger = ccqt_is_integer(operand->type)
-                        ? ci_uint128_lo(cc_eval_u128(p, operand)) : operand->uinteger;
+                        ? ci_uint128_lo(cc_eval_u128(cc_target(p), operand)) : operand->uinteger;
                     uint32_t size = cc_target(p)->sizeof_[CCBT_nullptr_t];
                     if(size < 8) node->uinteger &= UINT64_MAX >> (64 - size * 8);
                     cc_release_expr(p, operand);
@@ -20660,8 +20501,11 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             }
             node = cc_value_expr(p, e->loc, e->type);
             if(!node) {err = CC_OOM_ERROR; goto fini_cast;}
-            if(cc_eval_wide(operand->type) || cc_eval_wide(e->type)){
-                err = cc_eval_wide_cast(p, operand, node);
+            if(cc_eval_wide(operand->type) || cc_eval_wide(e->type)
+                || (ctx->allow_inexact_float_casts && ccbt_is_float(tk))
+                || (ccqt_is_integer(target) && ccqt_is_basic(operand->type)
+                    && ccbt_is_float(ccqt_basic_kind(operand->type)))){
+                err = cc_eval_numeric_cast(p, operand, node, ctx->allow_inexact_float_casts);
                 if(!err) cc_eval_truncate(p, node);
                 goto fini_cast;
             }
@@ -20723,49 +20567,15 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                 goto fini_introspection; \
             } while(0)
             switch(op){
-                case CC_TYPE_IS_VALID:      INTRES(qt.bits != 0);
-                case CC_TYPE_IS_INVALID:    INTRES(qt.bits == 0);
-                case CC_TYPE_IS_INTEGER:    INTRES(ccqt_is_integer(qt));
-                case CC_TYPE_IS_FLOAT:      INTRES(ccqt_is_basic(qt) && ccbt_is_float(ccqt_basic_kind(qt)));
-                case CC_TYPE_IS_ARITHMETIC: INTRES((ccqt_is_basic(qt) && ccbt_is_arithmetic(ccqt_basic_kind(qt))) || ccqt_kind(qt) == CC_ENUM);
-                case CC_TYPE_IS_POINTER:    INTRES(ccqt_kind(qt) == CC_POINTER);
-                case CC_TYPE_IS_STRUCT:     INTRES(ccqt_kind(qt) == CC_STRUCT);
-                case CC_TYPE_IS_UNION:      INTRES(ccqt_kind(qt) == CC_UNION);
-                case CC_TYPE_IS_ARRAY:      INTRES(ccqt_is_array(qt));
-                case CC_TYPE_IS_VECTOR:     INTRES(ccqt_kind(qt) == CC_VECTOR);
-                case CC_TYPE_IS_SLICE:      INTRES(ccqt_kind(qt) == CC_SLICE);
-                case CC_TYPE_IS_FUNCTION:   INTRES(ccqt_kind(qt) == CC_FUNCTION);
-                case CC_TYPE_IS_ENUM:       INTRES(ccqt_kind(qt) == CC_ENUM);
-                case CC_TYPE_IS_CONST:      INTRES(ccqt_array_object_type(qt).is_const);
-                case CC_TYPE_IS_VOLATILE:   INTRES(ccqt_array_object_type(qt).is_volatile);
-                case CC_TYPE_IS_ATOMIC:     INTRES(qt.is_atomic);
-                case CC_TYPE_IS_UNSIGNED:   INTRES(ccqt_is_unsigned(qt, !cc_target(p)->char_is_signed));
-                case CC_TYPE_IS_SIGNED:     INTRES(ccqt_is_integer(qt) && !ccqt_is_unsigned(qt, !cc_target(p)->char_is_signed));
-                case CC_TYPE_IS_INCOMPLETE: {
-                    CcTypeKind k = ccqt_kind(qt);
-                    _Bool is_incomplete;
-                    switch(k){
-                        case CC_VECTOR:
-                        case CC_VLA: is_incomplete = 0; break;
-                        case CC_ALIGNED: cc_unsafe_unreachable();
-                        DRP_CASES_EXHAUSTED;
-                        case CC_STRUCT:   is_incomplete = ccqt_as_struct(qt)->is_incomplete; break;
-                        case CC_UNION:    is_incomplete = ccqt_as_union(qt)->is_incomplete; break;
-                        case CC_ARRAY:    is_incomplete = ccqt_array_incomplete(qt); break;
-                        case CC_ENUM:     is_incomplete = ccqt_as_enum(qt)->is_incomplete; break;
-                        case CC_FUNCTION: case CC_BASIC: case CC_POINTER: case CC_BLOCK_POINTER: case CC_SLICE: is_incomplete = 0; break;
-                    }
-                    INTRES(is_incomplete);
-                }
-                case CC_TYPE_IS_CALLABLE: {
-                    CcTypeKind k = ccqt_kind(qt);
-                    INTRES(k == CC_FUNCTION || (k == CC_POINTER && ccqt_kind(ccqt_as_ptr(qt)->pointee) == CC_FUNCTION));
-                }
-                case CC_TYPE_IS_VARIADIC: {
-                    CcQualType ft = qt;
-                    if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-                    INTRES(ccqt_kind(ft) == CC_FUNCTION && ccqt_as_function(ft)->is_variadic);
-                }
+                case CC_TYPE_IS_VALID: case CC_TYPE_IS_INVALID:
+                case CC_TYPE_IS_INTEGER: case CC_TYPE_IS_FLOAT: case CC_TYPE_IS_ARITHMETIC:
+                case CC_TYPE_IS_POINTER: case CC_TYPE_IS_STRUCT: case CC_TYPE_IS_UNION:
+                case CC_TYPE_IS_ARRAY: case CC_TYPE_IS_VECTOR: case CC_TYPE_IS_SLICE:
+                case CC_TYPE_IS_FUNCTION: case CC_TYPE_IS_ENUM:
+                case CC_TYPE_IS_CONST: case CC_TYPE_IS_VOLATILE: case CC_TYPE_IS_ATOMIC:
+                case CC_TYPE_IS_UNSIGNED: case CC_TYPE_IS_SIGNED:
+                case CC_TYPE_IS_CALLABLE: case CC_TYPE_IS_INCOMPLETE: case CC_TYPE_IS_VARIADIC:
+                    INTRES(cc_type_predicate(cc_target(p), op, qt));
                 case CC_TYPE_SIZEOF: {
                     uint32_t sz;
                     err = cc_sizeof_as_uint(p, qt, e->loc, &sz);
@@ -20813,24 +20623,46 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     }
                 }
                 case CC_TYPE_IS_CALLABLE_WITH: {
-                    CcExpr* arg;
-                    err = cc_eval_expr(ctx, e->values[0], &arg);
+                    CcExpr* list;
+                    err = cc_eval_object_source(ctx, e->values[0], 0, &list);
                     if(err) goto fini_introspection;
-                    if(!ccqt_bt_eq(arg->type, CCBT__Type)) {
-                        cc_release_expr(p, arg);
-                        err = CC_NOT_CONSTANT_ERROR;
+                    if(list->kind == CC_EXPR_CAST && ccqt_is_array(list->lhs->type)){
+                        err = cc_eval_object_source(ctx, list->lhs, 0, &list);
+                        if(err) goto fini_introspection;
+                    }
+                    uint64_t count;
+                    _Bool array = ccqt_kind(list->type) == CC_ARRAY;
+                    if(array) count = ccqt_as_array(list->type)->length;
+                    else {
+                        CcEvalAddress address;
+                        err = cc_eval_slice(ctx, list, 0, &count, &address);
+                        if(err) goto fini_introspection;
+                    }
+                    if(count > UINT32_MAX) INTRES(0);
+                    size_t bytes;
+                    if(mul_overflow((size_t)count, sizeof(CcQualType), &bytes)){
+                        err = CC_OOM_ERROR;
                         goto fini_introspection;
                     }
-                    CcQualType arg_type = arg->type_value;
-                    CcQualType ft = qt;
-                    if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-                    _Bool v = 0;
-                    if(ccqt_kind(ft) == CC_FUNCTION){
-                        CcFunction* f = ccqt_as_function(ft);
-                        if(f->param_count == 1)
-                            v = cc_implicit_convertible(p, arg_type, f->params[0]);
+                    CcQualType* args = bytes ? Allocator_alloc(cc_scratch_allocator(p), bytes) : NULL;
+                    if(bytes && !args){ err = CC_OOM_ERROR; goto fini_introspection; }
+                    CcExpr index = {.kind=CC_EXPR_VALUE, .type=ccqt_basic(cc_target(p)->size_type)};
+                    CcExpr* access = NULL;
+                    if(!array && count){
+                        access = cc_make_expr(p, CC_EXPR_SUBSCRIPT, e->loc, ccqt_basic(CCBT__Type), 1);
+                        if(!access) err = CC_OOM_ERROR;
+                        else { access->lhs = list; access->values[0] = &index; }
                     }
-                    cc_release_expr(p, arg);
+                    for(uint32_t i = 0; !err && i < count; i++){
+                        index.uinteger = i;
+                        err = cc_eval_object_type(ctx, array ? list : access,
+                            array ? (uint64_t)i * cc_target(p)->sizeof_[CCBT__Type] : 0, 0, &args[i]);
+                    }
+                    // The access node borrows both operands.
+                    if(access) _cc_release_expr(p, access, 1);
+                    _Bool v = !err && cc_is_callable_with(cc_target(p), qt, args, (uint32_t)count);
+                    if(args) Allocator_free(cc_scratch_allocator(p), args, bytes);
+                    if(err) goto fini_introspection;
                     INTRES(v);
                 }
                 case CC_TYPE_IS_CALLABLE_THROUGH:
@@ -20843,7 +20675,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                         err = CC_NOT_CONSTANT_ERROR;
                         goto fini_introspection;
                     }
-                    _Bool castable = e->type_introspection.op == CC_TYPE_IS_CALLABLE_THROUGH ? cc_is_callable_through(p, qt, arg->type_value) : cc_explicit_castable(p, qt, arg->type_value);
+                    _Bool castable = e->type_introspection.op == CC_TYPE_IS_CALLABLE_THROUGH ? cc_is_callable_through(cc_target(p), qt, arg->type_value) : cc_explicit_castable(cc_target(p), qt, arg->type_value);
                     cc_release_expr(p, arg);
                     INTRES(castable);
                 }
@@ -20859,22 +20691,18 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     UINTRES(methods ? s->methods.count : s->field_count);
                 }
                 case CC_TYPE_RETURN_TYPE: {
-                    CcQualType ft = qt;
-                    if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-                    if(ccqt_kind(ft) != CC_FUNCTION) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
-                    TYPERES(ccqt_as_function(ft)->return_type);
+                    CcFunction* f = ccqt_callable_function(qt);
+                    if(!f) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
+                    TYPERES(f->return_type);
                 }
                 case CC_TYPE_PARAM_COUNT: {
-                    CcQualType ft = qt;
-                    if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-                    if(ccqt_kind(ft) != CC_FUNCTION) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
-                    UINTRES(ccqt_as_function(ft)->param_count);
+                    CcFunction* f = ccqt_callable_function(qt);
+                    if(!f) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
+                    UINTRES(f->param_count);
                 }
                 case CC_TYPE_PARAM_TYPE: {
-                    CcQualType ft = qt;
-                    if(ccqt_kind(ft) == CC_POINTER) ft = ccqt_as_ptr(ft)->pointee;
-                    if(ccqt_kind(ft) != CC_FUNCTION) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
-                    CcFunction* f = ccqt_as_function(ft);
+                    CcFunction* f = ccqt_callable_function(qt);
+                    if(!f) { err = CC_NOT_CONSTANT_ERROR; goto fini_introspection; }
                     int64_t i;
                     err = cc_eval_integer(ctx, e->values[0], &i);
                     if(err) goto fini_introspection;
@@ -20885,7 +20713,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                     CcTypeKind k = ccqt_kind(qt);
                     CcQualType val;
                     if(k == CC_ARRAY || k == CC_VECTOR || k == CC_VLA)
-                        val = cc_array_element_type(qt);
+                        val = ccqt_qualified_array_element(qt);
                     else if(k == CC_SLICE)
                         val = ccqt_as_slice(qt)->pointee;
                     else {
@@ -20933,6 +20761,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
                                 if(f && f->is_method != method) f = NULL;
                                 if(f){
                                     named_field = *f;
+                                    named_field.type = type;
                                     named_field.offset = (uint32_t)floc;
                                     f = &named_field;
                                 }
@@ -21110,7 +20939,7 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
         case CC_EXPR_COMPOUND_LITERAL:
         case CC_EXPR_INIT_LIST: {
             if((ccqt_is_basic(e->type) && !ccqt_bt_eq(e->type, CCBT__Any))
-                || ccqt_kind(e->type) == CC_ENUM || cc_eval_address_type(e->type))
+                || ccqt_kind(e->type) == CC_ENUM || ccqt_has_pointer_representation(e->type))
                 return cc_eval_object_scalar(ctx, e, 0, e->type, e->loc, NULL, result);
             CcExpr* node = cc_make_expr(p, CC_EXPR_INIT_LIST, e->loc, e->type, 0);
             if(!node) return CC_OOM_ERROR;
@@ -21163,14 +20992,14 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             CcExpr* operand;
             int err = cc_eval_expr(ctx, e->lhs, &operand);
             if(err) return err;
-            CiUint128 v = cc_eval_u128(p, operand), arg = ci_uint128_from_uint64(0), bits;
+            CiUint128 v = cc_eval_u128(cc_target(p), operand), arg = ci_uint128_from_uint64(0), bits;
             cc_release_expr(p, operand);
             if(e->bit_builtin.nargs && ((e->bit_builtin.op != CC_BIT_CLZ && e->bit_builtin.op != CC_BIT_CTZ)
                 || !ci_uint128_nonzero(v))){
                 CcExpr* second;
                 err = cc_eval_expr(ctx, e->values[0], &second);
                 if(err) return err;
-                arg = cc_eval_u128(p, second);
+                arg = cc_eval_u128(cc_target(p), second);
                 _Bool negative = !ccqt_is_unsigned(second->type, !cc_target(p)->char_is_signed)
                     && (ci_uint128_hi(arg) >> 63);
                 cc_release_expr(p, second);
@@ -21278,7 +21107,7 @@ cc_eval_integer(CcEvalCtx* ctx, CcExpr* e, int64_t* out){
         goto finish;
     }
     if(cc_eval_wide(val->type)){
-        CiUint128 bits = cc_eval_u128(p, val);
+        CiUint128 bits = cc_eval_u128(cc_target(p), val);
         _Bool is_unsigned = ccqt_is_unsigned(val->type, !cc_target(p)->char_is_signed);
         _Bool positive = !ci_uint128_hi(bits) && (is_unsigned || ci_uint128_lo(bits) <= INT64_MAX);
         _Bool negative = !is_unsigned && ci_uint128_hi(bits) == UINT64_MAX && ci_uint128_lo(bits) > INT64_MAX;
@@ -21300,7 +21129,7 @@ cc_eval_truthy(CcEvalCtx* ctx, CcExpr* e, _Bool* out){
     CcExpr* val;
     int err = cc_eval_expr(ctx, e, &val);
     if(err == CC_OVERFLOW_ERROR) err = CC_NOT_CONSTANT_ERROR;
-    if(err == CC_NOT_CONSTANT_ERROR && cc_eval_address_type(e->type)){
+    if(err == CC_NOT_CONSTANT_ERROR && ccqt_has_pointer_representation(e->type)){
         CcEvalAddress address;
         err = cc_eval_address(ctx, e, 0, 0, &address);
         if(err) return err;
@@ -21310,7 +21139,7 @@ cc_eval_truthy(CcEvalCtx* ctx, CcExpr* e, _Bool* out){
         return 0;
     }
     if(err) return err;
-    *out = cc_eval_value_truth(p, val);
+    *out = cc_eval_value_truth(cc_target(p), val);
     cc_release_expr(p, val);
     return 0;
 }
@@ -21318,7 +21147,10 @@ cc_eval_truthy(CcEvalCtx* ctx, CcExpr* e, _Bool* out){
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif
+#include "nc_abi.c"
 #include "cc_type_cache.c"
 #include "cc_scope.c"
 #include "cc_printer.c"
+#include "cc_type_check.c"
+#include "cc_expr.c"
 #endif

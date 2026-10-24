@@ -18,6 +18,14 @@
 #include "../Drp/Marray.h"
 #endif
 
+typedef struct CcPrintfFormat CcPrintfFormat;
+struct CcPrintfFormat {
+    uint32_t string_index; // One-based
+    uint32_t first_to_check; // One-based, 0 is syntax only
+    SrcLoc loc;
+    const CcPrintfFormat* _Nullable next;
+};
+
 // Label validation outlives statement trees discarded by sizeof, typeof, etc.
 typedef struct CcLabelRef CcLabelRef;
 struct CcLabelRef {
@@ -96,6 +104,8 @@ struct CcFunc {
     CcFunc*_Nullable enclosing; // For nested functions
     CcQualType _Self_type;
     CcFunction* type;
+    // TODO: we can have a slim attribute map here instead
+    const CcPrintfFormat* _Nullable printf_formats;
     Atom name;
     Atom _Nullable mangle;
     SrcLoc loc; // declaration, updated to definition
@@ -108,8 +118,7 @@ struct CcFunc {
                          // to be parsed on first use or codegen.
              parse_failed: 1, // Body failed to parse; tokens have been released. Don't retry.
              libc_builtin: 1,
-             printf_like: 1,
-             _padding: 23;
+             _padding: 24; // free real estate
     uint32_t frame_size; // size of params + automatic local vars + temporaries;
     Marray(CcToken)*_Nullable tokens; // If set, the unparsed function body.
                                       // Return to the parser's free list when done.

@@ -54,6 +54,7 @@ typedef struct CcTypeCache CcTypeCache;
 struct CcTypeCache {
     CcTypeTable pointers,
                 arrays,
+                vlas,
                 vectors,
                 functions,
                 slices,
@@ -71,7 +72,10 @@ CcSlice* _Nullable
 cc_intern_slice(CcTypeCache*, Allocator, CcQualType pointee, _Bool restrict_);
 warn_unused static inline
 CcArray* _Nullable
-cc_intern_array(CcTypeCache*, Allocator, CcQualType element, size_t length, _Bool is_static, _Bool is_incomplete);
+cc_intern_array(CcTypeCache*, Allocator, CcQualType element, size_t length, _Bool is_incomplete);
+warn_unused static inline
+CcVla* _Nullable
+cc_intern_vla(CcTypeCache*, Allocator, const CcVla* source, CcQualType element);
 warn_unused static inline
 CcVector* _Nullable
 cc_intern_vector(CcTypeCache*, Allocator, CcQualType element, size_t length, uint32_t vector_size);

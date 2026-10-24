@@ -6,7 +6,7 @@
 // Compatibility header for overflow intrinsics
 //
 
-#if defined __GNUC__
+#if defined __GNUC__ && !defined __wasm__
 #define add_overflow __builtin_add_overflow
 #define sub_overflow __builtin_sub_overflow
 #define mul_overflow __builtin_mul_overflow

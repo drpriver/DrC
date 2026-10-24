@@ -36,6 +36,47 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("int f(int n){typedef int A[n];"
+         "(void)alignof(int[n+1]);(void)_Generic((int(*)[n+2])0,default:0);"
+         "const A*p=0;return sizeof(*p)==n*sizeof(int);}return f(3)&&f(7);")},
+    {__LINE__, SVI("int n=0;int f(int x=sizeof(int[++n])){return x;}"
+         "int g(int value,int x=alignof(value)){return x;}"
+         "int a[4]={1,2,3,4};int s[:]=a[1:3];"
+         "return f()==sizeof(int)&&f()==2*sizeof(int)&&n==2"
+         " && g(9)==alignof(int) && s.count==2 && s[1]==3;")},
+    {__LINE__, SVI("struct S{const struct{volatile int x;};};_Type t=struct S;"
+         "typedef void V;int f(V){return 3;}"
+         "typeof(int.is_const) b=0;_Type u=b?(float):(int);"
+         "{struct S;struct S{double y;};struct S s={7};"
+         "return t.field(\"x\").type==const volatile int"
+         " && u==int && s.y==7 && f()==3;}")},
+    {__LINE__, SVI("int f(int*p=&(_Alignas(32) int){7}){return *p;}"
+         "int*p=&(_Alignas(32) int){9};"
+         "return (unsigned long long)p%32==0&&*p==9&&f()==7;")},
+    {__LINE__, SVI("static_assert((int(int,double)).is_callable_with(short,float));"
+         "int check(_Type f){return f.is_callable_with(int,float);}"
+         "return check(int(int,double)) && !check(int(int,int*));")},
+    {__LINE__, SVI("typedef int (*P)[3] __attribute__((aligned(32)));"
+         "typedef int (*Q)[] __attribute__((aligned(16)));"
+         "int f(P);int f(Q x){return (*x)[1];}int a[3]={1,2,3};"
+         "return f(&a)==2 && typeof(f).param_type(0).alignof_==alignof(int*)"
+         " && typeof(f).param_type(0).pointee.count==3;")},
+    {__LINE__, SVI("typedef int V __attribute__((vector_size(16)));"
+         "int f(int x) __attribute__((vector_size(16))){return (V){x,2,3,4};}"
+         "int a[2] __attribute__((vector_size(16)))={f(7),f(9)};"
+         "int *p __attribute__((vector_size(16)))=a;"
+         "constexpr _Type T=int (*)[2] __attribute__((vector_size(16)));"
+         "return p[1][0]==9 && T==V(*)[2];")},
+    {__LINE__, SVI("typedef int V __attribute__((vector_size(16)));"
+         "struct S{int x __attribute__((vector_size(16)));};"
+         "int f(int x __attribute__((vector_size(16)))){return x[0];}"
+         "struct S s={.x={7,2,3,4}};return f(s.x)==7"
+         " && sizeof(int __attribute__((vector_size(16))))==16;")},
+    {__LINE__, SVI("struct S{struct S*next;int(*x)[2];int(*y)[];int(*z)[];};typedef struct S A;"
+         "int f(void){struct S{struct S*next;int(*x)[];int(*y)[3];int(*z)[];};typedef struct S B;"
+         "{struct S{struct S*next;int(*x)[];int(*y)[];int(*z)[4];};"
+         "A*a=0;B*b=0;struct S*c=0;"
+         "return __builtin_types_compatible_p(typeof(1?(1?a:b):c),typeof(1?a:(1?b:c)));}}return f();")},
     {__LINE__, SVI("int f(int n){static if(struct S{int x;} s={3};auto x=s.x)n+=x;"
          "static switch(auto x=2){static case 2:n+=x;static break;}"
          "static for(int i=0;int x=i<2?i+1:0;i++)n+=x;return n;}"

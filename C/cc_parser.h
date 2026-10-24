@@ -13,7 +13,7 @@
 #include "cc_type.h"
 #include "cc_type_cache.h"
 #include "cc_expr.h"
-#include "cc_layout.h"
+#include "cc_type_check.h"
 #include "cc_stmt.h"
 #include "cc_func.h"
 #include "cc_var.h"
@@ -71,22 +71,22 @@ struct CcAttributes {
             uint64_t packed:            1,
                      transparent_union: 1,
                      has_aligned:       1,
-                     printf_like:       1,
                      is_noreturn:       1,
                      is_thread_local:   1,
                      always_inline:     1,
-                     _padding:          9,
+                     _padding:          10,
                      vector_size:       16,
                      aligned:           16,
                      _padding2:         16;
         };
     };
+    const CcPrintfFormat* _Nullable printf_formats;
 };
 
 static inline
 void
 cc_clear_attributes(CcAttributes* attrs){
-    attrs->bits = 0;
+    *attrs = (CcAttributes){0};
 }
 
 enum CcBuiltinFunc TYPED_ENUM(uintptr_t) {
@@ -312,8 +312,7 @@ static _Bool cc_eval_pointer_binary_expr(CcExpr*);
 static int cc_eval_symbolic_binary(CcParser*, CcExpr*, _Bool allow_const, int64_t*);
 static int cc_eval_linktime_scalar(CcParser*, CcExpr*, CcExpr*_Nullable*_Nonnull);
 static int cc_eval_linktime_expr(CcParser*, CcExpr*, CcExpr*_Nullable*_Nonnull);
-// A borrowed object and an owned path. The caller supplies storage for a
-// synthesized variable/literal expression and releases path after reading.
+static int cc_eval_numeric_cast(CcParser*, CcExpr*, CcExpr*, _Bool allow_inexact);
 typedef struct CcEvalObjectView CcEvalObjectView;
 struct CcEvalObjectView {
     CcExpr* object;

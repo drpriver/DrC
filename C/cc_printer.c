@@ -302,7 +302,7 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
                 case CCBT__Any:{
                     msb_write_literal(sb, "(Any)");
                     CiRtAny any = *(const CiRtAny*)data;
-                    if(any.type.bits && cc_any_payload_type(p, any.type))
+                    if(any.type.bits && cc_any_payload_type(tgt, any.type))
                         cc_print_runtime_value(p, any.type, any.payload, sb, indent);
                     else msb_write_literal(sb, "<empty or invalid>");
                     return;
@@ -425,7 +425,7 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
                     msb_write_literal(sb, "<anon> = ");
                 if(f->is_bitfield){
                     uint32_t storage_sz;
-                    if(cc_type_sizeof_complete(cc_target(p), f->type, &storage_sz)){
+                    if(cc_type_sizeof_complete(cc_target(p), f->type, &storage_sz, NULL)){
                         msb_write_literal(sb, "<invalid layout>,\n");
                         continue;
                     }

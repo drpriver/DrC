@@ -444,6 +444,11 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             msb_write_literal(out, ", ");
             ci_op_print_range(out, op->checked.src2, op->checked.src2_size);
         } break;
+        case CI_OP_CHECK:
+            msb_write_literal(out, "check ");
+            ci_op_print_range(out, op->check.src, 1);
+            msb_sprintf(out, " else error \"%s\"", op->check.message);
+            break;
         case CI_OP_BIT_BUILTIN:
             ci_op_print_range(out, op->bit_builtin.slot, op->bit_builtin.slot_size);
             msb_sprintf(out, " = %s ", cc_bit_builtin_name(op->bit_builtin.op));
@@ -457,6 +462,8 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_range(out, op->convert.slot, op->convert.slot_size);
             msb_sprintf(out, " = %s ", op->convert.is_unsigned?"zext":"sext");
             ci_op_print_range(out, op->convert.src, op->convert.src_size);
+            if(op->convert.checked_index) msb_write_literal(out, " (checked index)");
+            if(op->convert.checked_bound) msb_write_literal(out, " (checked VLA bound)");
             break;
         case CI_OP_ITOF:
             ci_op_print_range(out, op->itof.slot, op->itof.slot_size);
@@ -516,7 +523,12 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_deref(out, op->memcopy.slot, op->memcopy.offset);
             msb_write_literal(out, " = ");
             ci_op_print_deref(out, op->memcopy.src, op->memcopy.src_offset);
-            msb_sprintf(out, " (%u bytes)", op->memcopy.size);
+            if(op->memcopy.dynamic_size){
+                msb_write_literal(out, " (bytes from ");
+                ci_op_print_range(out, op->memcopy.size, sizeof(size_t));
+                msb_write_char(out, ')');
+            }
+            else msb_sprintf(out, " (%u bytes)", op->memcopy.size);
             msb_sprintf(out, " (dst align %u, src align %u)", 1u << op->memcopy.dst_align_log2, 1u << op->memcopy.src_align_log2);
             break;
         case CI_OP_ZERO:

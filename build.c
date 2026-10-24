@@ -38,7 +38,7 @@ static int mkfile(BuildCtx*, BuildTarget*);
 static int do_install(BuildCtx*, BuildTarget*);
 static BuildTarget* build_soft_float(BuildCtx*);
 static BuildTarget* build_native_capture(BuildCtx*);
-static void link_native_capture(BuildCtx*,BuildTarget*,BuildTarget*);
+static void link_native_capture(BuildCtx*, BuildTarget*, BuildTarget*);
 
 int main(int argc, char** argv, char** envp){
     BuildCtx* ctx = b_build_ctx(argc, argv, envp, __FILE__);
@@ -64,7 +64,7 @@ int main(int argc, char** argv, char** envp){
     if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
         b_linkarg(ctx, cc, "-lsynchronization");
     b_get_target(ctx, "drc")->description = cc->description;
-    link_native_capture(ctx,cc,native_capture);
+    link_native_capture(ctx, cc, native_capture);
     b_add_dep(ctx, all, cc);
     b_linkinp(ctx, cc, soft_float);
 

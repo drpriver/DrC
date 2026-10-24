@@ -374,12 +374,16 @@ cmd_run_capture(CmdBuilder* cmd, void*_Nullable envp, Allocator a, CStringView* 
         int err = posix_spawn_file_actions_init(&actions);
         if(err){
             Allocator_free(cmd->allocator, _argv, (cmd->args.count+1)*sizeof(char*));
+            close(pipefd[0]);
+            close(pipefd[1]);
             return err;
         }
         if(0){
             actions_fail:
             posix_spawn_file_actions_destroy(&actions);
             Allocator_free(cmd->allocator, _argv, (cmd->args.count+1)*sizeof(char*));
+            close(pipefd[0]);
+            close(pipefd[1]);
             return err;
         }
         if(cmd->wd.length) {

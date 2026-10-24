@@ -851,13 +851,10 @@ C::md
         // Returns the `i`th enumerator. See `__builtin_Enumerator`.
         __builtin_Enumerator enumerator(size_t i);
 
-        // True if callable with argument type `T`, considering type conversions
-        // and implicit conversions. This is only useful if you are calling
-        // through the actual function type, if you want to cast
-        // a function pointer, see `is_callable_with()` below.
-        _Bool is_callable_with(constexpr _Type T...);
-        // True if callable with these values
-        _Bool is_callable_with(...);
+        // True if callable with the supplied argument types, allowing implicit
+        // conversions. For calling through a different signature, see
+        // is_callable_through().
+        _Bool is_callable_with(_Type args...);
 
         // True if a function or function pointer can be called through function
         // type T with a compatible target ABI representation.
@@ -905,7 +902,8 @@ C::md
         ::pre.C
           struct __builtin_Enumerator {
               const char name[:];
-              int64_t value;
+              unsigned __int128 value; // Integer bits, sign extended
+              _Type type;
           };
 
 
@@ -1176,6 +1174,8 @@ C::md
       - use `i128/lll` suffixes for int128 literals
     - Arrays can be assigned to other arrays.
       - `int a[3] = {1,2,3}; int b[3] = a; int c[3]; c = b;`
+      - Their bounds must be equal at every dimension.
+      - VLAs can be assigned, but this requires a shared VLA typedef.
     - `_Self` names the enclosing type in `struct` or `union` declarations, including anonymous types.
       - `typedef struct { _Self* next; } Node;`
     - Aggregate types with const members are assignable if the

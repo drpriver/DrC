@@ -70,7 +70,6 @@
     #define drp_memcpy memcpy
 #endif
 
-/* Capture both operands before writing outputs, which may alias the inputs. */
 #if defined _MSC_VER && defined _M_X64 && !defined _M_ARM64EC
 #pragma intrinsic(_umul128)
 #define DRP_RAPIDHASH_MUL(A, B, LO, HI) do { \
@@ -83,7 +82,7 @@
     uint64_t lhs = (A), rhs = (B); \
     (LO) = lhs * rhs; (HI) = __umulh(lhs, rhs); \
 } while(0)
-#elif defined __SIZEOF_INT128__
+#elif defined __SIZEOF_INT128__ && !defined __wasm__
 #define DRP_RAPIDHASH_MUL(A, B, LO, HI) do { \
     __uint128_t product = (__uint128_t)(A) * (B); \
     (LO) = (uint64_t)product; (HI) = (uint64_t)(product >> 64); \

@@ -332,13 +332,13 @@ read_file_handle(FILE* fp, Allocator a, CStringView* outstr){
     for(;;){
         if(length == capacity){
             if(capacity > SIZE_MAX / 2){
-                error.errored = FILE_RESULT_ALLOC_FAILURE;
+                result.errored = FILE_RESULT_ALLOC_FAILURE;
                 goto fail;
             }
             size_t new_capacity = capacity * 2;
             char* new_buffer = Allocator_realloc(a, buffer, capacity, new_capacity);
             if(!new_buffer){
-                error.errored = FILE_RESULT_ALLOC_FAILURE;
+                result.errored = FILE_RESULT_ALLOC_FAILURE;
                 goto fail;
             }
             buffer = new_buffer;
@@ -347,7 +347,7 @@ read_file_handle(FILE* fp, Allocator a, CStringView* outstr){
         size_t nread = fread(buffer + length, 1, capacity - length, fp);
         length += nread;
         if(ferror(fp)){
-            result = (FileError){.errored=FILE_ERROR, .native_error=native};
+            result = (FileError){.errored=FILE_ERROR, .native_error=errno};
             goto fail;
         }
         if(feof(fp)) break;

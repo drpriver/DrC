@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "srcloc.h"
+#include "cc_type.h"
 #if !defined __clang__ && !defined _Null_unspecified
 #define _Null_unspecified
 #endif

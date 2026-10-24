@@ -117,6 +117,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_FCMP80,
     CI_OP_FCMP128,
     CI_OP_CHECKED,
+    CI_OP_CHECK,
     CI_OP_BIT_BUILTIN,
     CI_OP_CONVERT,
     CI_OP_ITOF,
@@ -295,8 +296,7 @@ struct CiOp {
                      res_size: 4,
                      src_unsigned: 1,
                      src2_unsigned: 1,
-                     res_unsigned: 1,
-                     _bitpad: 1;
+                     res_unsigned: 1;
             uint32_t result,
                      overflow,
                      src,
@@ -304,7 +304,14 @@ struct CiOp {
             uint32_t pad;
             SrcLoc loc;
         } checked;
-
+        struct {
+            CiOpKind kind: 8; // CI_OP_CHECK: fail if the one-byte boolean is false.
+            uint32_t _bitpad: 24;
+            uint32_t src;
+            const char* _Nonnull message;
+            uint64_t pad;
+            SrcLoc loc;
+        } check;
         struct {
             CiOpKind kind: 8;
             CcBitBuiltinOp op: 8;
@@ -318,7 +325,9 @@ struct CiOp {
             uint32_t is_unsigned: 1,
                      src_float: 8,
                      dst_float: 8,
-                     _bitpad: 7;
+                     checked_index: 1,
+                     checked_bound: 1,
+                     _bitpad: 5;
             uint32_t pad;
             uint32_t slot, slot_size,
                      src, src_size;
@@ -397,8 +406,9 @@ struct CiOp {
             uint32_t dst_align_log2: 5,
                      src_align_log2: 5,
                      is_volatile: 1,
-                     _bitpad: 13;
-            uint32_t size;
+                     dynamic_size: 1,
+                     _bitpad: 12;
+            uint32_t size; // byte count, or size_t slot when dynamic_size
             uint32_t slot,
                      offset,
                      src,

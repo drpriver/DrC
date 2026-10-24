@@ -440,8 +440,9 @@ int
 ma_zalloc(MARRAY_T)(MARRAY* marray, Allocator a, MARRAY_T*_Nullable*_Nonnull result){
     int err = ma_ensure_additional(MARRAY_T)(marray, a, 1);
     if(unlikely(err)) return 1;
-    *result = &marray->data[marray->count++];
-    memset(*result, 0, sizeof **result);
+    MARRAY_T* p = &marray->data[marray->count++];
+    memset(p, 0, sizeof *p);
+    *result = p;
     return 0;
 }
 
