@@ -2784,7 +2784,7 @@ cc_parse_type_operand_tail(CcParser* p, CcParseFlags flags, CcQualType type,
     err = cc_peek(p, &tok);
     if(err) return err;
     if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lbrace){
-        CcExpr* literal;
+        CcExpr* literal = NULL; // GCC 13 CFA is buggy, so we init here
         err = cc_parse_compound_literal(p, flags, type, storage, &literal);
         if(err) return err;
         return cc_parse_postfix(p, flags, literal, out);
