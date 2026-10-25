@@ -25,6 +25,13 @@
 #define MARRAY_T CcToken
 #include "../Drp/Marray.h"
 #endif
+typedef struct CcModule CcModule;
+struct CcModule {
+    CcScope scope;
+    Parray(CcStmtNode) nodes;
+    CcLabelCtx labels;
+    AtomMap(CcSymbol) hidden_externs;
+};
 typedef struct CcPackRecord CcPackRecord;
 struct CcPackRecord {
     StringView ident;
@@ -237,13 +244,12 @@ struct CcParser {
     union {
         uint32_t flags;
         struct {
-            uint32_t repl:1, // repl mode, allow top level statements
+            uint32_t repl:1, // repl mode
                      eager_parsing: 1, // Parse function bodies upon definition instead of upon use.
                      auto_typedef: 1, // automatically insert tagged types untagged into scope as typedef.
-                    _padding:29;
+                    _padding:29; // free real estate
         };
     };
-    Parray(CcStmtNode) toplevel_nodes;
     CppPreprocessor cpp;
     CcTypeCache type_cache;
     // for lookahead/pushback, LIFO
@@ -256,14 +262,15 @@ struct CcParser {
     CcAttributes attributes;
     Marray(CcPackRecord) pack_stack;
     uint16_t pragma_pack; // 0 = default (no pack), otherwise pack(N) value
-    CcScope global;
+    CcModule* root;
+    CcModule* module; // active module
     CcScope* current;
-    CcScope* _Nullable file_scope; // active root or compiled-module scope during cc_parse_all
     CcFunc*_Nullable current_func;
     CcScope* _Nullable function_scope; // active function body or parameter-list scope
     CcQualType current_tag_type;
     FreeList(CcScope) scratch_scopes;
     AtomMap(CcFunc) external_methods;
+    AtomMap(CcSymbol) extern_symbols;
     FreeList(Marray(CcToken)) scratch_tokens;
     FreeList(CcStmtSink) scratch_stmt_sinks;
     #define CC_RECYCLE_EXPRS 1
@@ -275,7 +282,6 @@ struct CcParser {
     struct CcControl* _Nullable control;
     CcDeferContext defer_context;
     struct CcSwitchCtx* _Nullable switch_ctx;
-    CcLabelCtx toplevel_label_ctx;
     CcStmtSink* _Null_unspecified stmt_sink;
     uint64_t stmt_jump_targets; // monotonic counter for subtree entry annotations
     AtomMap(uintptr_t) builtins;

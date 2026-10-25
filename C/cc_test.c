@@ -135,7 +135,32 @@ TestFunction(test_parse_decls){
         } tags[N];
         _Bool skip;
         const CcTargetConfig* _Nullable target;
+        _Bool both_modes;
     } testcases[] = {
+        {
+            "linkage: file extern object inherits prior internal linkage", __LINE__,
+            SVI("static int x=3;\nextern int x;\n"
+                "int main(void){return x!=3;}\n"),
+            .both_modes = 1,
+        },
+        {
+            "linkage: extern function definition inherits prior internal linkage", __LINE__,
+            SVI("static int target(void);\nextern int target(void){return 3;}\n"
+                "int main(void){return target()!=3;}\n"),
+            .both_modes = 1,
+        },
+        {
+            "linkage: compatible extern declarations may repeat in a block", __LINE__,
+            SVI("int x=3;\n"
+                "int main(void){extern int x;extern int x;return x!=3;}\n"),
+            .both_modes = 1,
+        },
+        {
+            "linkage: compatible function declarations may repeat in a block", __LINE__,
+            SVI("int target(void){return 3;}\n"
+                "int main(void){int target(void);extern int target(void);return target()!=3;}\n"),
+            .both_modes = 1,
+        },
         {
             "static slices accept empty and one-past-end ranges", __LINE__,
             SVI("static int a[3];\nconstexpr int full[:]=a[:];\n"
@@ -7567,8 +7592,11 @@ TestFunction(test_parse_decls){
         },
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < countof(testcases); i = test_atomic_increment(&idx)){
-        if(testcases[i].skip){
+    for(size_t i = test_atomic_increment(&idx); i < 2*countof(testcases); i = test_atomic_increment(&idx)){
+        struct Case* c = &testcases[i / 2];
+        _Bool eager = i % 2;
+        if(!eager && !c->both_modes) continue;
+        if(c->skip){
             continue;
         }
         ArenaAllocator aa = {0};
@@ -7581,8 +7609,8 @@ TestFunction(test_parse_decls){
         Environment env = {.allocator = al, .at=&at};
         int err;
         MStringBuilder sb = {.allocator=al};
-        struct Case* c = &testcases[i];
-        CcParser cc = {
+        CcModule module = {0};
+        CcParser cc = {.root=&module, .module=&module,
             .cpp = {
                 .allocator = al,
                 .fc = fc,
@@ -7591,8 +7619,8 @@ TestFunction(test_parse_decls){
                 .env = &env,
                 .target = (const CcTargetConfig* _Nonnull)(c->target ? c->target : &cc_target_test),
             },
-            .current = &cc.global,
-            .eager_parsing = 1,
+            .current = &cc.module->scope,
+            .eager_parsing = eager,
         };
         fc_write_path(fc, "(test)", 6);
         err = fc_cache_file(fc, c->input);
@@ -7606,13 +7634,23 @@ TestFunction(test_parse_decls){
         err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
         if(err) {TestPrintf("%s:%d: failed to include\n", __FILE__, c->line); goto finally;}
         err = cc_parse_all(&cc);
+        if(!err && !eager){
+            AtomMapItems funcs = AM_items(&cc.root->scope.functions);
+            for(size_t f = 0; f < funcs.count; f++){
+                CcFunc* func = funcs.data[f].p;
+                if(!func || !func->defined) 
+                    continue;
+                err = cc_parse_func_body(&cc, func);
+                if(err) break;
+            }
+        }
         if(err) {TestPrintf("%s:%d: failed to parse\n", __FILE__, c->line); goto finally;}
         for(size_t n = 0; n < N; n++){
             StringView name = c->vars[n].name;
             if(!name.length) break;
             Atom a = AT_get_atom(&at, name.text, name.length);
             if(!a) {err = 1; goto finally;}
-            CcVariable* var = cc_scope_lookup_var(&cc.global, a, CC_SCOPE_NO_WALK);
+            CcVariable* var = cc_scope_lookup_var(&cc.module->scope, a, CC_SCOPE_NO_WALK);
             TEST_stats.executed++;
             if(!var){
                 TEST_stats.failures++;
@@ -7695,7 +7733,7 @@ TestFunction(test_parse_decls){
             if(!name.length) break;
             Atom a = AT_get_atom(&at, name.text, name.length);
             if(!a) {err = 1; goto finally;}
-            CcFunc* func = cc_scope_lookup_func(&cc.global, a, CC_SCOPE_NO_WALK);
+            CcFunc* func = cc_scope_lookup_func(&cc.module->scope, a, CC_SCOPE_NO_WALK);
             TestExpectTrue(void*, func);
             if(!func){
                 TestPrintf("%s:%d: %s %.*s is undefined\n", __FILE__, c->line, c->test, sv_p(name));
@@ -7723,7 +7761,7 @@ TestFunction(test_parse_decls){
             if(!name.length) break;
             Atom a = AT_get_atom(&at, name.text, name.length);
             if(!a) {err = 1; goto finally;}
-            CcQualType t = cc_scope_lookup_typedef(&cc.global, a, CC_SCOPE_NO_WALK);
+            CcQualType t = cc_scope_lookup_typedef(&cc.module->scope, a, CC_SCOPE_NO_WALK);
             TestExpectNotEquals(uintptr_t, t.bits, 0);
             if(!t.bits){
                 TestPrintf("%s:%d: %s %.*s is undefined\n", __FILE__, c->line, c->test, sv_p(name));
@@ -7735,7 +7773,7 @@ TestFunction(test_parse_decls){
             StringView r = msb_borrow_sv(&sb);
             test_expect_equals_sv(c->typedefs[n].repr, r, "expected", "actual", &TEST_stats, __FILE__, __func__, c->line);
             if(c->typedefs[n].loc_line){
-                CcTypedef* td = AM16_get(&cc.global.typedefs, a);
+                CcTypedef* td = AM16_get(&cc.module->scope.typedefs, a);
                 TestExpectTrue(void*, td);
                 if(td){
                     SrcLoc loc = cc_typedef_loc(td);
@@ -7751,17 +7789,17 @@ TestFunction(test_parse_decls){
             if(!a) continue;
             SrcLoc loc = {0};
             if(c->tags[n].kind == CC_STRUCT){
-                CcStruct* t = cc_scope_lookup_struct_tag(&cc.global, a, CC_SCOPE_NO_WALK);
+                CcStruct* t = cc_scope_lookup_struct_tag(&cc.module->scope, a, CC_SCOPE_NO_WALK);
                 TestExpectTrue(void*, t);
                 if(t) loc = t->loc;
             }
             else if(c->tags[n].kind == CC_UNION){
-                CcUnion* t = cc_scope_lookup_union_tag(&cc.global, a, CC_SCOPE_NO_WALK);
+                CcUnion* t = cc_scope_lookup_union_tag(&cc.module->scope, a, CC_SCOPE_NO_WALK);
                 TestExpectTrue(void*, t);
                 if(t) loc = t->loc;
             }
             else {
-                CcEnum* t = cc_scope_lookup_enum_tag(&cc.global, a, CC_SCOPE_NO_WALK);
+                CcEnum* t = cc_scope_lookup_enum_tag(&cc.module->scope, a, CC_SCOPE_NO_WALK);
                 TestExpectTrue(void*, t);
                 if(t) loc = t->loc;
             }
@@ -7793,8 +7831,98 @@ TestFunction(test_parse_errors){
         _Bool skip;
         _Bool builtin_headers;
         _Bool all_targets;
+        _Bool both_modes;
         StringView target_expect[CC_TARGET_COUNT];
     } cases[] = {
+        {
+            "linkage: block object declaration does not leak to other functions", __LINE__,
+            SVI("void declare(void){extern int x;}\n"
+                "int main(void){return x;}\n"),
+            SVI("(test):2:23: error: undeclared identifier 'x'\n"),
+            .all_targets = 1,
+            .both_modes = 1,
+        },
+        {
+            "linkage: block function declaration does not leak to other functions", __LINE__,
+            SVI("void declare(void){int target(void);}\n"
+                "int main(void){return target();}\n"),
+            SVI("(test):2:23: error: undeclared identifier 'target'\n"),
+            .all_targets = 1,
+            .both_modes = 1,
+        },
+        {
+            "linkage: block extern rejects an incompatible visible object type", __LINE__,
+            SVI("int x;\nint main(void){extern double x;return 0;}\n"),
+            SVI("(test):2:31: error: conflicting type for 'x': 'double'; previous declaration has type 'int'\n"),
+            .all_targets = 1,
+            .both_modes = 1,
+        },
+        {
+            "linkage: block function rejects an incompatible visible return type", __LINE__,
+            SVI("int target(void);\nint main(void){double target(void);return 0;}\n"),
+            SVI("(test):2:35: error: conflicting return type for 'target'. The types are 'int' and 'double'\n"),
+            .all_targets = 1,
+            .both_modes = 1,
+        },
+        {
+            "linkage: block function rejects incompatible visible parameters", __LINE__,
+            SVI("int target(int);\nint main(void){int target(double);return 0;}\n"),
+            SVI("(test):2:34: error: conflicting type for parameter 1 of 'target'. The types are 'int' and 'double'\n"),
+            .all_targets = 1,
+            .both_modes = 1,
+        },
+        {
+            "linkage: same-block automatic object cannot be redeclared extern", __LINE__,
+            SVI("int main(void){int x;extern int x;return 0;}\n"),
+            SVI("(test):1:34: error: redefinition of 'x'\n"),
+            .all_targets = 1,
+            .both_modes = 1,
+        },
+        {
+            "linkage: extern cannot drop thread local storage", __LINE__,
+            SVI("_Thread_local int x;\nint main(void){extern int x;return 0;}\n"),
+            SVI("(test):2:27: error: conflicting thread-local storage for 'x'\n"),
+            .all_targets = 1,
+            .both_modes = 1,
+        },
+        {
+            "linkage: extern cannot add thread local storage", __LINE__,
+            SVI("int x;\nint main(void){extern _Thread_local int x;return 0;}\n"),
+            SVI("(test):2:41: error: conflicting thread-local storage for 'x'\n"),
+            .all_targets = 1,
+            .both_modes = 1,
+        },
+        {
+            "linkage: hidden object declarations must have compatible types", __LINE__,
+            SVI("int first(void){extern int x;return 0;}\n"
+                "int main(void){extern double x;return first();}\n"),
+            SVI("(test):2:31: error: conflicting type for 'x': 'double'; previous declaration has type 'int'\n"),
+            .all_targets = 1,
+            .both_modes = 1,
+        },
+        {
+            "linkage: hidden function declarations must have compatible types", __LINE__,
+            SVI("int first(void){int target(int);return 0;}\n"
+                "int main(void){int target(double);return first();}\n"),
+            SVI("(test):2:34: error: conflicting type for parameter 1 of 'target'. The types are 'int' and 'double'\n"),
+            .all_targets = 1,
+            .both_modes = 1,
+        },
+        {
+            "linkage: hidden symbols cannot change from object to function", __LINE__,
+            SVI("int first(void){extern int target;return 0;}\n"
+                "int main(void){int target(void);return first();}\n"),
+            SVI("(test):2:32: error: redefinition of 'target' as a different kind of symbol\n"),
+            .all_targets = 1,
+            .both_modes = 1,
+        },
+        {
+            "linkage: block static cannot be redeclared extern in the same block", __LINE__,
+            SVI("int main(void){static int x;extern int x;return 0;}\n"),
+            SVI("(test):1:41: error: redefinition of 'x'\n"),
+            .all_targets = 1,
+            .both_modes = 1,
+        },
         {
             "readcyclecounter rejects arguments", __LINE__,
             SVI("__builtin_readcyclecounter(1);"),
@@ -13085,12 +13213,6 @@ TestFunction(test_parse_errors){
             SVI("(test):3:27: error: format specifier '%d' (argument 1) expects 'int', but argument has type 'char *'\n"),
         },
         {
-            "extern definition after static declaration", __LINE__,
-            SVI("static void foo(void);\n"
-               "extern void foo(void){}\n"),
-            SVI("(test):2:22: error: non-static declaration of 'foo' follows static declaration\n"),
-        },
-        {
             "msvc suffix i7 invalid", __LINE__,
             SVI("int x = 42i7;\n"),
             SVI("(test):1:9: error: Invalid digit in number\n"),
@@ -14579,9 +14701,11 @@ TestFunction(test_parse_errors){
         },
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < CC_TARGET_COUNT * countof(cases); i = test_atomic_increment(&idx)){
-        struct ErrorCase* c = &cases[i / CC_TARGET_COUNT];
-        const CcTargetConfig* target = cc_targets[i % CC_TARGET_COUNT];
+    for(size_t i = test_atomic_increment(&idx); i < 2 * CC_TARGET_COUNT * countof(cases); i = test_atomic_increment(&idx)){
+        struct ErrorCase* c = &cases[i / (2 * CC_TARGET_COUNT)];
+        const CcTargetConfig* target = cc_targets[(i / 2) % CC_TARGET_COUNT];
+        _Bool eager = i % 2;
+        if(!eager && !c->both_modes) continue;
         if(!c->all_targets && target != &cc_target_test) continue;
         if(c->skip){
             TEST_stats.skipped++;
@@ -14595,7 +14719,8 @@ TestFunction(test_parse_errors){
         Logger* logger = msb_logger(&logger_, &log_sb);
         AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
-        CcParser cc = {
+        CcModule module = {0};
+        CcParser cc = {.root=&module, .module=&module,
             .cpp = {
                 .allocator = al,
                 .fc = fc,
@@ -14604,8 +14729,8 @@ TestFunction(test_parse_errors){
                 .env = &env,
                 .target = target,
             },
-            .current = &cc.global,
-            .eager_parsing = 1,
+            .current = &cc.module->scope,
+            .eager_parsing = eager,
         };
         fc_write_path(fc, "(test)", 6);
         int err = fc_cache_file(fc, c->input);
@@ -14623,6 +14748,15 @@ TestFunction(test_parse_errors){
         err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
         if(err) {TestPrintf("%s:%d: failed to include\n", __FILE__, c->line); goto fin;}
         err = cc_parse_all(&cc);
+        if(!err && !eager){
+            AtomMapItems funcs = AM_items(&cc.root->scope.functions);
+            for(size_t f = 0; f < funcs.count; f++){
+                CcFunc* func = funcs.data[f].p;
+                if(!func || !func->defined) continue;
+                err = cc_parse_func_body(&cc, func);
+                if(err) break;
+            }
+        }
         TEST_stats.executed++;
         if(err != _cc_syntax_error){
             TEST_stats.failures++;
@@ -15132,7 +15266,8 @@ TestFunction(test_struct_layout){
         AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
         int err = 0;
-        CcParser cc = {
+        CcModule module = {0};
+        CcParser cc = {.root=&module, .module=&module,
             .cpp = {
                 .allocator = al,
                 .fc = fc,
@@ -15141,7 +15276,7 @@ TestFunction(test_struct_layout){
                 .env = &env,
                 .target = &cc_target_test,
             },
-            .current = &cc.global,
+            .current = &cc.module->scope,
         };
         struct StructCase* c = &cases[i];
         fc_write_path(fc, "(test)", 6);
@@ -15166,7 +15301,7 @@ TestFunction(test_struct_layout){
             uint32_t actual_size, actual_align, actual_field_count;
             CcField* _Nullable actual_fields;
             if(c->is_union){
-                CcUnion* u = cc_scope_lookup_union_tag(&cc.global, tag, CC_SCOPE_NO_WALK);
+                CcUnion* u = cc_scope_lookup_union_tag(&cc.module->scope, tag, CC_SCOPE_NO_WALK);
                 TestExpectTrue(void*, u);
                 if(!u){ err = 1; goto fin; }
                 actual_size = u->size;
@@ -15175,7 +15310,7 @@ TestFunction(test_struct_layout){
                 actual_fields = u->fields;
             }
             else {
-                CcStruct* s = cc_scope_lookup_struct_tag(&cc.global, tag, CC_SCOPE_NO_WALK);
+                CcStruct* s = cc_scope_lookup_struct_tag(&cc.module->scope, tag, CC_SCOPE_NO_WALK);
                 TestExpectTrue(void*, s);
                 if(!s){ err = 1; goto fin; }
                 actual_size = s->size;
@@ -15479,7 +15614,8 @@ TestFunction(test_bitfield_abi){
         int err = 0;
         CcTargetConfig tgt = cc_target_test;
         tgt.bitfield_abi = cases[i].abi;
-        CcParser cc = {
+        CcModule module = {0};
+        CcParser cc = {.root=&module, .module=&module,
             .cpp = {
                 .allocator = al,
                 .fc = fc,
@@ -15488,7 +15624,7 @@ TestFunction(test_bitfield_abi){
                 .env = &env,
                 .target = &tgt,
             },
-            .current = &cc.global,
+            .current = &cc.module->scope,
         };
         struct BFCase* c = &cases[i];
         fc_write_path(fc, "(test)", sizeof "(test)" - 1);
@@ -15505,7 +15641,7 @@ TestFunction(test_bitfield_abi){
         {
             Atom tag = AT_get_atom(&at, c->tag.text, c->tag.length);
             if(!tag){ TestReport("tag atom not found"); err = 1; goto bffin; }
-            CcStruct* s = cc_scope_lookup_struct_tag(&cc.global, tag, CC_SCOPE_NO_WALK);
+            CcStruct* s = cc_scope_lookup_struct_tag(&cc.module->scope, tag, CC_SCOPE_NO_WALK);
             TestExpectTrue(void*, s);
             if(!s){ err = 1; goto bffin; }
             TEST_stats.executed++;
@@ -15683,7 +15819,8 @@ TestFunction(test_pragma_pack){
         Logger* logger = msb_logger(&logger_, &log_sb);
         AtomTable at = {0};
         Environment env = {.allocator = al, .at=&at};
-        CcParser cc = {
+        CcModule module = {0};
+        CcParser cc = {.root=&module, .module=&module,
             .cpp = {
                 .allocator = al,
                 .fc = fc,
@@ -15692,7 +15829,7 @@ TestFunction(test_pragma_pack){
                 .env = &env,
                 .target = &cc_target_test,
             },
-            .current = &cc.global,
+            .current = &cc.module->scope,
             .eager_parsing = 1,
         };
         fc_write_path(fc, "(test)", 6);
@@ -15952,9 +16089,10 @@ TestFunction(test_record_call_abi){
         MStringBuilder log = {.allocator=al};
         MsbLogger logger = {0};
         Environment env = {.allocator=al, .at=&at};
-        CcParser p = {.cpp={.allocator=al, .fc=fc, .at=&at, .env=&env,
+        CcModule module = {0};
+        CcParser p = {.root=&module, .module=&module,.cpp={.allocator=al, .fc=fc, .at=&at, .env=&env,
             .logger=msb_logger(&logger, &log), .target=cc_targets[cases[i].target]}};
-        p.current = &p.global;
+        p.current = &p.module->scope;
         fc_write_path(fc, "(test)", 6);
         int err = fc_cache_file(fc, cases[i].input);
         if(!err) err = cpp_define_builtin_macros(&p.cpp);
@@ -15967,8 +16105,8 @@ TestFunction(test_record_call_abi){
         {
             Atom tag = AT_get_atom(&at, "S", 1);
             CcStruct* s = cases[i].is_union
-                ? (CcStruct*)cc_scope_lookup_union_tag(&p.global, tag, CC_SCOPE_NO_WALK)
-                : cc_scope_lookup_struct_tag(&p.global, tag, CC_SCOPE_NO_WALK);
+                ? (CcStruct*)cc_scope_lookup_union_tag(&p.module->scope, tag, CC_SCOPE_NO_WALK)
+                : cc_scope_lookup_struct_tag(&p.module->scope, tag, CC_SCOPE_NO_WALK);
             TestExpectTrue(void*, s);
             if(!s) goto done;
             TestExpectEquals(uint32_t, s->size, cases[i].size);
@@ -16062,10 +16200,11 @@ TestFunction(test_feature_queries){
         FileCache* fc = fc_create(al, FC_FLAGS_NONE);
         MStringBuilder log = {.allocator=al};
         MsbLogger logger = {0};
-        CcParser cc = {
+        CcModule module = {0};
+        CcParser cc = {.root=&module, .module=&module,
             .cpp = {.allocator=al, .at=&at, .fc=fc,
                     .logger=msb_logger(&logger, &log), .target=&cc_target_test},
-            .current = &cc.global,
+            .current = &cc.module->scope,
             .eager_parsing = 1,
         };
         MStringBuilder input = {.allocator=al};

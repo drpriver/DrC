@@ -79,15 +79,6 @@ LOG_PRINTF(3, 4) static int ci_error(CiInterpreter*, SrcLoc, const char*, ...);
 #define ci_ice(ci, loc, fmt, ...) ci_error(ci, loc, "ICE: " fmt " at %s:%d", __VA_ARGS__, __FILE__, __LINE__)
 #endif
 
-struct CiModule {
-    CcScope scope;
-    Parray(CcStmtNode) nodes; // toplevel trees; swapped with the parser's during compile
-    Marray(CiOp) ops;
-    AtomMap(uintptr_t) labels; // label -> op index + 1
-    size_t lowered; // count of nodes already lowered into ops
-    uint32_t slot_size; // bytes of slot storage the ops need
-    uint32_t frame_alignment;
-};
 static int ci_lower_module(CiInterpreter*, CiModule*, CiLowerDeps*);
 
 static char ci_discard_buf[8192];
@@ -106,11 +97,11 @@ static CcFunc*_Nullable ci_hotswap_target(CcFunc*);
 static int ci_make_abi_call_frame(CiInterpreter*, CiInterpFrame*, CcFunc*, const CiOp*, CiInterpFrame* _Nullable* _Nonnull);
 static int ci_call_abi(CiInterpreter*, CiInterpFrame* _Nullable, CcFunc*, NcCallState*, SrcLoc);
 static int ci_call_argv(CiInterpreter*, CiInterpFrame* _Nullable caller, CcFunc*, void* _Nonnull* _Nonnull argv, uint32_t nargs, void* result, size_t size, SrcLoc loc);
-static int ci_lookup_symbol(CiInterpreter*, SrcLoc, CiModule*_Nullable, const char*, size_t, CcQualType, void*_Nullable*_Nonnull, CcQualType*_Nullable);
-static int ci_compile_module(CiInterpreter*, StringView, StringView, CiModule*_Nullable*_Nonnull);
+static int ci_lookup_symbol(CiInterpreter*, SrcLoc, CiModule*, const char*, size_t, CcQualType, void*_Nullable*_Nonnull, CcQualType*_Nullable);
+static int ci_compile_module(CiInterpreter*, CcModule*, StringView, StringView, CiModule*_Nullable*_Nonnull);
 static int ci_resolve_module(CiInterpreter*, CiModule*);
-static int ci_parse_module_type(CiInterpreter*, SrcLoc, CiModule*_Nullable, StringView, CcQualType*);
-static int ci_reflect_module(CiInterpreter*, SrcLoc, CiModule*_Nullable, CcModuleOp, size_t, CiRtModuleMember*);
+static int ci_parse_module_type(CiInterpreter*, SrcLoc, CiModule*, StringView, CcQualType*);
+static int ci_reflect_module(CiInterpreter*, SrcLoc, CiModule*, CcModuleOp, size_t, CiRtModuleMember*);
 static int ci_reflect_func_unlocked(CiInterpreter*, SrcLoc, CcFunc*, CiRtModuleMember*, _Bool);
 static int ci_try_dlsym(CiInterpreter*, Atom, void*_Nullable*_Nonnull);
 static void ci_lock_resolver(CiInterpreter*);
@@ -1011,7 +1002,7 @@ ci_type_reflect(CiInterpreter* ci, SrcLoc loc, CcTypeIntrospectionOp op, CcQualT
 static
 int
 ci_module_reflect_validate(CiInterpreter* ci, SrcLoc loc, CiModule*_Null_unspecified module){
-    if(module && PM_get(&ci->modules, module) != module)
+    if(!module || (module != &ci->root && PM_get(&ci->modules, module) != module))
         return ci_error(ci, loc, "_Module is not valid");
     return 0;
 }
@@ -1019,6 +1010,7 @@ ci_module_reflect_validate(CiInterpreter* ci, SrcLoc loc, CiModule*_Null_unspeci
 static
 int
 ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleOp op, CiModule*_Null_unspecified module, uintptr_t arg, CcQualType expected, void* result, size_t size, CiInterpFrame*_Nullable*_Nonnull child){
+    if(!module) return ci_error(ci, loc, "_Module is not valid");
     int err;
     size_t idx = arg;
     switch(op){
@@ -1057,7 +1049,6 @@ ci_module_reflect(CiInterpreter* ci, CiInterpFrame* frame, SrcLoc loc, CcModuleO
             return 0;
         }
         case CC_MODULE_RUN:{
-            if(!module) return ci_error(ci, loc, "run() cannot be called on null module");
             err = ci_resolve_module(ci, module);
             if(err) return err;
             int ret = 0;
@@ -1282,8 +1273,9 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                         return ci_error(ci, op->rt_call.loc, "__compile source data must not be NULL");
                     if(path.count && !path.data)
                         return ci_error(ci, op->rt_call.loc, "__compile path data must not be NULL");
-                    err = ci_compile_module(ci, (StringView){source.count, source.count ? source.data : ""},
-                        (StringView){path.count, path.count ? path.data : ""}, &module);
+                    CcModule* parent;
+                    CI_INLINE_MEMCPY(&parent, (char*)frame->slots + op->rt_call.args[2], sizeof parent);
+                    err = ci_compile_module(ci, parent, (StringView){source.count, source.count ? source.data : ""}, (StringView){path.count, path.count ? path.data : ""}, &module);
                     if(err == CI_OOM_ERROR) return err;
                     // Compilation diagnostics produce a null module, not
                     // an interpreter execution failure.
@@ -3017,7 +3009,7 @@ ci_call_by_name(CiInterpreter* ci, StringView name, const CiArg* _Nullable args,
     Atom atom = AT_atomize(at, name.text, name.length);
     ci_unlock_atoms(ci, at);
     if(!atom) return CI_OOM_ERROR;
-    CcFunc* func = cc_scope_lookup_func(&ci->parser.global, atom, CC_SCOPE_NO_WALK);
+    CcFunc* func = cc_scope_lookup_func(&ci->root.cc.scope, atom, CC_SCOPE_NO_WALK);
     if(!func || !func->defined)
         return CI_SYMBOL_NOT_FOUND;
     CcFunc* target = ci_hotswap_target(func);
@@ -3063,7 +3055,7 @@ ci_call_main(CiInterpreter* ci, int argc, char*_Null_unspecified*_Null_unspecifi
     Atom atom = AT_atomize(at, "main", 4);
     ci_unlock_atoms(ci, at);
     if(!atom) return CI_OOM_ERROR;
-    CcFunc* func = cc_scope_lookup_func(&ci->parser.global, atom, CC_SCOPE_NO_WALK);
+    CcFunc* func = cc_scope_lookup_func(&ci->root.cc.scope, atom, CC_SCOPE_NO_WALK);
     if(!func || !func->defined)
         return CI_SYMBOL_NOT_FOUND;
     CcFunction* ftype = func->type;
@@ -3097,7 +3089,7 @@ ci_add_root(CiInterpreter* ci, StringView name){
     ci_unlock_atoms(ci, at);
     if(!atom) return CI_OOM_ERROR;
     CcSymbol sym;
-    _Bool found = cc_scope_lookup_symbol(&ci->parser.global, atom, CC_SCOPE_NO_WALK, &sym);
+    _Bool found = cc_scope_lookup_symbol(&ci->root.cc.scope, atom, CC_SCOPE_NO_WALK, &sym);
     if(!found) return CI_SYMBOL_NOT_FOUND;
     int err = 0;
     switch(sym.kind){
@@ -3124,21 +3116,21 @@ ci_resolve_root(CiInterpreter* ci, StringView name){
 
 static
 int
-ci_compile_module(CiInterpreter* ci, StringView source, StringView path, CiModule*_Nullable*_Nonnull out){
+ci_compile_module(CiInterpreter* ci, CcModule* parent, StringView source, StringView path, CiModule*_Nullable*_Nonnull out){
     int err = 0;
     *out = NULL;
     ci_lock_resolver(ci);
     CcParser* p = &ci->parser;
     _Bool eager = p->eager_parsing;
     CcScope* old_current = p->current;
-    Parray(CcStmtNode) old = p->toplevel_nodes;
+    CcModule* old_module = p->module;
 
     CiModule* module = Allocator_zalloc(ci_allocator(ci), 1, sizeof *module, _Alignof(CiModule));
     if(!module){
         err = CI_OOM_ERROR;
         goto done;
     }
-    module->scope.parent = &ci->parser.global;
+    module->cc.scope.parent = &parent->scope;
     size_t source_len = source.length;
     char* source_copy = "";
     if(source_len){
@@ -3150,8 +3142,8 @@ ci_compile_module(CiInterpreter* ci, StringView source, StringView path, CiModul
         }
     }
     StringView src = (StringView){source_len, source_copy};
-    p->toplevel_nodes = module->nodes;
-    p->current = &module->scope;
+    p->module = &module->cc;
+    p->current = &module->cc.scope;
     cc_parser_discard_input(p);
 
     if(path.length) fc_write_path(p->cpp.fc, path.text, path.length);
@@ -3169,7 +3161,6 @@ ci_compile_module(CiInterpreter* ci, StringView source, StringView path, CiModul
     if(err){ err = CI_OOM_ERROR; goto done; }
     p->eager_parsing = 1;
     err = cc_parse_all(p);
-    module->nodes = p->toplevel_nodes;
     if(err) goto done;
 
     err = PM_put(&ci->modules, ci_allocator(ci), module, module);
@@ -3181,7 +3172,7 @@ ci_compile_module(CiInterpreter* ci, StringView source, StringView path, CiModul
     done:
     p->eager_parsing = eager;
     p->current = old_current;
-    p->toplevel_nodes = old;
+    p->module = old_module;
     if(err){
         cc_parser_discard_input(p);
         // XXX: cleanup module
@@ -3206,13 +3197,16 @@ ci_resolve_module(CiInterpreter* ci, CiModule* module){
 
 static
 int
-ci_parse_module_type(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, StringView source, CcQualType* out){
+ci_parse_module_type(CiInterpreter* ci, SrcLoc loc, CiModule* module, StringView source, CcQualType* out){
     *out = (CcQualType){0};
     CcParser* p = &ci->parser;
     int err = 0;
 
     ci_lock_resolver(ci);
-    err = cc_parse_type_string(p, module ? &module->scope : &p->global, loc, source, out);
+    CcModule* previous = p->module;
+    p->module = &module->cc;
+    err = cc_parse_type_string(p, &module->cc.scope, loc, source, out);
+    p->module = previous;
     if(err && err != CI_OOM_ERROR){
         *out = (CcQualType){0};
         err = 0;
@@ -3397,9 +3391,9 @@ ci_reflect_type_from_maps(CiRtModuleMember* out, CcScope* scope, size_t idx){
 
 static
 int
-ci_reflect_module(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, CcModuleOp op, size_t idx, CiRtModuleMember* out){
+ci_reflect_module(CiInterpreter* ci, SrcLoc loc, CiModule* module, CcModuleOp op, size_t idx, CiRtModuleMember* out){
     memset(out, 0, sizeof *out);
-    CcScope* scope = module ? &module->scope : &ci->parser.global;
+    CcScope* scope = &module->cc.scope;
     int ret = 0;
     ci_lock_resolver(ci);
     switch(op){
@@ -3462,7 +3456,7 @@ ci_reflect_module(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, CcMo
 
 static
 int
-ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const char* name, size_t len, CcQualType expected, void*_Nullable*_Nonnull out, CcQualType*_Nullable pointer_type){
+ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule* module, const char* name, size_t len, CcQualType expected, void*_Nullable*_Nonnull out, CcQualType*_Nullable pointer_type){
     *out = NULL;
     AtomTable* at = ci_lock_atoms(ci);
     Atom atom = AT_atomize(at, name, len);
@@ -3474,8 +3468,8 @@ ci_lookup_symbol(CiInterpreter* ci, SrcLoc loc, CiModule*_Nullable module, const
     CcQualType symbol_type = {0};
     ci_lock_resolver(ci);
     CcSymbol sym;
-    CcScope* scope = module ? &module->scope : &ci->parser.global;
-    int walk = module ? CC_SCOPE_WALK_CHAIN : CC_SCOPE_NO_WALK;
+    CcScope* scope = &module->cc.scope;
+    int walk = CC_SCOPE_WALK_CHAIN;
     if(cc_scope_lookup_symbol(scope, atom, walk, &sym)){
         switch(sym.kind){
             case CC_SYM_FUNC: {
@@ -3682,7 +3676,7 @@ ci_resolve_refs(CiInterpreter* ci){
     Atom main_atom = AT_atomize(at, "main", 4);
     ci_unlock_atoms(ci, at);
     if(!main_atom) return CI_OOM_ERROR;
-    CcFunc* main_func = cc_scope_lookup_func(&ci->parser.global, main_atom, CC_SCOPE_NO_WALK);
+    CcFunc* main_func = cc_scope_lookup_func(&ci->root.cc.scope, main_atom, CC_SCOPE_NO_WALK);
     if(main_func && main_func->defined){
         err = ci_deps_add_func(&ci->deps, ci_allocator(ci), main_func, CC_FUNC_DEP_USED);
         if(err) return err;
@@ -4599,7 +4593,7 @@ ci_pragma_procmacro(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
     Atom atom = AT_get_atom(cpp->at, name.text, name.length);
     if(!atom)
         return cpp_error(cpp, loc, "#pragma procmacro: unknown function '%.*s'", (int)name.length, name.text);
-    CcFunc* func = cc_scope_lookup_func(&ci->parser.global, atom, CC_SCOPE_NO_WALK);
+    CcFunc* func = cc_scope_lookup_func(&ci->root.cc.scope, atom, CC_SCOPE_NO_WALK);
     if(!func || !func->defined)
         return cpp_error(cpp, loc, "#pragma procmacro: function '%.*s' not defined", (int)name.length, name.text);
     err = ci_deps_add_func(&ci->deps, ci_allocator(ci), func, CC_FUNC_DEP_USED);

@@ -36,6 +36,15 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("static int x=3;"
+         "_Module a=__compile(\"static int y=4;return __compile(\\\"return x+y;\\\",\\\"\\\").run();\",\"\");"
+         "return a&&a.run()==7;")},
+    {__LINE__, SVI("_Module m=__compile(\"int get(void){extern int x;int target(void);return x+target();}"
+         "int x=3;int target(void){return 4;}\",\"\");if(!m)return 0;m.run();"
+         "int(*f)(void)=m.symbol(\"get\",int(void));return f&&f()==7;")},
+    {__LINE__, SVI("int first(void){extern int hidden;int target(void);return 0;}"
+         "int second(void){extern int hidden;int target(void);return 0;}"
+         "return first()+second()==0;")},
     {__LINE__, SVI("__forceinline int odd(int n);"
          "__forceinline int even(int n){return n?odd(n-1):1;}"
          "__forceinline int odd(int n){return n?even(n-1):0;}"
@@ -521,7 +530,9 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
                 .env = &env,
                 .target = cc_targets[CC_TARGET_TEST],
             },
-            .current = &interp.parser.global,
+            .root = &interp.root.cc,
+            .module = &interp.root.cc,
+            .current = &interp.root.cc.scope,
         },
         .top_frame = {
             .return_buf = &interp.exit_code,

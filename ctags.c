@@ -280,13 +280,14 @@ int main(int argc, char** argv, char** envp){
     for(size_t i = 0; i < pos_args[0].num_parsed; i++){
         StringView filename = filenames[i];
         if(!filename.length) continue;
-        CcParser parser = {
+        CcModule module = {0};
+        CcParser parser = {.root=&module, .module=&module,
             .cpp = {
                 .allocator = MALLOCATORI,
                 .at = &at,
                 .env = &env,
             },
-            .current = &parser.global,
+            .current = &parser.module->scope,
         };
         parser.cpp.fc = fc;
         parser.cpp.logger = logger;
@@ -316,7 +317,7 @@ int main(int argc, char** argv, char** envp){
         }
         err = cc_parse_all(&parser);
         if(err) goto stringify_error;
-        CcScope* g = &parser.global;
+        CcScope* g = &parser.module->scope;
         {
             AtomMap16Items items = AM16_items(&g->typedefs);
             MARRAY_FOR_EACH(AtomMap16Item, it, items){

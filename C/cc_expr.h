@@ -487,6 +487,7 @@ struct CcExpr {
     union {
         CcExpr* lhs;
         struct { CcExpr* lhs; CcQualType type; } compound; // arithmetic type before storing
+        struct { CcExpr* lhs; struct CcModule* module; } compile;
         _Bool boolean;
         uint64_t uinteger;
         int64_t integer;

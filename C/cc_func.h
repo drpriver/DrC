@@ -123,7 +123,8 @@ struct CcFunc {
              inline_blocked: 1,
              interp_lowering: 1,
              noreturn_: 1,
-             _padding: 19; // free real estate
+             has_linkage: 1,
+             _padding: 18; // free real estate
     uint32_t frame_size; // size of params + automatic local vars + temporaries;
     Marray(CcToken)*_Nullable tokens; // If set, the unparsed function body.
                                       // Return to the parser's free list when done.
@@ -136,6 +137,7 @@ struct CcFunc {
     } params;
     CcScope*_Nullable param_scope; // declarations from the definition's parameter list
     CcScope*_Nullable definition_scope; // lexical parent, including iteration bindings
+    struct CcModule*_Nullable module; // owning module, also used when parsing a deferred body
     CcLabelCtx label_ctx;
     CcFunc*_Nullable hotswap;
     void (*native_func)(void); // native function pointer for calling from interpreted/bytecode, use type to figure out calling convention etc.

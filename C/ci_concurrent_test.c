@@ -383,7 +383,9 @@ TestFunction(test_concurrent_callbacks){
                     .env = &env,
                     .target = cc_targets[CC_TARGET_NATIVE],
                 },
-                .current = &interp.parser.global,
+                .root = &interp.root.cc,
+                .module = &interp.root.cc,
+                .current = &interp.root.cc.scope,
             },
             .top_frame = {
                 .return_buf = &interp.exit_code,

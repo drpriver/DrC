@@ -87,6 +87,7 @@ static int test_fp_rounding_modes(int (*f)(int)){
 
 // Integer types
 static int test_add(int a, int b){ return a + b; }
+static int linkage_native_value = 3;
 static int test_sub(int a, int b){ return a - b; }
 static long long test_add_ll(long long a, long long b){ return a + b; }
 static char test_add_char(char a, char b){ return (char)(a + b); }
@@ -605,340 +606,340 @@ TestFunction(test_interop){
         int exit_code;
         _Bool skip;
     } testcases[] = {
-    {
-        "ABI: nested native calls do not change callback return conventions", __LINE__,
-        SVI("long double identity(long double);int seven(void);"
-            "int apply(long double(*)(long double),int(*)(void),void(*)(void));"
-            "long double wide(long double x){long double y=identity(x);seven();return y;}"
-            "int integer(void){identity(2.5L);return 7;}"
-            "void nothing(void){identity(3.5L);}"
-            "return apply(wide,integer,nothing);"),
-        {{SV("identity"),(void*)test_long_double_identity},
-         {SV("seven"),(void*)test_seven},
-         {SV("apply"),(void*)test_nested_return_conventions}}, .exit_code=1,
-    },
-    {
-        "ABI: native stack copy includes full chunks and a byte tail", __LINE__,
-        SVI("long long probe(int,int,int,int,int,int,int,int,unsigned char,unsigned char,unsigned short,unsigned,long long,unsigned char);"
-            "return probe(1,2,3,4,5,6,7,8,9,10,513,1000,10000LL,17)==11585;"),
-        {{SV("probe"),(void*)abi_stack_tail}}, .exit_code=1,
-    },
-    {
-        "ABI: native result survives callback with nested native call", __LINE__,
-        SVI("struct S{long long i;double d;};struct S bump(struct S);"
-            "struct S apply(struct S(*)(struct S),struct S);"
-            "struct S f(struct S s){return bump(s);}"
-            "struct S s=apply(f,(struct S){7,2.5});return s.i==10&&s.d==6.5;"),
-        {{SV("bump"),(void*)test_mix_return},{SV("apply"),(void*)test_mix_callback}}, .exit_code=1,
-    },
-    #ifndef _MSC_VER
-    {
-        "ABI: aligned outgoing storage in direct and indirect nested calls", __LINE__,
-        SVI("struct __attribute__((aligned(128))) S {long long x;};int probe(int,...);"
-            "int call(int(*p)(int,...)){char pad=1;return pad&&p(0,(struct S){19},23LL);}"
-            "int direct(void){char pad=1;return pad&&probe(0,(struct S){19},23LL);}"
-            "return direct()&&call(probe)&&probe(0,(struct S){19},23LL);"),
-        {{SV("probe"),ABI_VARARG_SYMBOL(abi_wide_aligned)}},
-        .skip=ABI_VARARG_SKIP, .exit_code=1,
-    },
-    {
-        "ABI: over-aligned variadic stack arguments in both directions", __LINE__,
-        SVI("struct __attribute__((aligned(128))) S {long long x;};int probe(int,...);int apply(int(*)(int,...));"
-            "int f(int n,...){__builtin_va_list a;__builtin_va_start(a,n);struct S s=__builtin_va_arg(a,struct S);"
-            "long long tail=__builtin_va_arg(a,long long);__builtin_va_end(a);return s.x==19&&tail==23;}"
-            "return probe(0,(struct S){19},23LL)&&apply(f);"),
-        {{SV("probe"),ABI_VARARG_SYMBOL(abi_wide_aligned)},{SV("apply"),ABI_VARARG_SYMBOL(abi_wide_aligned_callback)}},
-        .skip=ABI_VARARG_SKIP,
-        .exit_code=1,
-    },
-    #endif
-    {
-        "ABI: native and interpreted va_lists forward in both directions", __LINE__,
-        SVI("struct D{double x,y;};int read_list(__builtin_va_list);"
-            "int supply_list(int(*)(__builtin_va_list),int,...);int invoke(int(*)(int,...));"
-            "int consume(__builtin_va_list ap){return read_list(ap);}"
-            "int f(int n,...){__builtin_va_list a,b;__builtin_va_start(a,n);__builtin_va_copy(b,a);"
-            "int r=consume(a)&&consume(b);__builtin_va_end(a);__builtin_va_end(b);"
-            "__builtin_va_start(a,n);r=r&&consume(a);__builtin_va_end(a);return r;}"
-            "return f(0,17,2.5,(struct D){3.5,4.5},29LL)&&invoke(f)"
-            "&&supply_list(consume,0,17,2.5,(struct D){3.5,4.5},29LL);"),
-        {{SV("read_list"),ABI_VARARG_SYMBOL(abi_read_list)},
-         {SV("supply_list"),ABI_VARARG_SYMBOL(abi_supply_list)},
-         {SV("invoke"),ABI_VARARG_SYMBOL(abi_invoke_variadic)}},
-        .exit_code=1,.skip=ABI_VARARG_SKIP,
-    },
-    {
-        "ABI: narrow unsigned values after dirty registers", __LINE__,
-        SVI("unsigned byte(unsigned char); unsigned half(unsigned short);\n"
-            "unsigned callback(unsigned char(*)(void));\n"
-            "unsigned long long dirty(unsigned long long x){return x;}\n"
-            "unsigned char f(void){dirty(~0ull);return 3;}\n"
-            "dirty(~0ull); unsigned a=byte(7);dirty(~0ull);unsigned b=half(513);\n"
-            "return a==7&&b==513&&callback(f)==3;\n"),
-        {{SV("byte"),(void*)abi_unsigned_char},{SV("half"),(void*)abi_unsigned_short},
-            {SV("callback"),(void*)abi_unsigned_callback}}, .exit_code=1,
-    },
-    {
-        "ABI: two GP words with one register remaining", __LINE__,
-        SVI("struct P {long long x,y;}; long long probe(long long,long long,long long,long long,long long,struct P,long long);\n"
-            "return probe(1,2,3,4,5,(struct P){11,13},17)==56;\n"),
-        {{SV("probe"),(void*)abi_pair_five}}, .exit_code=1,
-    },
-    {
-        "ABI: two GP words at the ARM64 register boundary", __LINE__,
-        SVI("struct P {long long x,y;}; long long probe(long long,long long,long long,long long,long long,long long,long long,struct P,long long);\n"
-            "return probe(1,2,3,4,5,6,7,(struct P){11,13},17)==69;\n"),
-        {{SV("probe"),(void*)abi_pair_seven}}, .exit_code=1,
-    },
-    {
-        "ABI callback: two GP words with one register remaining", __LINE__,
-        SVI("struct P {long long x,y;}; long long apply(long long(*)(long long,long long,long long,long long,long long,struct P,long long));\n"
-            "long long f(long long a,long long b,long long c,long long d,long long e,struct P p,long long t){return a+b+c+d+e+p.x+p.y+t;}\n"
-            "return apply(f)==56;\n"),
-        {{SV("apply"),(void*)abi_pair_callback}}, .exit_code=1,
-    },
-    {
-        "ABI callback: mixed record after GP exhaustion", __LINE__,
-        SVI("struct S {long long i;double d;}; double apply(double(*)(long long,long long,long long,long long,long long,long long,struct S,long long,double));\n"
-            "double f(long long a,long long b,long long c,long long d,long long e,long long g,struct S x,long long t,double y){return a+b+c+d+e+g+x.i+x.d+t+y;}\n"
-            "return apply(f)==55.;\n"),
-        {{SV("apply"),(void*)abi_mix_gp_callback}}, .exit_code=1,
-    },
-    {
-        "ABI callback: mixed record after FP exhaustion", __LINE__,
-        SVI("struct S {long long i;double d;}; double apply(double(*)(double,double,double,double,double,double,double,double,struct S,long long,double));\n"
-            "double f(double a,double b,double c,double d,double e,double g,double h,double j,struct S x,long long t,double y){return a+b+c+d+e+g+h+j+x.i+x.d+t+y;}\n"
-            "return apply(f)==70.;\n"),
-        {{SV("apply"),(void*)abi_mix_fp_callback}}, .exit_code=1,
-    },
-    {
-        "ABI callback: hidden result and register pressure", __LINE__,
-        SVI("struct S {long long i;double d;}; struct B {long long a,b,c;};\n"
-            "struct B apply(struct B(*)(long long,long long,long long,long long,long long,struct S,long long,double));\n"
-            "struct B f(long long a,long long b,long long c,long long d,long long e,struct S x,long long t,double y){return (struct B){a+b+c+d+e+x.i,(long long)(x.d+y),t};}\n"
-            "struct B x=apply(f); return x.a==21&&x.b==16&&x.c==8;\n"),
-        {{SV("apply"),(void*)abi_hidden_callback}}, .exit_code=1,
-    },
-    #if defined __GNUC__ || defined __clang__
-    {
-        "ABI callback: padded integer record under register pressure", __LINE__,
-        SVI("struct __attribute__((aligned(16))) S {long long x;};\n"
-            "struct S apply(struct S(*)(long long,long long,long long,long long,long long,struct S,long long));\n"
-            "struct S f(long long a,long long b,long long c,long long d,long long e,struct S x,long long t){x.x+=a+b+c+d+e+t;return x;}\n"
-            "return apply(f).x==25;\n"),
-        {{SV("apply"),(void*)abi_padding_callback}}, .exit_code=1,
-    },
-    #endif
-    #define ABI_ODD_CASE(N) { \
-        "ABI: " #N "-byte arguments, results and callbacks preserve canaries", __LINE__, \
-        SVI("struct S {unsigned char bytes[" #N "];}; struct W {unsigned char before;struct S s;unsigned char after;};\n" \
-            "struct S bump(struct S); struct S apply(struct S(*)(struct S),struct S);\n" \
-            "struct S f(struct S s){for(unsigned i=0;i<" #N ";i++)s.bytes[i]++;return s;}\n" \
-            "struct W w={.before=0xa5,.after=0x5a}; for(unsigned i=0;i<" #N ";i++)w.s.bytes[i]=i+1;\n" \
-            "w.s=bump(w.s); for(unsigned i=0;i<" #N ";i++)if(w.s.bytes[i]!=i+2)return 0;\n" \
-            "w.s=apply(f,w.s); for(unsigned i=0;i<" #N ";i++)if(w.s.bytes[i]!=i+3)return 0;\n" \
-            "return w.before==0xa5&&w.after==0x5a;\n"), \
-        {{SV("bump"),(void*)abi_odd##N},{SV("apply"),(void*)abi_odd_callback##N}}, .exit_code=1, \
-    },
-    ABI_ODD_CASE(3)
-    ABI_ODD_CASE(5)
-    ABI_ODD_CASE(7)
-    ABI_ODD_CASE(15)
-    #undef ABI_ODD_CASE
-    {
-        "ABI: int128 scalar arguments, returns and callbacks", __LINE__,
-        SVI("unsigned __int128 bump(unsigned __int128);unsigned __int128 apply(unsigned __int128(*)(unsigned __int128),unsigned __int128);\n"
-            "unsigned __int128 f(unsigned __int128 x){return x+5;}\n"
-            "unsigned __int128 x=((unsigned __int128)1<<110)+19;return bump(x)==x+3&&apply(f,x)==x+5;\n"),
-        {{SV("bump"),ABI_I128_SYMBOL(abi_i128_scalar)},{SV("apply"),ABI_I128_SYMBOL(abi_i128_scalar_callback)}},
-        .exit_code=1,.skip=ABI_I128_SKIP,
-    },
-    {
-        "ABI: int128 record after an odd GP argument, including callback", __LINE__,
-        SVI("struct S {unsigned __int128 x;}; long long probe(long long,struct S,long long);\n"
-            "long long apply(long long(*)(long long,struct S,long long));\n"
-            "long long f(long long a,struct S s,long long t){return a+(long long)(s.x>>64)+(long long)s.x+t;}\n"
-            "struct S s={((unsigned __int128)1<<100)+17}; long long expected=((long long)1<<36)+25;\n"
-            "return probe(3,s,5)==expected&&apply(f)==expected;\n"),
-        {{SV("probe"),ABI_I128_SYMBOL(abi_i128_odd)},{SV("apply"),ABI_I128_SYMBOL(abi_i128_callback)}},
-        .exit_code=1, .skip=ABI_I128_SKIP,
-    },
-    {
-        "ABI: int128-aligned stack record between ordinary stack arguments", __LINE__,
-        SVI("struct S {unsigned __int128 x;};\n"
-            "long long probe(long long,long long,long long,long long,long long,long long,long long,long long,long long,struct S,long long);\n"
-            "struct S s={((unsigned __int128)1<<100)+17};\n"
-            "return probe(1,2,3,4,5,6,7,8,9,s,10)==((long long)1<<36)+72;\n"),
-        {{SV("probe"),ABI_I128_SYMBOL(abi_i128_stack)}}, .exit_code=1, .skip=ABI_I128_SKIP,
-    },
-    {
-        "ABI: named and variadic HFAs in registers", __LINE__,
-        SVI("struct D {double x,y;};struct F {float x,y,z;};double probe(struct D,int,...);\n"
-            "return probe((struct D){2.,3.},0,(struct D){8.,9.},(struct F){1,2,3},11,12.)==51.;\n"),
-        {{SV("probe"),ABI_VARARG_SYMBOL(abi_hfa_varargs)}}, .exit_code=1, .skip=ABI_VARARG_SKIP,
-    },
-    {
-        "ABI: variadic HFAs with one FP register remaining", __LINE__,
-        SVI("struct D {double x,y;};struct F {float x,y,z;};double probe(struct D,int,...);\n"
-            "return probe((struct D){2.,3.},5,1.,2.,3.,4.,5.,(struct D){8.,9.},(struct F){1,2,3},11,12.)==66.;\n"),
-        {{SV("probe"),ABI_VARARG_SYMBOL(abi_hfa_varargs)}}, .exit_code=1, .skip=ABI_VARARG_SKIP,
-    },
-    {
-        "ABI: variadic HFAs after FP register exhaustion", __LINE__,
-        SVI("struct D {double x,y;};struct F {float x,y,z;};double probe(struct D,int,...);\n"
-            "return probe((struct D){2.,3.},6,1.,2.,3.,4.,5.,6.,(struct D){8.,9.},(struct F){1,2,3},11,12.)==72.;\n"),
-        {{SV("probe"),ABI_VARARG_SYMBOL(abi_hfa_varargs)}}, .exit_code=1, .skip=ABI_VARARG_SKIP,
-    },
-    {
-        "ABI callback: incoming variadic HFAs", __LINE__,
-        SVI("struct D {double x,y;};struct F {float x,y,z;};double apply(double(*)(int,...));\n"
-            "double f(int n,...){__builtin_va_list ap;__builtin_va_start(ap,n);\n"
-            "struct D d=__builtin_va_arg(ap,struct D);struct F q=__builtin_va_arg(ap,struct F);\n"
-            "int t=__builtin_va_arg(ap,int);double y=__builtin_va_arg(ap,double);__builtin_va_end(ap);\n"
-            "return d.x+d.y+q.x+q.y+q.z+t+y;}return apply(f)==46.;\n"),
-        {{SV("apply"),ABI_VARARG_SYMBOL(abi_hfa_variadic_callback)}}, .exit_code=1,
-        .skip=ABI_VARARG_SKIP,
-    },
-    {
-        "ABI callback: packed full-width 64-bit field starting mid-byte", __LINE__,
-        SVI("struct __attribute__((packed)) S {unsigned a:4;unsigned long long b:64;};\n"
-            "struct S apply(struct S(*)(struct S),struct S);struct S f(struct S s){s.a++;s.b+=2;return s;}\n"
-            "struct W {unsigned char before;struct S s;unsigned char after;} w={.before=0xa5,.s={7,0xfedcba9876543210ULL},.after=0x5a};\n"
-            "w.s=apply(f,w.s);return w.s.a==8&&w.s.b==0xfedcba9876543212ULL&&w.before==0xa5&&w.after==0x5a;\n"),
-        {{SV("apply"),ABI_PACKED_SYMBOL(abi_packed64_callback)}}, .exit_code=1, .skip=ABI_PACKED_SKIP,
-    },
-    {
-        "ABI callback: packed full-width 128-bit field starting mid-byte", __LINE__,
-        SVI("struct __attribute__((packed)) S {unsigned a:4;unsigned __int128 b:128;};\n"
-            "struct S apply(struct S(*)(struct S),struct S);struct S f(struct S s){s.a++;s.b+=2;return s;}\n"
-            "unsigned __int128 v=((unsigned __int128)1<<120)+13;\n"
-            "struct W {unsigned char before;struct S s;unsigned char after;} w={.before=0xa5,.s={7,v},.after=0x5a};\n"
-            "w.s=apply(f,w.s);return w.s.a==8&&w.s.b==v+2&&w.before==0xa5&&w.after==0x5a;\n"),
-        {{SV("apply"),ABI_I128_SYMBOL(abi_packed128_callback)}}, .exit_code=1, .skip=ABI_I128_SKIP,
-    },
-    {
-        "ABI: leading padding eightbyte in native arguments, results and callbacks", __LINE__,
-        SVI("struct S {unsigned long long:64;double x;};struct S bump(struct S);struct S apply(struct S(*)(struct S),struct S);\n"
-            "struct S f(struct S s){s.x+=2.;return s;}struct S s={9.};s=bump(s);s=apply(f,s);return s.x==12.;\n"),
-        {{SV("bump"),ABI_LEADING_SYMBOL(abi_leading_bump)},{SV("apply"),ABI_LEADING_SYMBOL(abi_leading_callback)}}, .exit_code=1,
-    },
-    {
-        "ABI: padding-only record followed by a live GP argument", __LINE__,
-        SVI("struct S {unsigned:7;};long long probe(long long,long long,long long,long long,long long,struct S,long long);\n"
-            "return probe(1,2,3,4,5,(struct S){},6)==21;\n"),
-        {{SV("probe"),(void*)abi_only_padding}}, .exit_code=1,
-    },
-    {
-        "ABI callback: padding-only record followed by a live GP argument", __LINE__,
-        SVI("struct S {unsigned:7;};long long apply(long long(*)(long long,long long,long long,long long,long long,struct S,long long));\n"
-            "long long f(long long a,long long b,long long c,long long d,long long e,struct S p,long long t){return a+b+c+d+e+t;}\n"
-            "return apply(f)==21;\n"),
-        {{SV("apply"),(void*)abi_only_padding_callback}}, .exit_code=1,
-    },
-    {
-        "ABI: empty argument side effects survive direct and indirect calls", __LINE__,
-        SVI("struct S {unsigned:7;};long long probe(long long,long long,long long,long long,long long,struct S,long long);\n"
-            "int count;struct S empty(void){count++;return (struct S){};}\n"
-            "long long local(long long a,long long b,long long c,long long d,long long e,struct S p,long long t){return a+b+c+d+e+t;}\n"
-            "long long (*fn)(long long,long long,long long,long long,long long,struct S,long long)=probe;\n"
-            "if(probe(1,2,3,4,5,empty(),6)!=21||fn(1,2,3,4,5,empty(),6)!=21)return 0;\n"
-            "fn=local;if(local(1,2,3,4,5,empty(),6)!=21||fn(1,2,3,4,5,empty(),6)!=21)return 0;\n"
-            "return count==4;\n"),
-        {{SV("probe"),(void*)abi_only_padding}}, .exit_code=1,
-        .skip=CC_TARGET_NATIVE!=CC_TARGET_AARCH64_MACOS,
-    },
-    {
-        "ABI: all arguments omitted in calls and callbacks", __LINE__,
-        SVI("struct E {unsigned:7;};int probe(struct E);int apply(int(*)(struct E));\n"
-            "int f(struct E p){return 9;}int (*fn)(struct E)=probe;\n"
-            "return probe((struct E){})==9&&fn((struct E){})==9&&apply(f)==9;\n"),
-        {{SV("probe"),(void*)abi_empty_only},{SV("apply"),(void*)abi_empty_only_callback}}, .exit_code=1,
-        .skip=CC_TARGET_NATIVE!=CC_TARGET_AARCH64_MACOS,
-    },
-    {
-        "ABI: nested empty records around register and stack arguments, including callback", __LINE__,
-        SVI("struct E {unsigned:7;};struct S {struct E e[2];unsigned:7;};\n"
-            "long long probe(struct E,long long,long long,long long,long long,long long,long long,long long,long long,long long,struct S,long long);\n"
-            "long long apply(long long(*)(struct E,long long,long long,long long,long long,long long,long long,long long,long long,long long,struct S,long long));\n"
-            "long long f(struct E p,long long a,long long b,long long c,long long d,long long e,long long g,long long h,long long i,long long j,struct S q,long long t){return a+b+c+d+e+g+h+i+j+t;}\n"
-            "return probe((struct E){},1,2,3,4,5,6,7,8,9,(struct S){},10)==55&&apply(f)==55;\n"),
-        {{SV("probe"),(void*)abi_nested_empty},{SV("apply"),(void*)abi_nested_empty_callback}}, .exit_code=1,
-        .skip=CC_TARGET_NATIVE!=CC_TARGET_AARCH64_MACOS,
-    },
-    {
-        "ABI: omitted empty fixed argument before variadic arguments", __LINE__,
-        SVI("struct E {unsigned:7;};long long probe(struct E,int,...);\n"
-            "return probe((struct E){},3,11LL,13LL,17LL)==41;\n"),
-        {{SV("probe"),ABI_VARARG_SYMBOL(abi_empty_varargs)}}, .exit_code=1,
-        .skip=ABI_VARARG_SKIP || CC_TARGET_NATIVE!=CC_TARGET_AARCH64_MACOS,
-    },
-    {
-        "ABI: x87/integer union arguments, results and callbacks", __LINE__,
-        SVI("union U {long double x;unsigned __int128 bits;};union U bump(union U);union U apply(union U(*)(union U),union U);\n"
-            "union U f(union U u){u.bits+=4;return u;}unsigned __int128 v=((unsigned __int128)1<<100)+13;\n"
-            "union U u={.bits=v};u=bump(u);u=apply(f,u);return u.bits==v+7;\n"),
-        {{SV("bump"),ABI_I128_SYMBOL(abi_union_bump)},{SV("apply"),ABI_I128_SYMBOL(abi_union_callback)}}, .exit_code=1,
-        .skip=ABI_I128_SKIP,
-    },
+        {
+            "ABI: nested native calls do not change callback return conventions", __LINE__,
+            SVI("long double identity(long double);int seven(void);"
+                "int apply(long double(*)(long double),int(*)(void),void(*)(void));"
+                "long double wide(long double x){long double y=identity(x);seven();return y;}"
+                "int integer(void){identity(2.5L);return 7;}"
+                "void nothing(void){identity(3.5L);}"
+                "return apply(wide,integer,nothing);"),
+            {{SV("identity"),(void*)test_long_double_identity},
+             {SV("seven"),(void*)test_seven},
+             {SV("apply"),(void*)test_nested_return_conventions}}, .exit_code=1,
+        },
+        {
+            "ABI: native stack copy includes full chunks and a byte tail", __LINE__,
+            SVI("long long probe(int,int,int,int,int,int,int,int,unsigned char,unsigned char,unsigned short,unsigned,long long,unsigned char);"
+                "return probe(1,2,3,4,5,6,7,8,9,10,513,1000,10000LL,17)==11585;"),
+            {{SV("probe"),(void*)abi_stack_tail}}, .exit_code=1,
+        },
+        {
+            "ABI: native result survives callback with nested native call", __LINE__,
+            SVI("struct S{long long i;double d;};struct S bump(struct S);"
+                "struct S apply(struct S(*)(struct S),struct S);"
+                "struct S f(struct S s){return bump(s);}"
+                "struct S s=apply(f,(struct S){7,2.5});return s.i==10&&s.d==6.5;"),
+            {{SV("bump"),(void*)test_mix_return},{SV("apply"),(void*)test_mix_callback}}, .exit_code=1,
+        },
+        #ifndef _MSC_VER
+        {
+            "ABI: aligned outgoing storage in direct and indirect nested calls", __LINE__,
+            SVI("struct __attribute__((aligned(128))) S {long long x;};int probe(int,...);"
+                "int call(int(*p)(int,...)){char pad=1;return pad&&p(0,(struct S){19},23LL);}"
+                "int direct(void){char pad=1;return pad&&probe(0,(struct S){19},23LL);}"
+                "return direct()&&call(probe)&&probe(0,(struct S){19},23LL);"),
+            {{SV("probe"),ABI_VARARG_SYMBOL(abi_wide_aligned)}},
+            .skip=ABI_VARARG_SKIP, .exit_code=1,
+        },
+        {
+            "ABI: over-aligned variadic stack arguments in both directions", __LINE__,
+            SVI("struct __attribute__((aligned(128))) S {long long x;};int probe(int,...);int apply(int(*)(int,...));"
+                "int f(int n,...){__builtin_va_list a;__builtin_va_start(a,n);struct S s=__builtin_va_arg(a,struct S);"
+                "long long tail=__builtin_va_arg(a,long long);__builtin_va_end(a);return s.x==19&&tail==23;}"
+                "return probe(0,(struct S){19},23LL)&&apply(f);"),
+            {{SV("probe"),ABI_VARARG_SYMBOL(abi_wide_aligned)},{SV("apply"),ABI_VARARG_SYMBOL(abi_wide_aligned_callback)}},
+            .skip=ABI_VARARG_SKIP,
+            .exit_code=1,
+        },
+        #endif
+        {
+            "ABI: native and interpreted va_lists forward in both directions", __LINE__,
+            SVI("struct D{double x,y;};int read_list(__builtin_va_list);"
+                "int supply_list(int(*)(__builtin_va_list),int,...);int invoke(int(*)(int,...));"
+                "int consume(__builtin_va_list ap){return read_list(ap);}"
+                "int f(int n,...){__builtin_va_list a,b;__builtin_va_start(a,n);__builtin_va_copy(b,a);"
+                "int r=consume(a)&&consume(b);__builtin_va_end(a);__builtin_va_end(b);"
+                "__builtin_va_start(a,n);r=r&&consume(a);__builtin_va_end(a);return r;}"
+                "return f(0,17,2.5,(struct D){3.5,4.5},29LL)&&invoke(f)"
+                "&&supply_list(consume,0,17,2.5,(struct D){3.5,4.5},29LL);"),
+            {{SV("read_list"),ABI_VARARG_SYMBOL(abi_read_list)},
+             {SV("supply_list"),ABI_VARARG_SYMBOL(abi_supply_list)},
+             {SV("invoke"),ABI_VARARG_SYMBOL(abi_invoke_variadic)}},
+            .exit_code=1,.skip=ABI_VARARG_SKIP,
+        },
+        {
+            "ABI: narrow unsigned values after dirty registers", __LINE__,
+            SVI("unsigned byte(unsigned char); unsigned half(unsigned short);\n"
+                "unsigned callback(unsigned char(*)(void));\n"
+                "unsigned long long dirty(unsigned long long x){return x;}\n"
+                "unsigned char f(void){dirty(~0ull);return 3;}\n"
+                "dirty(~0ull); unsigned a=byte(7);dirty(~0ull);unsigned b=half(513);\n"
+                "return a==7&&b==513&&callback(f)==3;\n"),
+            {{SV("byte"),(void*)abi_unsigned_char},{SV("half"),(void*)abi_unsigned_short},
+                {SV("callback"),(void*)abi_unsigned_callback}}, .exit_code=1,
+        },
+        {
+            "ABI: two GP words with one register remaining", __LINE__,
+            SVI("struct P {long long x,y;}; long long probe(long long,long long,long long,long long,long long,struct P,long long);\n"
+                "return probe(1,2,3,4,5,(struct P){11,13},17)==56;\n"),
+            {{SV("probe"),(void*)abi_pair_five}}, .exit_code=1,
+        },
+        {
+            "ABI: two GP words at the ARM64 register boundary", __LINE__,
+            SVI("struct P {long long x,y;}; long long probe(long long,long long,long long,long long,long long,long long,long long,struct P,long long);\n"
+                "return probe(1,2,3,4,5,6,7,(struct P){11,13},17)==69;\n"),
+            {{SV("probe"),(void*)abi_pair_seven}}, .exit_code=1,
+        },
+        {
+            "ABI callback: two GP words with one register remaining", __LINE__,
+            SVI("struct P {long long x,y;}; long long apply(long long(*)(long long,long long,long long,long long,long long,struct P,long long));\n"
+                "long long f(long long a,long long b,long long c,long long d,long long e,struct P p,long long t){return a+b+c+d+e+p.x+p.y+t;}\n"
+                "return apply(f)==56;\n"),
+            {{SV("apply"),(void*)abi_pair_callback}}, .exit_code=1,
+        },
+        {
+            "ABI callback: mixed record after GP exhaustion", __LINE__,
+            SVI("struct S {long long i;double d;}; double apply(double(*)(long long,long long,long long,long long,long long,long long,struct S,long long,double));\n"
+                "double f(long long a,long long b,long long c,long long d,long long e,long long g,struct S x,long long t,double y){return a+b+c+d+e+g+x.i+x.d+t+y;}\n"
+                "return apply(f)==55.;\n"),
+            {{SV("apply"),(void*)abi_mix_gp_callback}}, .exit_code=1,
+        },
+        {
+            "ABI callback: mixed record after FP exhaustion", __LINE__,
+            SVI("struct S {long long i;double d;}; double apply(double(*)(double,double,double,double,double,double,double,double,struct S,long long,double));\n"
+                "double f(double a,double b,double c,double d,double e,double g,double h,double j,struct S x,long long t,double y){return a+b+c+d+e+g+h+j+x.i+x.d+t+y;}\n"
+                "return apply(f)==70.;\n"),
+            {{SV("apply"),(void*)abi_mix_fp_callback}}, .exit_code=1,
+        },
+        {
+            "ABI callback: hidden result and register pressure", __LINE__,
+            SVI("struct S {long long i;double d;}; struct B {long long a,b,c;};\n"
+                "struct B apply(struct B(*)(long long,long long,long long,long long,long long,struct S,long long,double));\n"
+                "struct B f(long long a,long long b,long long c,long long d,long long e,struct S x,long long t,double y){return (struct B){a+b+c+d+e+x.i,(long long)(x.d+y),t};}\n"
+                "struct B x=apply(f); return x.a==21&&x.b==16&&x.c==8;\n"),
+            {{SV("apply"),(void*)abi_hidden_callback}}, .exit_code=1,
+        },
+        #if defined __GNUC__ || defined __clang__
+        {
+            "ABI callback: padded integer record under register pressure", __LINE__,
+            SVI("struct __attribute__((aligned(16))) S {long long x;};\n"
+                "struct S apply(struct S(*)(long long,long long,long long,long long,long long,struct S,long long));\n"
+                "struct S f(long long a,long long b,long long c,long long d,long long e,struct S x,long long t){x.x+=a+b+c+d+e+t;return x;}\n"
+                "return apply(f).x==25;\n"),
+            {{SV("apply"),(void*)abi_padding_callback}}, .exit_code=1,
+        },
+        #endif
+        #define ABI_ODD_CASE(N) { \
+            "ABI: " #N "-byte arguments, results and callbacks preserve canaries", __LINE__, \
+            SVI("struct S {unsigned char bytes[" #N "];}; struct W {unsigned char before;struct S s;unsigned char after;};\n" \
+                "struct S bump(struct S); struct S apply(struct S(*)(struct S),struct S);\n" \
+                "struct S f(struct S s){for(unsigned i=0;i<" #N ";i++)s.bytes[i]++;return s;}\n" \
+                "struct W w={.before=0xa5,.after=0x5a}; for(unsigned i=0;i<" #N ";i++)w.s.bytes[i]=i+1;\n" \
+                "w.s=bump(w.s); for(unsigned i=0;i<" #N ";i++)if(w.s.bytes[i]!=i+2)return 0;\n" \
+                "w.s=apply(f,w.s); for(unsigned i=0;i<" #N ";i++)if(w.s.bytes[i]!=i+3)return 0;\n" \
+                "return w.before==0xa5&&w.after==0x5a;\n"), \
+            {{SV("bump"),(void*)abi_odd##N},{SV("apply"),(void*)abi_odd_callback##N}}, .exit_code=1, \
+        },
+        ABI_ODD_CASE(3)
+        ABI_ODD_CASE(5)
+        ABI_ODD_CASE(7)
+        ABI_ODD_CASE(15)
+        #undef ABI_ODD_CASE
+        {
+            "ABI: int128 scalar arguments, returns and callbacks", __LINE__,
+            SVI("unsigned __int128 bump(unsigned __int128);unsigned __int128 apply(unsigned __int128(*)(unsigned __int128),unsigned __int128);\n"
+                "unsigned __int128 f(unsigned __int128 x){return x+5;}\n"
+                "unsigned __int128 x=((unsigned __int128)1<<110)+19;return bump(x)==x+3&&apply(f,x)==x+5;\n"),
+            {{SV("bump"),ABI_I128_SYMBOL(abi_i128_scalar)},{SV("apply"),ABI_I128_SYMBOL(abi_i128_scalar_callback)}},
+            .exit_code=1,.skip=ABI_I128_SKIP,
+        },
+        {
+            "ABI: int128 record after an odd GP argument, including callback", __LINE__,
+            SVI("struct S {unsigned __int128 x;}; long long probe(long long,struct S,long long);\n"
+                "long long apply(long long(*)(long long,struct S,long long));\n"
+                "long long f(long long a,struct S s,long long t){return a+(long long)(s.x>>64)+(long long)s.x+t;}\n"
+                "struct S s={((unsigned __int128)1<<100)+17}; long long expected=((long long)1<<36)+25;\n"
+                "return probe(3,s,5)==expected&&apply(f)==expected;\n"),
+            {{SV("probe"),ABI_I128_SYMBOL(abi_i128_odd)},{SV("apply"),ABI_I128_SYMBOL(abi_i128_callback)}},
+            .exit_code=1, .skip=ABI_I128_SKIP,
+        },
+        {
+            "ABI: int128-aligned stack record between ordinary stack arguments", __LINE__,
+            SVI("struct S {unsigned __int128 x;};\n"
+                "long long probe(long long,long long,long long,long long,long long,long long,long long,long long,long long,struct S,long long);\n"
+                "struct S s={((unsigned __int128)1<<100)+17};\n"
+                "return probe(1,2,3,4,5,6,7,8,9,s,10)==((long long)1<<36)+72;\n"),
+            {{SV("probe"),ABI_I128_SYMBOL(abi_i128_stack)}}, .exit_code=1, .skip=ABI_I128_SKIP,
+        },
+        {
+            "ABI: named and variadic HFAs in registers", __LINE__,
+            SVI("struct D {double x,y;};struct F {float x,y,z;};double probe(struct D,int,...);\n"
+                "return probe((struct D){2.,3.},0,(struct D){8.,9.},(struct F){1,2,3},11,12.)==51.;\n"),
+            {{SV("probe"),ABI_VARARG_SYMBOL(abi_hfa_varargs)}}, .exit_code=1, .skip=ABI_VARARG_SKIP,
+        },
+        {
+            "ABI: variadic HFAs with one FP register remaining", __LINE__,
+            SVI("struct D {double x,y;};struct F {float x,y,z;};double probe(struct D,int,...);\n"
+                "return probe((struct D){2.,3.},5,1.,2.,3.,4.,5.,(struct D){8.,9.},(struct F){1,2,3},11,12.)==66.;\n"),
+            {{SV("probe"),ABI_VARARG_SYMBOL(abi_hfa_varargs)}}, .exit_code=1, .skip=ABI_VARARG_SKIP,
+        },
+        {
+            "ABI: variadic HFAs after FP register exhaustion", __LINE__,
+            SVI("struct D {double x,y;};struct F {float x,y,z;};double probe(struct D,int,...);\n"
+                "return probe((struct D){2.,3.},6,1.,2.,3.,4.,5.,6.,(struct D){8.,9.},(struct F){1,2,3},11,12.)==72.;\n"),
+            {{SV("probe"),ABI_VARARG_SYMBOL(abi_hfa_varargs)}}, .exit_code=1, .skip=ABI_VARARG_SKIP,
+        },
+        {
+            "ABI callback: incoming variadic HFAs", __LINE__,
+            SVI("struct D {double x,y;};struct F {float x,y,z;};double apply(double(*)(int,...));\n"
+                "double f(int n,...){__builtin_va_list ap;__builtin_va_start(ap,n);\n"
+                "struct D d=__builtin_va_arg(ap,struct D);struct F q=__builtin_va_arg(ap,struct F);\n"
+                "int t=__builtin_va_arg(ap,int);double y=__builtin_va_arg(ap,double);__builtin_va_end(ap);\n"
+                "return d.x+d.y+q.x+q.y+q.z+t+y;}return apply(f)==46.;\n"),
+            {{SV("apply"),ABI_VARARG_SYMBOL(abi_hfa_variadic_callback)}}, .exit_code=1,
+            .skip=ABI_VARARG_SKIP,
+        },
+        {
+            "ABI callback: packed full-width 64-bit field starting mid-byte", __LINE__,
+            SVI("struct __attribute__((packed)) S {unsigned a:4;unsigned long long b:64;};\n"
+                "struct S apply(struct S(*)(struct S),struct S);struct S f(struct S s){s.a++;s.b+=2;return s;}\n"
+                "struct W {unsigned char before;struct S s;unsigned char after;} w={.before=0xa5,.s={7,0xfedcba9876543210ULL},.after=0x5a};\n"
+                "w.s=apply(f,w.s);return w.s.a==8&&w.s.b==0xfedcba9876543212ULL&&w.before==0xa5&&w.after==0x5a;\n"),
+            {{SV("apply"),ABI_PACKED_SYMBOL(abi_packed64_callback)}}, .exit_code=1, .skip=ABI_PACKED_SKIP,
+        },
+        {
+            "ABI callback: packed full-width 128-bit field starting mid-byte", __LINE__,
+            SVI("struct __attribute__((packed)) S {unsigned a:4;unsigned __int128 b:128;};\n"
+                "struct S apply(struct S(*)(struct S),struct S);struct S f(struct S s){s.a++;s.b+=2;return s;}\n"
+                "unsigned __int128 v=((unsigned __int128)1<<120)+13;\n"
+                "struct W {unsigned char before;struct S s;unsigned char after;} w={.before=0xa5,.s={7,v},.after=0x5a};\n"
+                "w.s=apply(f,w.s);return w.s.a==8&&w.s.b==v+2&&w.before==0xa5&&w.after==0x5a;\n"),
+            {{SV("apply"),ABI_I128_SYMBOL(abi_packed128_callback)}}, .exit_code=1, .skip=ABI_I128_SKIP,
+        },
+        {
+            "ABI: leading padding eightbyte in native arguments, results and callbacks", __LINE__,
+            SVI("struct S {unsigned long long:64;double x;};struct S bump(struct S);struct S apply(struct S(*)(struct S),struct S);\n"
+                "struct S f(struct S s){s.x+=2.;return s;}struct S s={9.};s=bump(s);s=apply(f,s);return s.x==12.;\n"),
+            {{SV("bump"),ABI_LEADING_SYMBOL(abi_leading_bump)},{SV("apply"),ABI_LEADING_SYMBOL(abi_leading_callback)}}, .exit_code=1,
+        },
+        {
+            "ABI: padding-only record followed by a live GP argument", __LINE__,
+            SVI("struct S {unsigned:7;};long long probe(long long,long long,long long,long long,long long,struct S,long long);\n"
+                "return probe(1,2,3,4,5,(struct S){},6)==21;\n"),
+            {{SV("probe"),(void*)abi_only_padding}}, .exit_code=1,
+        },
+        {
+            "ABI callback: padding-only record followed by a live GP argument", __LINE__,
+            SVI("struct S {unsigned:7;};long long apply(long long(*)(long long,long long,long long,long long,long long,struct S,long long));\n"
+                "long long f(long long a,long long b,long long c,long long d,long long e,struct S p,long long t){return a+b+c+d+e+t;}\n"
+                "return apply(f)==21;\n"),
+            {{SV("apply"),(void*)abi_only_padding_callback}}, .exit_code=1,
+        },
+        {
+            "ABI: empty argument side effects survive direct and indirect calls", __LINE__,
+            SVI("struct S {unsigned:7;};long long probe(long long,long long,long long,long long,long long,struct S,long long);\n"
+                "int count;struct S empty(void){count++;return (struct S){};}\n"
+                "long long local(long long a,long long b,long long c,long long d,long long e,struct S p,long long t){return a+b+c+d+e+t;}\n"
+                "long long (*fn)(long long,long long,long long,long long,long long,struct S,long long)=probe;\n"
+                "if(probe(1,2,3,4,5,empty(),6)!=21||fn(1,2,3,4,5,empty(),6)!=21)return 0;\n"
+                "fn=local;if(local(1,2,3,4,5,empty(),6)!=21||fn(1,2,3,4,5,empty(),6)!=21)return 0;\n"
+                "return count==4;\n"),
+            {{SV("probe"),(void*)abi_only_padding}}, .exit_code=1,
+            .skip=CC_TARGET_NATIVE!=CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "ABI: all arguments omitted in calls and callbacks", __LINE__,
+            SVI("struct E {unsigned:7;};int probe(struct E);int apply(int(*)(struct E));\n"
+                "int f(struct E p){return 9;}int (*fn)(struct E)=probe;\n"
+                "return probe((struct E){})==9&&fn((struct E){})==9&&apply(f)==9;\n"),
+            {{SV("probe"),(void*)abi_empty_only},{SV("apply"),(void*)abi_empty_only_callback}}, .exit_code=1,
+            .skip=CC_TARGET_NATIVE!=CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "ABI: nested empty records around register and stack arguments, including callback", __LINE__,
+            SVI("struct E {unsigned:7;};struct S {struct E e[2];unsigned:7;};\n"
+                "long long probe(struct E,long long,long long,long long,long long,long long,long long,long long,long long,long long,struct S,long long);\n"
+                "long long apply(long long(*)(struct E,long long,long long,long long,long long,long long,long long,long long,long long,long long,struct S,long long));\n"
+                "long long f(struct E p,long long a,long long b,long long c,long long d,long long e,long long g,long long h,long long i,long long j,struct S q,long long t){return a+b+c+d+e+g+h+i+j+t;}\n"
+                "return probe((struct E){},1,2,3,4,5,6,7,8,9,(struct S){},10)==55&&apply(f)==55;\n"),
+            {{SV("probe"),(void*)abi_nested_empty},{SV("apply"),(void*)abi_nested_empty_callback}}, .exit_code=1,
+            .skip=CC_TARGET_NATIVE!=CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "ABI: omitted empty fixed argument before variadic arguments", __LINE__,
+            SVI("struct E {unsigned:7;};long long probe(struct E,int,...);\n"
+                "return probe((struct E){},3,11LL,13LL,17LL)==41;\n"),
+            {{SV("probe"),ABI_VARARG_SYMBOL(abi_empty_varargs)}}, .exit_code=1,
+            .skip=ABI_VARARG_SKIP || CC_TARGET_NATIVE!=CC_TARGET_AARCH64_MACOS,
+        },
+        {
+            "ABI: x87/integer union arguments, results and callbacks", __LINE__,
+            SVI("union U {long double x;unsigned __int128 bits;};union U bump(union U);union U apply(union U(*)(union U),union U);\n"
+                "union U f(union U u){u.bits+=4;return u;}unsigned __int128 v=((unsigned __int128)1<<100)+13;\n"
+                "union U u={.bits=v};u=bump(u);u=apply(f,u);return u.bits==v+7;\n"),
+            {{SV("bump"),ABI_I128_SYMBOL(abi_union_bump)},{SV("apply"),ABI_I128_SYMBOL(abi_union_callback)}}, .exit_code=1,
+            .skip=ABI_I128_SKIP,
+        },
 #define ABI_COMPLEX_CASE(T,tag) { \
-        "ABI: " #T " complex scalar arguments, results and callbacks", __LINE__, \
-        SVI("typedef " #T " T;typedef T _Complex C;C echo(C);C apply(C(*)(C),C);C f(C z){return z;}\n" \
-            "union U {C z;T parts[2];} in={.parts={3,5}},out={.z=echo(in.z)},cb={.z=apply(f,in.z)};\n" \
-            "return out.parts[0]==3&&out.parts[1]==5&&cb.parts[0]==3&&cb.parts[1]==5;\n"), \
-        {{SV("echo"),ABI_COMPLEX_SCALAR_SYMBOL(abi_complex_##tag)},{SV("apply"),ABI_COMPLEX_SCALAR_SYMBOL(abi_complex_callback_##tag)}}, \
-        .exit_code=1, .skip=1, /* FIXME: complex scalar value lowering is not implemented. */ \
-    }, { \
-        "ABI: " #T " complex record arguments, results and callbacks", __LINE__, \
-        SVI("typedef " #T " T;struct S {T _Complex z;};\n" \
-            "struct S echo_record(struct S);struct S apply_record(struct S(*)(struct S),struct S);\n" \
-            "struct S g(struct S s){return s;}union U {struct S s;T parts[2];} in={.parts={3,5}};\n" \
-            "union U out={.s=echo_record(in.s)},cb={.s=apply_record(g,in.s)};\n" \
-            "return out.parts[0]==3&&out.parts[1]==5&&cb.parts[0]==3&&cb.parts[1]==5;\n"), \
-        {{SV("echo_record"),ABI_COMPLEX_RECORD_SYMBOL(abi_complex_record_##tag)},{SV("apply_record"),ABI_COMPLEX_RECORD_SYMBOL(abi_complex_record_callback_##tag)}}, \
-        .exit_code=1, .skip=ABI_COMPLEX_RECORD_SKIP, \
-    },
-    ABI_COMPLEX_CASE(float,f)
-    ABI_COMPLEX_CASE(double,d)
-    ABI_COMPLEX_CASE(long double,ld)
+            "ABI: " #T " complex scalar arguments, results and callbacks", __LINE__, \
+            SVI("typedef " #T " T;typedef T _Complex C;C echo(C);C apply(C(*)(C),C);C f(C z){return z;}\n" \
+                "union U {C z;T parts[2];} in={.parts={3,5}},out={.z=echo(in.z)},cb={.z=apply(f,in.z)};\n" \
+                "return out.parts[0]==3&&out.parts[1]==5&&cb.parts[0]==3&&cb.parts[1]==5;\n"), \
+            {{SV("echo"),ABI_COMPLEX_SCALAR_SYMBOL(abi_complex_##tag)},{SV("apply"),ABI_COMPLEX_SCALAR_SYMBOL(abi_complex_callback_##tag)}}, \
+            .exit_code=1, .skip=1, /* FIXME: complex scalar value lowering is not implemented. */ \
+        }, { \
+            "ABI: " #T " complex record arguments, results and callbacks", __LINE__, \
+            SVI("typedef " #T " T;struct S {T _Complex z;};\n" \
+                "struct S echo_record(struct S);struct S apply_record(struct S(*)(struct S),struct S);\n" \
+                "struct S g(struct S s){return s;}union U {struct S s;T parts[2];} in={.parts={3,5}};\n" \
+                "union U out={.s=echo_record(in.s)},cb={.s=apply_record(g,in.s)};\n" \
+                "return out.parts[0]==3&&out.parts[1]==5&&cb.parts[0]==3&&cb.parts[1]==5;\n"), \
+            {{SV("echo_record"),ABI_COMPLEX_RECORD_SYMBOL(abi_complex_record_##tag)},{SV("apply_record"),ABI_COMPLEX_RECORD_SYMBOL(abi_complex_record_callback_##tag)}}, \
+            .exit_code=1, .skip=ABI_COMPLEX_RECORD_SKIP, \
+        },
+        ABI_COMPLEX_CASE(float,f)
+        ABI_COMPLEX_CASE(double,d)
+        ABI_COMPLEX_CASE(long double,ld)
 #undef ABI_COMPLEX_CASE
-    {
-        "ABI: half-precision scalars and HFAs, including callbacks", __LINE__,
-        SVI("_Float16 echo(_Float16);_Float16 apply(_Float16(*)(_Float16),_Float16);\n"
-            "struct S {_Float16 x,y,z;};struct S echo_record(struct S);struct S apply_record(struct S(*)(struct S),struct S);\n"
-            "_Float16 f(_Float16 x){return x;}struct S g(struct S s){return s;}\n"
-            "union U {_Float16 f;unsigned short u;};union R {struct S s;unsigned short u[3];};\n"
-            "union R a={.u={0x3c00,0x4000,0x4200}},b={.u={0x4400,0x4500,0x4600}},r,q;\n"
-            "r.s=echo_record(a.s);q.s=apply_record(g,b.s);\n"
-            "union U x={.u=0x4000},y={.u=0x4200},z,w;z.f=echo(x.f);w.f=apply(f,y.f);\n"
-            "return z.u==x.u&&w.u==y.u&&r.u[0]==a.u[0]&&r.u[1]==a.u[1]&&r.u[2]==a.u[2]&&q.u[0]==b.u[0]&&q.u[1]==b.u[1]&&q.u[2]==b.u[2];\n"),
-        {{SV("echo"),ABI_HALF_SYMBOL(abi_half)},{SV("apply"),ABI_HALF_SYMBOL(abi_half_callback)},
-         {SV("echo_record"),ABI_HALF_SYMBOL(abi_half_record)},{SV("apply_record"),ABI_HALF_SYMBOL(abi_half_record_callback)}},
-        .exit_code=1, .skip=ABI_HALF_SKIP,
-    },
-    {
-        "ABI: __fp16 scalars and HFAs, including callbacks", __LINE__,
-        SVI("__fp16 echo(__fp16); __fp16 apply(__fp16 (*)(__fp16), __fp16);\n"
-            "struct S { __fp16 x, y, z; };\n"
-            "struct S echo_record(struct S); struct S apply_record(struct S (*)(struct S), struct S);\n"
-            "__fp16 f(__fp16 x){ return x; } struct S g(struct S s){ return s; }\n"
-            "union U { __fp16 f; unsigned short u; }; union R { struct S s; unsigned short u[3]; };\n"
-            "union R a = {.u = {0x3c00, 0x4000, 0x4200}}, r, q;\n"
-            "r.s = echo_record(a.s); q.s = apply_record(g, a.s);\n"
-            "union U x = {.u = 0x4000}, z, w; z.f = echo(x.f); w.f = apply(f, x.f);\n"
-            "return z.u == x.u && w.u == x.u && r.u[0] == a.u[0] && r.u[1] == a.u[1] && r.u[2] == a.u[2]"
-            " && q.u[0] == a.u[0] && q.u[1] == a.u[1] && q.u[2] == a.u[2];\n"),
-        {{SV("echo"), ABI_FP16_SYMBOL(abi_fp16)}, {SV("apply"), ABI_FP16_SYMBOL(abi_fp16_callback)},
-         {SV("echo_record"), ABI_FP16_SYMBOL(abi_fp16_record)}, {SV("apply_record"), ABI_FP16_SYMBOL(abi_fp16_record_callback)}},
-        .exit_code = 1, .skip = ABI_FP16_SKIP,
-    },
-    {
-        "ABI: bfloat16 arguments, results and callbacks", __LINE__,
-        SVI("__bf16 echo(__bf16);__bf16 apply(__bf16(*)(__bf16),__bf16);__bf16 f(__bf16 x){return x;}\n"
-            "union U {__bf16 f;unsigned short u;};union U x={.u=0x4000},y={.u=0x4040},z,w;\n"
-            "z.f=echo(x.f);w.f=apply(f,y.f);return z.u==x.u&&w.u==y.u;\n"),
-        {{SV("echo"),ABI_BFLOAT_SYMBOL(abi_bfloat)},{SV("apply"),ABI_BFLOAT_SYMBOL(abi_bfloat_callback)}},
-        .exit_code=1, .skip=ABI_BFLOAT_SKIP,
-    },
+        {
+            "ABI: half-precision scalars and HFAs, including callbacks", __LINE__,
+            SVI("_Float16 echo(_Float16);_Float16 apply(_Float16(*)(_Float16),_Float16);\n"
+                "struct S {_Float16 x,y,z;};struct S echo_record(struct S);struct S apply_record(struct S(*)(struct S),struct S);\n"
+                "_Float16 f(_Float16 x){return x;}struct S g(struct S s){return s;}\n"
+                "union U {_Float16 f;unsigned short u;};union R {struct S s;unsigned short u[3];};\n"
+                "union R a={.u={0x3c00,0x4000,0x4200}},b={.u={0x4400,0x4500,0x4600}},r,q;\n"
+                "r.s=echo_record(a.s);q.s=apply_record(g,b.s);\n"
+                "union U x={.u=0x4000},y={.u=0x4200},z,w;z.f=echo(x.f);w.f=apply(f,y.f);\n"
+                "return z.u==x.u&&w.u==y.u&&r.u[0]==a.u[0]&&r.u[1]==a.u[1]&&r.u[2]==a.u[2]&&q.u[0]==b.u[0]&&q.u[1]==b.u[1]&&q.u[2]==b.u[2];\n"),
+            {{SV("echo"),ABI_HALF_SYMBOL(abi_half)},{SV("apply"),ABI_HALF_SYMBOL(abi_half_callback)},
+             {SV("echo_record"),ABI_HALF_SYMBOL(abi_half_record)},{SV("apply_record"),ABI_HALF_SYMBOL(abi_half_record_callback)}},
+            .exit_code=1, .skip=ABI_HALF_SKIP,
+        },
+        {
+            "ABI: __fp16 scalars and HFAs, including callbacks", __LINE__,
+            SVI("__fp16 echo(__fp16); __fp16 apply(__fp16 (*)(__fp16), __fp16);\n"
+                "struct S { __fp16 x, y, z; };\n"
+                "struct S echo_record(struct S); struct S apply_record(struct S (*)(struct S), struct S);\n"
+                "__fp16 f(__fp16 x){ return x; } struct S g(struct S s){ return s; }\n"
+                "union U { __fp16 f; unsigned short u; }; union R { struct S s; unsigned short u[3]; };\n"
+                "union R a = {.u = {0x3c00, 0x4000, 0x4200}}, r, q;\n"
+                "r.s = echo_record(a.s); q.s = apply_record(g, a.s);\n"
+                "union U x = {.u = 0x4000}, z, w; z.f = echo(x.f); w.f = apply(f, x.f);\n"
+                "return z.u == x.u && w.u == x.u && r.u[0] == a.u[0] && r.u[1] == a.u[1] && r.u[2] == a.u[2]"
+                " && q.u[0] == a.u[0] && q.u[1] == a.u[1] && q.u[2] == a.u[2];\n"),
+            {{SV("echo"), ABI_FP16_SYMBOL(abi_fp16)}, {SV("apply"), ABI_FP16_SYMBOL(abi_fp16_callback)},
+             {SV("echo_record"), ABI_FP16_SYMBOL(abi_fp16_record)}, {SV("apply_record"), ABI_FP16_SYMBOL(abi_fp16_record_callback)}},
+            .exit_code = 1, .skip = ABI_FP16_SKIP,
+        },
+        {
+            "ABI: bfloat16 arguments, results and callbacks", __LINE__,
+            SVI("__bf16 echo(__bf16);__bf16 apply(__bf16(*)(__bf16),__bf16);__bf16 f(__bf16 x){return x;}\n"
+                "union U {__bf16 f;unsigned short u;};union U x={.u=0x4000},y={.u=0x4040},z,w;\n"
+                "z.f=echo(x.f);w.f=apply(f,y.f);return z.u==x.u&&w.u==y.u;\n"),
+            {{SV("echo"),ABI_BFLOAT_SYMBOL(abi_bfloat)},{SV("apply"),ABI_BFLOAT_SYMBOL(abi_bfloat_callback)}},
+            .exit_code=1, .skip=ABI_BFLOAT_SKIP,
+        },
         {
             "frame stack: reentrant native callbacks preserve parent alloca", __LINE__,
             SV("int apply(int(*)(int,int),int,int);\n"
@@ -1867,11 +1868,29 @@ TestFunction(test_interop){
             #endif
             .exit_code = 0,
         },
+        {
+            "module linkage: resolved native symbols cannot be redefined", __LINE__,
+            SVI("int native_add(int,int);extern int native_value;"
+                "int initial=native_add(1,2)+native_value;"
+                "_Module a=__compile(\"extern int native_add(int x,int y){return x-y;}\",\"\");"
+                "_Module b=__compile(\"extern int native_value=4;\",\"\");"
+                "return initial==6 && !a && !b && native_add(1,2)==3 && native_value==3;"),
+            {{SV("native_add"),(void*)test_add}, {SV("native_value"),&linkage_native_value}}, .exit_code=1,
+        },
+        {
+            "module linkage: native externs share symbols across modules", __LINE__,
+            SVI("int native_add(int,int);extern int native_value;"
+                "int initial=native_add(1,2)+native_value;"
+                "_Module m=__compile(\"extern int native_add(int,int);extern int native_value;return native_add(1,2)+native_value;\",\"\");"
+                "return initial==6 && m && m.run()==6;"),
+            {{SV("native_add"),(void*)test_add}, {SV("native_value"),&linkage_native_value}}, .exit_code=1,
+        },
     };
     int err;
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
         struct tc* tc = &testcases[i];
+        size_t failures_before = TEST_stats.failures;
         if(tc->skip){
             TEST_stats.skipped++;
             continue;
@@ -1899,7 +1918,9 @@ TestFunction(test_interop){
                     .env = &env,
                     .target = &cc_target_native,
                 },
-                .current = &interp.parser.global,
+                .root = &interp.root.cc,
+                .module = &interp.root.cc,
+                .current = &interp.root.cc.scope,
             },
             .top_frame = {
                 .return_buf = &interp.exit_code,
@@ -1952,7 +1973,7 @@ TestFunction(test_interop){
         }
 
         finally:
-        if(log_sb.cursor && !log_sb.errored){
+        if(log_sb.cursor && !log_sb.errored && (err || TEST_stats.failures != failures_before)){
             StringView sv = msb_borrow_sv(&log_sb);
             TestPrintf("%.*s\n", sv_p(sv));
         }
@@ -2149,7 +2170,9 @@ TestFunction(test_interp){
                     .env = &env,
                     .target = &cc_target_native,
                 },
-                .current = &interp.parser.global,
+                .root = &interp.root.cc,
+                .module = &interp.root.cc,
+                .current = &interp.root.cc.scope,
             },
             .top_frame = {
                 .return_buf = &interp.exit_code,
@@ -2297,7 +2320,9 @@ TestFunction(test_interp_fail){
                     .env = &env,
                     .target = &cc_target_native,
                 },
-                .current = &interp.parser.global,
+                .root = &interp.root.cc,
+                .module = &interp.root.cc,
+                .current = &interp.root.cc.scope,
             },
             .top_frame = {
                 .return_buf = &interp.exit_code,

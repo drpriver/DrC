@@ -58,6 +58,309 @@ TestFunction(test_interpreter){
         const CcTargetConfig*_Nullable target;
     } testcases[] = {
         {
+            "modules: root statements use module execution", __LINE__,
+            SVI("int count; int running; if(running){count++;return count;} running=1;"
+                "_Module root=__root_module();return root.run()!=1 || root.run()!=2 || count!=2;"),
+        },
+        {
+            "modules: root and compiled modules own separate labels", __LINE__,
+            SVI("int running; if(running)goto done; running=1;"
+                "_Module a=__compile(\"goto done; done: return 4;\",\"\");"
+                "_Module b=__compile(\"goto done; done: return 5;\",\"\");"
+                "return !a || !b || a.run()!=4 || b.run()!=5 || __root_module().run()!=3;"
+                "done: return 3;"),
+        },
+        {
+            "linkage: block extern shares a prior object definition", __LINE__,
+            SVI("int x=3;\n"
+                "int *get(void){extern int x; x=7; return &x;}\n"
+                "int main(void){int *p=get();return p!=&x || x!=7;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: implicit extern function shares a prior definition", __LINE__,
+            SVI("int target(void){return 3;}\n"
+                "int call(void){int target(void);return target();}\n"
+                "int main(void){return call()!=3;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: explicit extern function shares a prior definition", __LINE__,
+            SVI("int target(void){return 3;}\n"
+                "int call(void){extern int target(void);return target();}\n"
+                "int main(void){return call()!=3;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: block extern inherits an object's internal linkage", __LINE__,
+            SVI("static int x=3;\n"
+                "int *get(void){extern int x; x=7;return &x;}\n"
+                "int main(void){int *p=get();return p!=&x || x!=7;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: implicit extern inherits a function's internal linkage", __LINE__,
+            SVI("static int target(void){return 3;}\n"
+                "int call(void){int target(void);return target();}\n"
+                "int main(void){return call()!=3;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: explicit extern inherits a function's internal linkage", __LINE__,
+            SVI("static int target(void){return 3;}\n"
+                "int call(void){extern int target(void);return target();}\n"
+                "int main(void){return call()!=3;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: block extern object precedes its file definition", __LINE__,
+            SVI("int *get(void){extern int x;return &x;}\n"
+                "int x=3;\n"
+                "int main(void){return get()!=&x || *get()!=3;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: block function declaration precedes its definition", __LINE__,
+            SVI("int call(void){int target(void);return target();}\n"
+                "int target(void){return 3;}\n"
+                "int main(void){return call()!=3;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: separate functions share a later tentative object", __LINE__,
+            SVI("void set(void){extern int x;x=7;}\n"
+                "int get(void){extern int x;return x;}\n"
+                "int x;\n"
+                "int main(void){set();return get()!=7 || x!=7;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: separate functions share a later function definition", __LINE__,
+            SVI("int a(void){int target(void);return target();}\n"
+                "int b(void){extern int target(void);return target();}\n"
+                "int target(void){static int n;return ++n;}\n"
+                "int main(void){int x=a();int y=b();return x!=1 || y!=2;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: sibling blocks share the external object", __LINE__,
+            SVI("int x;\n"
+                "int main(void){int *p;{extern int x;x=7;p=&x;}\n"
+                "{extern int x;return p!=&x || x!=7;}}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: nested blocks inherit an enclosing extern declaration", __LINE__,
+            SVI("int *get(void){extern int x;int *p=&x;\n"
+                "{extern int x;return p==&x ? &x : 0;}}\n"
+                "int x=3;\n"
+                "int main(void){return get()!=&x;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: automatic shadow does not capture an inner extern", __LINE__,
+            SVI("int x=3;\n"
+                "int main(void){int x=7;int result;\n"
+                "{extern int x;result=x;x=4;}return result!=3 || x!=7;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: block static shadow does not capture an inner extern", __LINE__,
+            SVI("int x=3;\n"
+                "int main(void){static int x=7;int result;\n"
+                "{extern int x;result=x;x=4;}return result!=3 || x!=7;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: local object does not capture an inner function declaration", __LINE__,
+            SVI("int target(void){return 3;}\n"
+                "int main(void){int target=7;int result;\n"
+                "{int target(void);result=target();}return result!=3 || target!=7;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: thread local extern shares the declared object", __LINE__,
+            SVI("_Thread_local int x=3;\n"
+                "int *get(void){extern _Thread_local int x;x=7;return &x;}\n"
+                "int main(void){int *p=get();return p!=&x || x!=7;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: thread local extern inherits internal linkage", __LINE__,
+            SVI("static _Thread_local int x=3;\n"
+                "int *get(void){extern _Thread_local int x;x=7;return &x;}\n"
+                "int main(void){int *p=get();return p!=&x || x!=7;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: thread local block declaration precedes its definition", __LINE__,
+            SVI("int *get(void){extern _Thread_local int x;return &x;}\n"
+                "_Thread_local int x=3;\n"
+                "int main(void){return get()!=&x || *get()!=3;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: typedef hiding an external object does not change its identity", __LINE__,
+            SVI("int x=3;\nint *get(void){typedef double x;{extern int x;return &x;}}\n"
+                "int main(void){return get()!=&x;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: separate block externs compose before a file definition", __LINE__,
+            SVI("int *first(void){extern int x;return &x;}\n"
+                "int *second(void){extern int x;return &x;}\n"
+                "int x=4;\nint main(void){return first()!=second() || *second()!=4;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage: file definition supplies alignment to a hidden object", __LINE__,
+            SVI("int *get(void){extern int x;return &x;}\n"
+                "_Alignas(64) int x=3;\n"
+                "int main(void){return get()!=&x || *get()!=3 || (unsigned long long)get()%64;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage extension: nested definitions remain separate from file functions", __LINE__,
+            SVI("int target(void){return 3;}\n"
+                "int call(void){int target(void){return 4;}return target();}\n"
+                "int main(void){return call()!=4 || target()!=3;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage extension: nested forward declarations remain local", __LINE__,
+            SVI("int call(void){int target(void);int target(void){return 4;}return target();}\n"
+                "int other(void){int target(void);int target(void){return 3;}return target();}\n"
+                "int main(void){return call()!=4 || other()!=3;}\n" "\nreturn main();\n"),
+        },
+        {
+            "linkage extension: compiled modules share external symbols", __LINE__,
+            SVI("int main(void){\n"
+                "_Module a=__compile(\"int get(void){extern int x;int target(void);return x+target();} "
+                    "extern int x=3;extern int target(void){return 4;}\",\"\");\n"
+                "_Module b=__compile(\"int other(void){extern int x;extern int target(void);x++;return x+target();}\",\"\");\n"
+                "if(!a || !b) return 1;\n"
+                "a.run();b.run();\n"
+                "int (*f)(void)=a.symbol(\"get\",int(void));\n"
+                "int (*g)(void)=b.symbol(\"other\",int(void));\n"
+                "return !f || !g || f()!=7 || g()!=8 || f()!=8;}\n" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: root extern definition is shared", __LINE__,
+            SVI("extern int x=3;\n"
+                "int main(void){_Module m=__compile(\"extern int x; x++; return x;\",\"\");return !m || m.run()!=4 || x!=4 || m.symbol(\"x\",int)!=&x;}" "\nreturn main();\n"),
+        },
+        {
+            "modules: root handle is stable through nested compilation", __LINE__,
+            SVI("int main(void){_Module root=__root_module();"
+                "_Module m=__compile(\"return __root_module()==__compile(\\\"_Module get(void){return __root_module();}\\\",\\\"\\\").symbol(\\\"get\\\",_Module(void))();\",\"\");"
+                "return !root || root!=__root_module() || !m || m.run()!=1;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: tentative module declaration shadows a root definition", __LINE__,
+            SVI("int x=3;\n"
+                "int main(void){_Module m=__compile(\"int x; return x;\",\"\");return !m || m.run()!=0 || m.symbol(\"x\",int)==&x || x!=3;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: duplicate external object definition is rejected", __LINE__,
+            SVI("int x=3;\n"
+                "int main(void){_Module m=__compile(\"extern int x=4;\",\"\");return m!=nullptr || x!=3;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: duplicate external function definition is rejected", __LINE__,
+            SVI("int target(void){return 3;}\n"
+                "int main(void){_Module m=__compile(\"extern int target(void){return 4;}\",\"\");return m!=nullptr || target()!=3;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: shared symbols reject type and TLS conflicts", __LINE__,
+            SVI("int x=3;\n"
+                "int main(void){return __compile(\"extern double x;\",\"\")!=nullptr || __compile(\"extern _Thread_local int x;\",\"\")!=nullptr || __compile(\"extern int x(void);\",\"\")!=nullptr || x!=3;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: sibling definition completes a hidden extern", __LINE__,
+            SVI("int main(void){_Module a=__compile(\"int get(void){extern int x;return x;}\",\"\");_Module b=__compile(\"extern int x=6;\",\"\");if(!a||!b)return 1;b.run();int(*get)(void)=a.symbol(\"get\",int(void));return !get || get()!=6;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: module definition completes a root extern", __LINE__,
+            SVI("extern int x;\n"
+                "int main(void){_Module m=__compile(\"extern int x=6;\",\"\");if(!m)return 1;m.run();int *p=__root_module().symbol(\"x\",int);return !p || *p!=6 || p!=m.symbol(\"x\",int);}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: module definition completes a hidden root extern", __LINE__,
+            SVI("int seed(void){extern int x;return 0;}\n"
+                "int main(void){seed();_Module m=__compile(\"extern int x=6;\",\"\");if(!m)return 1;m.run();_Module n=__compile(\"extern int x;return x;\",\"\");return !n || n.run()!=6;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: static definitions stay independent", __LINE__,
+            SVI("int main(void){_Module a=__compile(\"static int x=3;static int get(void){return x;}return get();\",\"\");_Module b=__compile(\"static int x=4;static int get(void){return x;}return get();\",\"\");return !a||!b||a.run()!=3||b.run()!=4;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: compile captures file scope instead of function locals", __LINE__,
+            SVI("static int x=3;\n"
+                "int main(void){_Module a=__compile(\"static int x=4;_Module make(void){int x=9;return __compile(\\\"extern int x;return x;\\\",\\\"\\\");}\",\"\");if(!a)return 1;a.run();_Module(*make)(void)=a.symbol(\"make\",_Module(void));if(!make)return 2;_Module b=make();return !b || b.run()!=4 || x!=3;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: nested compile walks all enclosing modules", __LINE__,
+            SVI("static int root_value=3;\n"
+                "int main(void){_Module a=__compile(\"static int outer_value=4; inline int make(void){return __compile(\\\"static int middle=5;return __compile(\\\\\\\"return root_value+outer_value+middle;\\\\\\\",\\\\\\\"\\\\\\\").run();\\\",\\\"\\\").run();}return make();\",\"\");return !a || a.run()!=12;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: shadow table does not make sibling names visible", __LINE__,
+            SVI("int main(void){_Module a=__compile(\"int seed(void){extern int hidden;return 0;}\",\"\");_Module b=__compile(\"return hidden;\",\"\");return !a || b!=nullptr;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: shared TLS object retains identity", __LINE__,
+            SVI("_Thread_local int x=3;\n"
+                "int main(void){_Module a=__compile(\"extern _Thread_local int x;x++;return x;\",\"\");return !a || a.run()!=4 || x!=4;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: top-level block extern defines the outer object", __LINE__,
+            SVI("int main(void){_Module a=__compile(\"int x;{extern int x=3;}return x;\",\"\");return !a || a.run()!=3;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: visible static externs inherit internal linkage", __LINE__,
+            SVI("static int x=3;static int target(void){return x;}\n"
+                "int main(void){_Module m=__compile(\"extern int x;extern int target(void);return ++x+target();\",\"\");return !m || m.run()!=8 || x!=4;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: extern followed by a definition cannot replace the root definition", __LINE__,
+            SVI("int x=3;\n"
+                "int main(void){return __compile(\"extern int x;int x=4;\",\"\")!=nullptr || x!=3;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: file scope is retained through an inline caller", __LINE__,
+            SVI("static int x=3;\n"
+                "int main(void){_Module m=__compile(\"static int x=4;inline _Module make(void){return __compile(\\\"extern int x;return x;\\\",\\\"\\\");}int call(void){return make().run();}\",\"\");if(!m)return 1;m.run();int(*f)(void)=m.symbol(\"call\",int(void));return !f || f()!=4;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: ordinary sibling definitions have independent identities", __LINE__,
+            SVI("int main(void){_Module a=__compile(\"int x=3;int target(void){return x;}return target();\",\"\");_Module b=__compile(\"double x=4;int target(void){return x;}return target();\",\"\");return !a||!b||a.run()!=3||b.run()!=4||a.symbol(\"x\",int)==(void*)b.symbol(\"x\",double);}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: ordinary prototype binds within its module", __LINE__,
+            SVI("int target(void){return 3;}\n"
+                "int main(void){_Module m=__compile(\"int call(void){int target(void);return target();}int target(void){return 4;}return call();\",\"\");return !m||m.run()!=4||target()!=3;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: ordinary definitions do not satisfy sibling externs", __LINE__,
+            SVI("int main(void){_Module a=__compile(\"extern int module_value;\",\"\");_Module b=__compile(\"int module_value=6;\",\"\");if(!a||!b)return 1;b.run();return a.symbol(\"module_value\",int)!=nullptr || *b.symbol(\"module_value\",int)!=6;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: ordinary prototypes do not import sibling exports", __LINE__,
+            SVI("int main(void){_Module a=__compile(\"int target(void);\",\"\");_Module b=__compile(\"extern int target(void){return 6;}\",\"\");if(!a||!b)return 1;int(*f)(void)=b.symbol(\"target\",int(void));return a.symbol(\"target\",int(void))!=nullptr || !f || f()!=6;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: definition keeps a previous explicit extern binding", __LINE__,
+            SVI("extern int x;\n"
+                "int main(void){_Module m=__compile(\"extern int x;int x=6;\",\"\");if(!m)return 1;m.run();int *p=__root_module().symbol(\"x\",int);return !p||*p!=6||p!=m.symbol(\"x\",int);}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: explicit function definition completes a sibling extern", __LINE__,
+            SVI("int main(void){_Module a=__compile(\"extern int target(void);\",\"\");_Module b=__compile(\"extern int target(void){return 6;}\",\"\");if(!a||!b)return 1;int(*f)(void)=a.symbol(\"target\",int(void));return !f||f()!=6||f!=b.symbol(\"target\",int(void));}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: ordinary definition can shadow an exported parent", __LINE__,
+            SVI("extern int x=3;\n"
+                "int main(void){_Module m=__compile(\"int x=4;return x;\",\"\");return !m||m.run()!=4||x!=3||m.symbol(\"x\",int)==&x;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: explicit extern after a local definition exports that entity", __LINE__,
+            SVI("int main(void){_Module a=__compile(\"int x=4;extern int x;\",\"\");_Module b=__compile(\"extern int x;return x;\",\"\");if(!a||!b)return 1;a.run();return b.run()!=4||a.symbol(\"x\",int)!=b.symbol(\"x\",int);}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: explicit extern sees a module-owned parent", __LINE__,
+            SVI("int main(void){_Module a=__compile(\"int x=4;return __compile(\\\"extern int x;return x;\\\",\\\"\\\").run();\",\"\");return !a||a.run()!=4;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: explicit sibling definitions cannot duplicate a shared object", __LINE__,
+            SVI("int main(void){_Module a=__compile(\"extern int x=3;\",\"\");_Module b=__compile(\"extern int x=4;\",\"\");if(!a||b)return 1;a.run();return *a.symbol(\"x\",int)!=3;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: explicit sibling definitions cannot duplicate a shared function", __LINE__,
+            SVI("int main(void){_Module a=__compile(\"extern int target(void){return 3;}\",\"\");_Module b=__compile(\"extern int target(void){return 4;}\",\"\");if(!a||b)return 1;int(*f)(void)=a.symbol(\"target\",int(void));return !f||f()!=3;}" "\nreturn main();\n"),
+        },
+        {
+            "module linkage: exporting a different local entity conflicts with an existing extern", __LINE__,
+            SVI("int main(void){_Module a=__compile(\"extern int x=3;\",\"\");_Module b=__compile(\"int x=4;extern int x;\",\"\");if(!a||b)return 1;a.run();return *a.symbol(\"x\",int)!=3;}" "\nreturn main();\n"),
+        },
+        {
             "readcyclecounter: discovery, type, runtime reads, and discarded results", __LINE__,
             SVI("static_assert(__has_builtin(__builtin_readcyclecounter));"
                 "static_assert(typeof(__builtin_readcyclecounter()) == unsigned long long);"
@@ -8802,7 +9105,7 @@ TestFunction(test_interpreter){
             .exit_code = 7,
         },
         {
-            "__compile module shadows global", __LINE__,
+            "__compile module function shadows global", __LINE__,
             SVI("int f(void){ return 1; }\n"
                "_Module m = __compile(\"int f(void){ return 7; }\", \"\");\n"
                "if(!m) return 99;\n"
@@ -8987,8 +9290,8 @@ TestFunction(test_interpreter){
                 "size_t line = t.name[0] == 'S' ? 4 : t.name[0] == 'U' ? 5 : 6;\n"
                 "if(t.srcloc.line != line || t.srcloc.col != 3) return 93;\n"
                 "}\n"
-                "int* x = m.symbol(\"x\", int);\n"
-                "return x && *x == 0 ? 7 : 94;\n"),
+                "int* xptr = m.symbol(\"x\", int);\n"
+                "return xptr && *xptr == 0 ? 7 : 94;\n"),
             .exit_code = 7,
         },
         {
@@ -18819,14 +19122,15 @@ TestFunction(test_interpreter){
     int err;
     static int idx = 0;
     AtomTable at = {0};
-    for(size_t i = test_atomic_increment(&idx); i < countof(optimization_options) * CC_TARGET_COUNT * countof(testcases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < 2 * countof(optimization_options) * CC_TARGET_COUNT * countof(testcases); i = test_atomic_increment(&idx)){
         size_t opt_idx = i % countof(optimization_options);
-        size_t target_idx = (i / countof(optimization_options)) % CC_TARGET_COUNT;
+        _Bool eager = (i / countof(optimization_options)) % 2;
+        size_t target_idx = (i / (2 * countof(optimization_options))) % CC_TARGET_COUNT;
         #ifdef __DRC__ // FIXME: interpreter is still too slow
         if(target_idx != CC_TARGET_NATIVE)
             continue;
         #endif
-        size_t test_idx = i / (countof(optimization_options) * CC_TARGET_COUNT);
+        size_t test_idx = i / (2 * countof(optimization_options) * CC_TARGET_COUNT);
         const struct opt* o = &optimization_options[opt_idx];
         const struct tc* tc = &testcases[test_idx];
         const CcTargetConfig* target = cc_targets[target_idx];
@@ -18854,6 +19158,7 @@ TestFunction(test_interpreter){
             .inline_hint_budget = CI_DEFAULT_INLINE_HINT_BUDGET,
             .exit_code = -1,
             .parser = {
+                .eager_parsing = eager,
                 .cpp = {
                     .allocator = al,
                     .fc = fc,
@@ -18862,7 +19167,9 @@ TestFunction(test_interpreter){
                     .env = &env,
                     .target = target,
                 },
-                .current = &interp.parser.global,
+                .root = &interp.root.cc,
+                .module = &interp.root.cc,
+                .current = &interp.root.cc.scope,
             },
             .top_frame = {
                 .return_buf = &interp.exit_code,
@@ -18931,8 +19238,8 @@ TestFunction(test_interpreter){
         }
         if(err) TEST_stats.failures++;
         if(TEST_stats.failures != failures_before)
-            TestPrintf("%s:%d: %s [target=%.*s, noinline=%d]\n", __FILE__, tc->line, tc->name,
-                sv_p(cc_target_names[target->target]), o->noinline);
+            TestPrintf("%s:%d: %s [target=%.*s, noinline=%d, eager=%d]\n", __FILE__, tc->line, tc->name,
+                sv_p(cc_target_names[target->target]), o->noinline, eager);
         ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
         ArenaAllocator_free_all(&arena);
@@ -19590,7 +19897,9 @@ TestFunction(test_interpreter_diagnostics){
                     .env = &env,
                     .target = target,
                 },
-                .current = &interp.parser.global,
+                .root = &interp.root.cc,
+                .module = &interp.root.cc,
+                .current = &interp.root.cc.scope,
             },
             .top_frame = {
                 .return_buf = &interp.exit_code,
@@ -19743,10 +20052,11 @@ TestFunction(test_ci_call_main){
     int err;
     static int idx = 0;
     AtomTable at = {0};
-    for(size_t i = test_atomic_increment(&idx); i < countof(optimization_options) * CC_TARGET_COUNT * countof(testcases); i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < 2 * countof(optimization_options) * CC_TARGET_COUNT * countof(testcases); i = test_atomic_increment(&idx)){
         const struct opt* o = &optimization_options[i % countof(optimization_options)];
-        struct tc* tc = &testcases[i / (countof(optimization_options) * CC_TARGET_COUNT)];
-        const CcTargetConfig* target = cc_targets[(i / countof(optimization_options)) % CC_TARGET_COUNT];
+        _Bool eager = (i / countof(optimization_options)) % 2;
+        struct tc* tc = &testcases[i / (2 * countof(optimization_options) * CC_TARGET_COUNT)];
+        const CcTargetConfig* target = cc_targets[(i / (2 * countof(optimization_options))) % CC_TARGET_COUNT];
         size_t failures_before = TEST_stats.failures;
         if(tc->skip){
             TEST_stats.skipped++;
@@ -19775,7 +20085,9 @@ TestFunction(test_ci_call_main){
                     .env = &env,
                     .target = target,
                 },
-                .current = &interp.parser.global,
+                .root = &interp.root.cc,
+                .module = &interp.root.cc,
+                .current = &interp.root.cc.scope,
             },
             .top_frame = {
                 .return_buf = &interp.exit_code,
@@ -19786,6 +20098,7 @@ TestFunction(test_ci_call_main){
         LOCK_T_init(&interp.atom_lock);
         LOCK_T_init(&interp.resolve_lock);
         fc_write_path(fc, "(test)", sizeof "(test)" - 1);
+        interp.parser.eager_parsing = eager;
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
         err = cpp_define_builtin_macros(&interp.parser.cpp);
@@ -19833,15 +20146,15 @@ TestFunction(test_ci_call_main){
         }
 
         finally:
-        if(log_sb.cursor && !log_sb.errored){
+        if(log_sb.cursor && !log_sb.errored && (err || TEST_stats.failures != failures_before)){
             StringView sv = msb_borrow_sv(&log_sb);
             TestPrintf("%.*s\n", sv_p(sv));
         }
         cleanup:
         if(err) TEST_stats.failures++;
         if(TEST_stats.failures != failures_before)
-            TestPrintf("%s:%d: %s [target=%.*s, noinline=%d]\n", __FILE__, tc->line, tc->name,
-                sv_p(cc_target_names[target->target]), o->noinline);
+            TestPrintf("%s:%d: %s [target=%.*s, noinline=%d, eager=%d]\n", __FILE__, tc->line, tc->name,
+                sv_p(cc_target_names[target->target]), o->noinline, eager);
         ci_tls_cleanup(&interp);
         ArenaAllocator_free_all(&interp.bt.arena);
         ArenaAllocator_free_all(&arena);
@@ -20061,7 +20374,9 @@ TestFunction(test_ci_call_by_name){
                     .env = &env,
                     .target = target,
                 },
-                .current = &interp.parser.global,
+                .root = &interp.root.cc,
+                .module = &interp.root.cc,
+                .current = &interp.root.cc.scope,
             },
             .top_frame = {
                 .return_buf = &interp.exit_code,

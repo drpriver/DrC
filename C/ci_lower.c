@@ -4025,6 +4025,11 @@ ci_lower_rt_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiRuntimeOp rt_o
         if(err) return err;
         slots[i] = v.slot;
     }
+    if(rt_op == CI_RT_COMPILE){
+        int err = ci_emit_const(ci, ctx, (uintptr_t)e->compile.module, sizeof(void*), e->loc, &slots[2]);
+        if(err) return err;
+        nargs = 3;
+    }
     CiOp* op;
     int err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
     if(err) return err;
@@ -8440,10 +8445,10 @@ static
 int
 ci_resize_toplevel_slots(CiInterpreter* ci){
     uint32_t alignment = 16;
-    if(ci->toplevel_alignment > 16)
-        alignment = ci->toplevel_alignment;
-    if(ci->toplevel_slot_size > ci->toplevel_slots_cap || (ci->toplevel_slots && alignment > ci->toplevel_alloc_alignment)){
-        uint32_t new_cap = ci->toplevel_slot_size > ci->toplevel_slots_cap? ci->toplevel_slot_size : ci->toplevel_slots_cap;
+    if(ci->root.frame_alignment > 16)
+        alignment = ci->root.frame_alignment;
+    if(ci->root.slot_size > ci->toplevel_slots_cap || (ci->toplevel_slots && alignment > ci->toplevel_alloc_alignment)){
+        uint32_t new_cap = ci->root.slot_size > ci->toplevel_slots_cap? ci->root.slot_size : ci->toplevel_slots_cap;
         void* slots = Allocator_zalloc(ci_allocator(ci), new_cap, 1, alignment);
         if(!slots) return CI_OOM_ERROR;
         if(ci->toplevel_slots){
@@ -8461,22 +8466,12 @@ static
 int
 ci_lower_toplevel(CiInterpreter* ci, CiLowerDeps* deps){
     DRP_PROFILE_BEGIN(profile, "lower.toplevel");
-    CcParser* p = &ci->parser;
-    int err = ci_lower_nodes(
-        ci,
-        &p->toplevel_nodes,
-        &ci->toplevel_lowered,
-        &ci->toplevel_ops,
-        &ci->toplevel_labels,
-        &ci->toplevel_slot_size,
-        &ci->toplevel_alignment,
-        deps
-    );
+    int err = ci_lower_module(ci, &ci->root, deps);
     if(err) return err;
     err = ci_resize_toplevel_slots(ci);
     if(err) return err;
-    ci->top_frame.ops = ci->toplevel_ops.data;
-    ci->top_frame.op_count = ci->toplevel_ops.count;
+    ci->top_frame.ops = ci->root.ops.data;
+    ci->top_frame.op_count = ci->root.ops.count;
     ci->top_frame.slots = ci->toplevel_slots;
     return 0;
     DRP_PROFILE_END(profile);
@@ -8487,7 +8482,7 @@ int
 ci_lower_module(CiInterpreter* ci, CiModule* module, CiLowerDeps* deps){
     return ci_lower_nodes(
         ci,
-        &module->nodes,
+        &module->cc.nodes,
         &module->lowered,
         &module->ops,
         &module->labels,

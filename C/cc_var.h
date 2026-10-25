@@ -30,7 +30,8 @@ struct CcVariable {
              register_: 1,
              vla_bound: 1, // hidden storage that must be rebound when cloning defaults
              mutable_storage: 1, // parser saw a write or an escaping address
-             _padding: 5, // free real estate
+             has_linkage: 1,
+             _padding: 4, // free real estate
              alignment: 16; // 0 means default alignment
     size_t tls_slot; // interpreter TLS slot + 1; zero until prepared
     uint32_t tls_size, tls_alignment;

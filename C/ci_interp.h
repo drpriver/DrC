@@ -56,20 +56,25 @@ struct CiVirtualLib {
 };
 
 typedef struct CiModule CiModule;
+struct CiModule {
+    CcModule cc;
+    Marray(CiOp) ops;
+    AtomMap(uintptr_t) labels; // label -> op index + 1
+    size_t lowered; // number of parsed top-level nodes already lowered
+    uint32_t slot_size;
+    uint32_t frame_alignment;
+};
+_Static_assert(offsetof(CiModule, cc) == 0, "module handle must identify its parsed module");
 typedef struct CiTlsThread CiTlsThread;
 typedef struct CiClosureData CiClosureData;
 
 typedef struct CiInterpreter CiInterpreter;
 struct CiInterpreter {
     CcParser parser;
+    CiModule root;
     CiInterpFrame top_frame;
-    Marray(CiOp) toplevel_ops;
-    AtomMap(uintptr_t) toplevel_labels; // label -> toplevel op index + 1
-    size_t toplevel_lowered; // count of parser.toplevel_nodes already lowered
-    uint32_t toplevel_slot_size; // bytes of slot storage the toplevel ops need
     uint32_t toplevel_slots_cap;
-    uint32_t toplevel_alignment,
-             toplevel_alloc_alignment;
+    uint32_t toplevel_alloc_alignment;
     void*_Null_unspecified toplevel_slots;
     union {
         uint32_t flags;

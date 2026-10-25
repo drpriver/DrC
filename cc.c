@@ -53,7 +53,9 @@ static CiInterpreter cc_interp = {
             .at = &cc_at,
             .env = &cc_env,
         },
-        .current = &cc_interp.parser.global,
+        .root = &cc_interp.root.cc,
+        .module = &cc_interp.root.cc,
+        .current = &cc_interp.root.cc.scope,
     },
     .top_frame = {
         .return_buf = &cc_interp.exit_code,
@@ -482,8 +484,8 @@ int main(int argc, char** argv, char** envp){
     }
     if(dis.count || dis_top || dis_all){
         if(dis_all){
-            for(size_t i = 0; i < cc_interp.parser.global.functions.count; i++){
-                AtomMapItem* items = cc_interp.parser.global.functions.data;
+            for(size_t i = 0; i < cc_interp.root.cc.scope.functions.count; i++){
+                AtomMapItem* items = cc_interp.root.cc.scope.functions.data;
                 Atom atom = items[i].atom;
                 CcFunc* func = items[i].p;
                 if(!func->defined) continue;
@@ -499,7 +501,7 @@ int main(int argc, char** argv, char** envp){
                     log_warn(logger, "No function '%s'", d.text);
                     continue;
                 }
-                func = AM_get(&cc_interp.parser.global.functions, a);
+                func = AM_get(&cc_interp.root.cc.scope.functions, a);
                 if(!func){
                     log_warn(logger, "No function '%s'", d.text);
                     continue;
@@ -524,7 +526,7 @@ int main(int argc, char** argv, char** envp){
                     log_warn(logger, "No function '%s'", d.text);
                     continue;
                 }
-                CcFunc* func = AM_get(&cc_interp.parser.global.functions, a);
+                CcFunc* func = AM_get(&cc_interp.root.cc.scope.functions, a);
                 if(!func){
                     log_warn(logger, "No function '%s'", d.text);
                     continue;
@@ -543,14 +545,14 @@ int main(int argc, char** argv, char** envp){
             if(err) goto stringify_error;
             MStringBuilder* sb = &logger->buff;
             msb_sprintf(sb, "top level: {\n");
-            msb_sprintf(sb, "  // frame size: %u bytes of slots\n", cc_interp.toplevel_slot_size);
+            msb_sprintf(sb, "  // frame size: %u bytes of slots\n", cc_interp.root.slot_size);
             if(ast){
-                for(size_t i = 0; i < cc_interp.parser.toplevel_nodes.count; i++)
-                    cc_print_statement(sb, cc_interp.parser.toplevel_nodes.data[i]);
+                for(size_t i = 0; i < cc_interp.root.cc.nodes.count; i++)
+                    cc_print_statement(sb, cc_interp.root.cc.nodes.data[i]);
                 msb_write_literal(sb, "-------\n");
             }
-            for(size_t i = 0; i < cc_interp.toplevel_ops.count; i++){
-                CiOp* op = &cc_interp.toplevel_ops.data[i];
+            for(size_t i = 0; i < cc_interp.root.ops.count; i++){
+                CiOp* op = &cc_interp.root.ops.data[i];
                 size_t cur = sb->cursor;
                 msb_sprintf(sb, "  0x%02zx)  ", i);
                 ci_op_print(op, sb, cc_interp.parser.cpp.target->long_double_format);
@@ -734,7 +736,7 @@ repl_builtin_command(CcParser* parser, StringView input){
     if(sv_iequals(input, SV("quit")) || sv_iequals(input, SV("exit")) || sv_iequals(input, SV("q"))){
         exit(0);
     }
-    CcScope* scope = &parser->global;
+    CcScope* scope = &parser->root->scope;
     enum {
         DUMP_NONE     = 0,
         DUMP_STRUCTS  = 0x1,

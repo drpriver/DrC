@@ -1125,6 +1125,7 @@ cc_parse_lambda_body(CcParser* p, CcParseFlags flags, SrcLoc loc, CcQualType typ
     func->param_scope = param_names->scope;
     func->body_tree = param_names->bounds;
     func->definition_scope = cc_scope_retain(p->current);
+    func->module = p->module;
     func->enclosing = p->current_func;
     err = cc_parse_func_body_inner(p, func, 1);
     if(err) return err;
@@ -1317,12 +1318,96 @@ cc_check_cast(CcParser* p, CcQualType from, CcQualType to, SrcLoc loc){
 }
 
 static
+_Bool
+cc_symbol_has_linkage(const CcSymbol *sym){
+    switch(sym->kind){
+        DRP_CASES_EXHAUSTED;
+        case CC_SYM_VAR:  return sym->var->has_linkage;
+        case CC_SYM_FUNC: return sym->func->has_linkage;
+        case CC_SYM_TYPEDEF:
+        case CC_SYM_ENUMERATOR:
+            return 0;
+    }
+}
+
+static
+_Bool
+cc_lookup_visible_linked_symbol(CcScope *scope, CcScope* _Nullable last, Atom name, CcSymbol *out){
+    for(; scope; scope = scope->parent){
+        CcSymbol sym;
+        if(cc_scope_lookup_symbol(scope, name, CC_SCOPE_NO_WALK, &sym)){
+            if(!cc_symbol_has_linkage(&sym)) return 0;
+            *out = sym;
+            return 1;
+        }
+        if(scope == last) break;
+    }
+    return 0;
+}
+
+static
+_Bool
+cc_lookup_external_entity(CcParser *p, Atom name, _Bool explicit_extern, CcSymbol *out){
+    CcSymbol file_scoped;
+    if(cc_scope_lookup_symbol(&p->module->scope, name, CC_SCOPE_NO_WALK, &file_scoped)
+    && cc_symbol_has_linkage(&file_scoped)
+    && !(file_scoped.kind == CC_SYM_VAR ? file_scoped.var->static_ : file_scoped.func->static_)){
+        *out = file_scoped;
+        return 1;
+    }
+    CcSymbol *entry = AM_get(&p->module->hidden_externs, name);
+    if(entry && !cc_symbol_has_linkage(entry)) 
+        entry = NULL;
+    if(explicit_extern && !entry)
+        entry = AM_get(&p->extern_symbols, name);
+    if(!entry || !cc_symbol_has_linkage(entry))
+        return 0;
+    *out = *entry;
+    return 1;
+}
+
+static
+int
+cc_insert_extern_symbol(CcParser *p, AtomMap(CcSymbol) *symbols, Atom name, CcSymbol sym){
+    CcSymbol *existing = AM_get(symbols, name);
+    if(existing && cc_symbol_has_linkage(existing)){
+        if(existing->kind == sym.kind && existing->ptr == sym.ptr)
+            return 0;
+        SrcLoc loc = sym.kind == CC_SYM_VAR ? sym.var->loc : sym.func->loc;
+        return cc_error(p, loc, "conflicting extern binding for '%s'", name->data);
+    }
+    CcSymbol *entry = Allocator_zalloc(cc_allocator(p), 1, sizeof *entry, _Alignof(CcSymbol));
+    if(!entry) return CC_OOM_ERROR;
+    *entry = sym;
+    int err = AM_put(symbols, cc_allocator(p), name, entry);
+    if(err){
+        Allocator_free(cc_allocator(p), entry, 1, sizeof *entry, _Alignof(CcSymbol));
+        return CC_OOM_ERROR;
+    }
+    return 0;
+}
+
+static
+int
+cc_record_extern(CcParser *p, Atom name, CcSymbol sym, _Bool explicit_extern){
+    CcSymbol file_scoped;
+    if(cc_scope_lookup_symbol(&p->module->scope, name, CC_SCOPE_NO_WALK, &file_scoped)
+    && file_scoped.kind == sym.kind
+    && file_scoped.ptr == sym.ptr)
+        AM_del(&p->module->hidden_externs, name);
+    else {
+        int err = cc_insert_extern_symbol(p, &p->module->hidden_externs, name, sym);
+        if(err) return err;
+    }
+    if(!explicit_extern) return 0;
+    return cc_insert_extern_symbol(p, &p->extern_symbols, name, sym);
+}
+
+static
 int
 cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase* declbase, CcQualType new_ftype, _Bool definition, SrcLoc loc){
     CcFunction* new_type = ccqt_as_function(new_ftype);
     CcFunction* old_type = existing->type;
-    if(existing->static_ && declbase->spec.sp_extern)
-        return cc_error(p, loc, "non-static declaration of '%.*s' follows static declaration", existing->name->length, existing->name->data);
     if(!existing->static_ && declbase->spec.sp_static)
         return cc_error(p, loc, "static declaration of '%.*s' follows non-static declaration", existing->name->length, existing->name->data);
     if(!cc_types_compatible(old_type->return_type, new_type->return_type))
@@ -4611,6 +4696,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     if(!node) { err = CC_OOM_ERROR; goto __compile_fail;}
                     node->lhs = arg;
                     node->values[0] = arg2;
+                    node->compile.module = p->module;
                     *out = node;
                     return 0;
                 }
@@ -4621,7 +4707,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     if(err) return err;
                     CcExpr* node = cc_value_expr(p, tok.loc, p->builtin_module);
                     if(!node) return CC_OOM_ERROR;
-                    node->uinteger = 0;
+                    node->uinteger = (uintptr_t)p->root;
                     *out = node;
                     return 0;
                 }
@@ -5780,7 +5866,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                     case CC_TYPE_NONE:
                         goto fucs;
                     case CC_TYPE_PUSH_METHOD: {
-                        if(cc_scope_declarations(p->current) != &p->global && cc_scope_declarations(p->current) != p->file_scope)
+                        if(cc_scope_declarations(p->current) != &p->module->scope)
                             return cc_error(p, member.loc, "push method only allowed at global scope");
                         CcExpr* tv;
                         err = cc_eval_expr(&(CcEvalCtx){.parser = p}, operand, &tv);
@@ -7185,7 +7271,6 @@ cc_eval_static_update(CcParser* p, CcExpr* e){
         }
         goto cleanup;
     }
-    // Copy only this scope's maps; the parent chain remains shared.
     CcScope* bindings;
     err = cc_copy_static_scope(p, previous, &bindings);
     if(err) goto cleanup;
@@ -7821,8 +7906,6 @@ cc_parse_all(CcParser* p){
     size_t goto_mark = lctx->gotos.count;
     CcStmtSink* sink = cc_push_stmt_sink(p);
     if(!sink) return CC_OOM_ERROR;
-    CcScope* saved_file_scope = p->file_scope;
-    p->file_scope = p->current;
     for(;;){
         err = cc_peek(p, &tok);
         if(err) break;
@@ -7854,7 +7937,7 @@ cc_parse_all(CcParser* p){
         lctx->gotos.count = goto_mark;
         goto cleanup;
     }
-    err = pa_extend(&p->toplevel_nodes, cc_allocator(p), sink->stmts.count, sink->stmts.data);
+    err = pa_extend(&p->module->nodes, cc_allocator(p), sink->stmts.count, sink->stmts.data);
     if(err){
         err = CC_OOM_ERROR;
         goto cleanup;
@@ -7862,7 +7945,6 @@ cc_parse_all(CcParser* p){
     sink->stmts.count = 0;
     cleanup:
     cc_pop_stmt_sink(p, sink);
-    p->file_scope = saved_file_scope;
     return err;
     DRP_PROFILE_END(profile);
 }
@@ -7880,7 +7962,7 @@ CcLabelCtx*
 cc_label_ctx(CcParser* p){
     if(p->current_func)
         return &((CcFunc*_Nonnull)p->current_func)->label_ctx;
-    return &p->toplevel_label_ctx;
+    return &p->module->labels;
 }
 
 static
@@ -11588,7 +11670,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                         CcFunc* func = old_method ? old_method->method : NULL;
                         Atom symbol = NULL;
                         CcScope* scope = cc_scope_declarations(p->current);
-                        if(name && (scope == &p->global || scope == p->file_scope)){
+                        if(name && scope == &p->module->scope){
                             MStringBuilder mangled = {.allocator=cc_scratch_allocator(p)};
                             msb_sprintf(&mangled, "__methods.%c_%u_%s_%s", is_union ? 'u' : 's', (unsigned)name->length, name->data, member_name->data);
                             if(mangled.errored){
@@ -11696,6 +11778,7 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                             func->tokens = body_tokens;
                             func->defined = 1;
                             func->definition_scope = cc_scope_retain(p->current);
+                            func->module = p->module;
                             if(p->current_func){
                                 func->enclosing = p->current_func;
                                 err = pa_push(&cc_scope_declarations(p->current)->deferred_methods, cc_allocator(p), func);
@@ -14416,7 +14499,7 @@ cc_new_vla_bound(CcParser* p, SrcLoc loc, CcQualType type, CcVariable*_Nonnull*_
         .loc=loc,
         .type=type,
         .vla_bound=1,
-        .automatic=p->current_func || (p->current != p->file_scope && p->current != &p->global)
+        .automatic=p->current_func || p->current != &p->module->scope
     };
     CcScope* scope = p->function_scope ? p->function_scope : cc_scope_declarations(p->current);
     int err = cc_scope_insert_var(cc_allocator(p), scope, nil_atom, var);
@@ -15246,8 +15329,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
     DRP_PROFILE_BEGIN(profile, "parser.declarations");
     *out = (CcParsedDecls){0};
     if(declbase->spec.sp_register
-    && (cc_scope_declarations(p->current) == &p->global
-        || cc_scope_declarations(p->current) == p->file_scope))
+    && cc_scope_declarations(p->current) == &p->module->scope)
         return cc_error(p, declbase->loc, "register requires block scope");
     int err = 0;
     CcToken tok;
@@ -15405,6 +15487,13 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             CcSymbol sym;
             CcFunc* func = NULL;
             _Bool found = cc_scope_lookup_symbol(cc_scope_declarations(p->current), name, CC_SCOPE_NO_WALK, &sym);
+            _Bool root_definition = cc_scope_declarations(p->current) == &p->module->scope;
+            if(!found && root_definition && !declbase->spec.sp_static){
+                CcScope *last = declbase->spec.sp_extern ? NULL : &p->module->scope;
+                found = cc_lookup_visible_linked_symbol(p->current, last, name, &sym);
+                if(!found)
+                    found = cc_lookup_external_entity(p, name, declbase->spec.sp_extern, &sym);
+            }
             if(found){
                 switch(sym.kind){
                     case CC_SYM_FUNC:
@@ -15417,7 +15506,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 }
             }
             if(func){
-                if(func->defined)
+                if(func->defined || func->native_func)
                     return cc_error(p, tok.loc, "Redefinition of function '%.*s'", name->length, name->data);
                 err = cc_check_func_compat(p, func, declbase, type, 1, tok.loc);
                 if(err) return err;
@@ -15430,16 +15519,21 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 func = Allocator_zalloc(cc_allocator(p), 1, sizeof *func, _Alignof(CcFunc));
                 if(!func) return CC_OOM_ERROR;
                 func->name = name;
-                err = cc_scope_insert_func(cc_allocator(p), cc_scope_declarations(p->current), name, func);
-                if(err) return err;
             }
+            err = cc_scope_insert_func(cc_allocator(p), cc_scope_declarations(p->current), name, func);
+            if(err) return err;
             func->type = ccqt_as_function(type);
             func->loc = name_loc;
-            func->mangle = asm_label;
+            if(asm_label) func->mangle = asm_label;
             func->defined = 1;
+            func->has_linkage = root_definition;
             if(declbase->spec.sp_extern || declbase->spec.sp_static){
                 func->extern_ = declbase->spec.sp_extern;
-                func->static_ = declbase->spec.sp_static;
+                func->static_ |= declbase->spec.sp_static;
+            }
+            if(root_definition && !func->static_){
+                err = cc_record_extern(p, name, (CcSymbol){.kind=CC_SYM_FUNC, .func=func}, declbase->spec.sp_extern);
+                if(err) return err;
             }
             func->inline_ = func->inline_ || declbase->spec.sp_inline;
             func->always_inline = func->always_inline || is_always_inline;
@@ -15453,6 +15547,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             func->param_scope = param_names.scope;
             func->body_tree = param_names.bounds;
             func->definition_scope = cc_scope_retain(p->current);
+            func->module = p->module;
             if(eager){
                 func->_Self_type = p->current_tag_type;
                 func->enclosing = p->current_func;
@@ -15535,20 +15630,17 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 return cc_error(p, tok.loc, "'_Noreturn' is only valid on functions");
             CcSymbol sym;
             _Bool found = cc_scope_lookup_symbol(cc_scope_declarations(p->current), name, CC_SCOPE_NO_WALK, &sym);
-            _Bool inherited_tls = 0;
-            if(!found && p->current_func && declbase->spec.sp_extern){
-                CcSymbol outer;
-                if(cc_scope_lookup_symbol(p->current, name, CC_SCOPE_WALK_CHAIN, &outer)
-                    && outer.kind == CC_SYM_VAR && (outer.var->thread_local_ || declbase->spec.sp_thread_local)){
-                    sym = outer;
-                    found = inherited_tls = 1;
-                }
+            _Bool root_declaration = cc_scope_declarations(p->current) == &p->module->scope;
+            if(!found && !declbase->spec.sp_static && (root_declaration || declbase->spec.sp_extern)){
+                if(declbase->spec.sp_extern)
+                    found = cc_lookup_visible_linked_symbol(p->current, NULL, name, &sym);
+                if(!found)
+                    found = cc_lookup_external_entity(p, name, declbase->spec.sp_extern, &sym);
             }
             if(found){
                 switch(sym.kind){
                     case CC_SYM_VAR:
-                        if(cc_scope_declarations(p->current) != &p->global && cc_scope_declarations(p->current) != p->file_scope
-                            && !(declbase->spec.sp_extern && (sym.var->thread_local_ || declbase->spec.sp_thread_local)))
+                        if(!root_declaration && !(declbase->spec.sp_extern && sym.var->has_linkage))
                             return cc_error(p, tok.loc, "redefinition of '%.*s'", name->length, name->data);
                         // Validate declarations before constructing their composite type.
                         var = sym.var;
@@ -15566,10 +15658,10 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                             if(err) return err;
                             var->type = type;
                         }
-                        if(inherited_tls){
-                            err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), name, var);
-                            if(err) return err;
-                        }
+                        err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), name, var);
+                        if(err) return err;
+                        if(asm_label) var->mangle = asm_label;
+                        if(decl_alignment > var->alignment) var->alignment = decl_alignment;
                         goto skip_var_alloc;
                     case CC_SYM_FUNC:
                     case CC_SYM_TYPEDEF:
@@ -15591,10 +15683,15 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 .thread_local_ = declbase->spec.sp_thread_local,
                 .register_ = declbase->spec.sp_register,
                 .automatic = p->current_func != NULL && !declbase->spec.sp_static && !declbase->spec.sp_extern,
+                .has_linkage = root_declaration || declbase->spec.sp_extern,
             };
             err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), name, var);
             if(err) return err;
             skip_var_alloc:;
+            if(var->has_linkage && !var->static_){
+                err = cc_record_extern(p, name, (CcSymbol){.kind=CC_SYM_VAR, .var=var}, declbase->spec.sp_extern);
+                if(err) return err;
+            }
         }
         if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '='){
             if(declbase->spec.sp_typedef)
@@ -15745,6 +15842,13 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             CcSymbol sym;
             CcFunc* func = NULL;
             _Bool found = cc_scope_lookup_symbol(cc_scope_declarations(p->current), name, CC_SCOPE_NO_WALK, &sym);
+            _Bool root_declaration = cc_scope_declarations(p->current) == &p->module->scope;
+            if(!found && !declbase->spec.sp_static){
+                CcScope *last = declbase->spec.sp_extern ? NULL : &p->module->scope;
+                found = cc_lookup_visible_linked_symbol(p->current, last, name, &sym);
+                if(!found)
+                    found = cc_lookup_external_entity(p, name, declbase->spec.sp_extern, &sym);
+            }
             if(found){
                 switch(sym.kind){
                     case CC_SYM_FUNC:
@@ -15770,14 +15874,19 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 if(!func) return CC_OOM_ERROR;
                 func->name = name;
                 func->loc = name_loc;
-                err = cc_scope_insert_func(cc_allocator(p), cc_scope_declarations(p->current), name, func);
-                if(err) return err;
+                func->has_linkage = root_declaration || !declbase->spec.sp_static;
             }
+            err = cc_scope_insert_func(cc_allocator(p), cc_scope_declarations(p->current), name, func);
+            if(err) return err;
             func->type = ccqt_as_function(type);
-            func->mangle = asm_label;
+            if(asm_label) func->mangle = asm_label;
             if(declbase->spec.sp_extern || declbase->spec.sp_static){
                 func->extern_ = declbase->spec.sp_extern;
-                func->static_ = declbase->spec.sp_static;
+                func->static_ |= declbase->spec.sp_static;
+            }
+            if(func->has_linkage && !func->static_){
+                err = cc_record_extern(p, name, (CcSymbol){.kind=CC_SYM_FUNC, .func=func}, declbase->spec.sp_extern);
+                if(err) return err;
             }
             func->inline_ = func->inline_ || declbase->spec.sp_inline;
             func->always_inline = func->always_inline || is_always_inline;
@@ -15804,7 +15913,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                     return cc_type_error(p, tok.loc, type, "variable has incomplete enum type");
             }
             if(var){
-                if(initializer && var->initializer)
+                if(initializer && (var->initializer || (var->extern_ && var->interp_val)))
                     return cc_error(p, tok.loc, "redefinition of '%.*s'", name->length, name->data);
                 if(redecl && declbase->spec.sp_infer_type){
                     err = cc_check_var_type(p, var, &type, tok.loc);
@@ -15875,7 +15984,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                         initializer->kind = CC_EXPR_INIT_LIST;
                 }
                 else {
-                    if(var && !var->automatic && p->current == p->file_scope)
+                    if(var && !var->automatic && p->current == &p->module->scope)
                         var->interp_try_preinit = 1;
                     CcExpr* var_ref = cc_make_expr(p, CC_EXPR_VARIABLE, tok.loc, type, 0);
                     if(!var_ref) return CC_OOM_ERROR;
@@ -15980,7 +16089,7 @@ cc_register_extern_var(CcParser* p, StringView name, CcQualType type){
     var->name = a;
     var->type = type;
     var->extern_ = 1;
-    int err = cc_scope_insert_var(al, &p->global, a, var);
+    int err = cc_scope_insert_var(al, &p->root->scope, a, var);
     if(err) Allocator_free(al, var, 1, sizeof *var, _Alignof(CcVariable));
     return err;
 }
@@ -16145,7 +16254,7 @@ cc_define_builtin_types(CcParser* p){
             };
             err = cc_compute_struct_layout(p, s, 0);
             if(err) return err;
-            err = cc_scope_insert_struct_tag(al, &p->global, tag_name, s);
+            err = cc_scope_insert_struct_tag(al, &p->root->scope, tag_name, s);
             if(err) return CC_OOM_ERROR;
 
             // typedef __va_list_tag __builtin_va_list[1];
@@ -16187,7 +16296,7 @@ cc_define_builtin_types(CcParser* p){
             };
             err = cc_compute_struct_layout(p, s, 0);
             if(err) return err;
-            err = cc_scope_insert_struct_tag(al, &p->global, tag_name, s);
+            err = cc_scope_insert_struct_tag(al, &p->root->scope, tag_name, s);
             if(err) return CC_OOM_ERROR;
 
             // typedef struct __va_list __builtin_va_list;
@@ -16210,9 +16319,9 @@ cc_define_builtin_types(CcParser* p){
             return CC_UNREACHABLE_ERROR;
         DRP_CASES_EXHAUSTED;
     }
-    err = cc_scope_insert_typedef(al, &p->global, va_list_name, va_list_type, (SrcLoc){0});
+    err = cc_scope_insert_typedef(al, &p->root->scope, va_list_name, va_list_type, (SrcLoc){0});
     if(err) return CC_OOM_ERROR;
-    err = cc_scope_insert_typedef(al, &p->global, gnu_va_list, va_list_type, (SrcLoc){0});
+    err = cc_scope_insert_typedef(al, &p->root->scope, gnu_va_list, va_list_type, (SrcLoc){0});
     if(err) return CC_OOM_ERROR;
     p->builtin_va_list = va_list_type;
     if(ccqt_kind(va_list_type) == CC_ARRAY){
@@ -16258,10 +16367,10 @@ cc_define_builtin_types(CcParser* p){
         };
         err = cc_compute_struct_layout(p, s, 0);
         if(err) return err;
-        err = cc_scope_insert_struct_tag(al, &p->global, name, s);
+        err = cc_scope_insert_struct_tag(al, &p->root->scope, name, s);
         if(err) return CC_OOM_ERROR;
         p->builtin_field = (CcQualType){.bits = (uintptr_t)s};
-        err = cc_scope_insert_typedef(al, &p->global, name, p->builtin_field, (SrcLoc){0});
+        err = cc_scope_insert_typedef(al, &p->root->scope, name, p->builtin_field, (SrcLoc){0});
         if(err) return CC_OOM_ERROR;
     }
 
@@ -16292,10 +16401,10 @@ cc_define_builtin_types(CcParser* p){
         };
         err = cc_compute_struct_layout(p, s, 0);
         if(err) return err;
-        err = cc_scope_insert_struct_tag(al, &p->global, name, s);
+        err = cc_scope_insert_struct_tag(al, &p->root->scope, name, s);
         if(err) return CC_OOM_ERROR;
         p->builtin_method = (CcQualType){.bits = (uintptr_t)s};
-        err = cc_scope_insert_typedef(al, &p->global, name, p->builtin_method, (SrcLoc){0});
+        err = cc_scope_insert_typedef(al, &p->root->scope, name, p->builtin_method, (SrcLoc){0});
         if(err) return CC_OOM_ERROR;
     }
 
@@ -16328,10 +16437,10 @@ cc_define_builtin_types(CcParser* p){
         };
         err = cc_compute_struct_layout(p, s, 0);
         if(err) return err;
-        err = cc_scope_insert_struct_tag(al, &p->global, name, s);
+        err = cc_scope_insert_struct_tag(al, &p->root->scope, name, s);
         if(err) return CC_OOM_ERROR;
         p->builtin_enumerator = (CcQualType){.bits = (uintptr_t)s};
-        err = cc_scope_insert_typedef(al, &p->global, name, p->builtin_enumerator, (SrcLoc){0});
+        err = cc_scope_insert_typedef(al, &p->root->scope, name, p->builtin_enumerator, (SrcLoc){0});
         if(err) return CC_OOM_ERROR;
     }
     {
@@ -16344,14 +16453,14 @@ cc_define_builtin_types(CcParser* p){
             .is_incomplete = 1,
             .name = name,
         };
-        err = cc_scope_insert_struct_tag(al, &p->global, name, s);
+        err = cc_scope_insert_struct_tag(al, &p->root->scope, name, s);
         if(err) return CC_OOM_ERROR;
         CcQualType struct_ = {.bits = (uintptr_t)s};
         err = cc_pointer_of(p, struct_, &p->builtin_src_loc);
         if(err) return err;
         Atom typedef_ = AT_ATOMIZE(p->cpp.at, "_SrcLoc");
         if(!typedef_) return CC_OOM_ERROR;
-        err = cc_scope_insert_typedef(al, &p->global, typedef_, p->builtin_src_loc, (SrcLoc){0});
+        err = cc_scope_insert_typedef(al, &p->root->scope, typedef_, p->builtin_src_loc, (SrcLoc){0});
         if(err) return CC_OOM_ERROR;
     }
     {
@@ -16384,14 +16493,14 @@ cc_define_builtin_types(CcParser* p){
         };
         err = cc_compute_struct_layout(p, s, 0);
         if(err) return err;
-        err = cc_scope_insert_struct_tag(al, &p->global, name, s);
+        err = cc_scope_insert_struct_tag(al, &p->root->scope, name, s);
         if(err) return CC_OOM_ERROR;
         p->builtin_module_member = (CcQualType){.bits = (uintptr_t)s};
-        err = cc_scope_insert_typedef(al, &p->global, name, p->builtin_module_member, (SrcLoc){0});
+        err = cc_scope_insert_typedef(al, &p->root->scope, name, p->builtin_module_member, (SrcLoc){0});
         if(err) return CC_OOM_ERROR;
         Atom public_name = AT_ATOMIZE(p->cpp.at, "_ModuleMember");
         if(!public_name) return CC_OOM_ERROR;
-        err = cc_scope_insert_typedef(al, &p->global, public_name, p->builtin_module_member, (SrcLoc){0});
+        err = cc_scope_insert_typedef(al, &p->root->scope, public_name, p->builtin_module_member, (SrcLoc){0});
         if(err) return CC_OOM_ERROR;
     }
 
@@ -16405,14 +16514,14 @@ cc_define_builtin_types(CcParser* p){
             .is_incomplete = 1,
             .name = name,
         };
-        err = cc_scope_insert_struct_tag(al, &p->global, name, s);
+        err = cc_scope_insert_struct_tag(al, &p->root->scope, name, s);
         if(err) return CC_OOM_ERROR;
         CcQualType module_struct = {.bits = (uintptr_t)s};
         err = cc_pointer_of(p, module_struct, &p->builtin_module);
         if(err) return err;
         Atom module_typedef = AT_ATOMIZE(p->cpp.at, "_Module");
         if(!module_typedef) return CC_OOM_ERROR;
-        err = cc_scope_insert_typedef(al, &p->global, module_typedef, p->builtin_module, (SrcLoc){0});
+        err = cc_scope_insert_typedef(al, &p->root->scope, module_typedef, p->builtin_module, (SrcLoc){0});
         if(err) return CC_OOM_ERROR;
     }
     {
@@ -16440,7 +16549,7 @@ cc_define_builtin_types(CcParser* p){
         for(size_t i = 0; i < sizeof to_register / sizeof to_register[0]; i++){
             Atom name = AT_atomize(p->cpp.at, to_register[i].name.text, to_register[i].name.length);
             if(!name) return CC_OOM_ERROR;
-            err = cc_scope_insert_typedef(al, &p->global, name, ccqt_basic(to_register[i].kind), (SrcLoc){0});
+            err = cc_scope_insert_typedef(al, &p->root->scope, name, ccqt_basic(to_register[i].kind), (SrcLoc){0});
             if(err) return CC_OOM_ERROR;
         }
     }
@@ -16704,14 +16813,15 @@ cc_define_builtin_types(CcParser* p){
             func->type = ftype;
             func->extern_ = 1;
             func->libc_builtin = 1;
+            func->has_linkage = 1;
             if(b->printf_like){
                 CcPrintfFormat format = {.string_index=(uint32_t)b->nargs, .first_to_check=(uint32_t)b->nargs+1};
                 err = cc_apply_printf_formats(p, func, &format);
                 if(err) return err;
             }
-            err = cc_scope_insert_func(al, &p->global, key, func);
+            err = cc_scope_insert_func(al, &p->root->scope, key, func);
             if(err) return CC_OOM_ERROR;
-            err = cc_scope_insert_func(al, &p->global, name, func);
+            err = cc_scope_insert_func(al, &p->root->scope, name, func);
             if(err) return CC_OOM_ERROR;
         }
     }
@@ -16773,6 +16883,9 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
     int err = cc_check_function_definition_type(p, f->type, f->loc);
     if(err) return err;
     CcScope* saved_scope = p->current;
+    CcModule* saved_module = p->module;
+    CcModule* module = f->module;
+    if(module) p->module = module;
     if(f->definition_scope) p->current = (CcScope*)f->definition_scope;
     CcStaticFor* saved_static_for = p->static_for;
     p->static_for = NULL;
@@ -16861,6 +16974,7 @@ cc_parse_func_body_inner(CcParser* p, CcFunc* f, _Bool terminate_on_rbrace){
     cc_pop_scope(p);
     restore_context:
     p->current = saved_scope;
+    p->module = saved_module;
     p->static_for = saved_static_for;
     p->static_control = saved_static_control;
     p->current_func = prev;

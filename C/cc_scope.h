@@ -71,6 +71,7 @@ struct CcSymbol {
         CcFunc* func;
         CcQualType type;
         CcEnumerator* enumerator;
+        void *ptr;
     };
 };
 
