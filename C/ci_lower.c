@@ -1685,7 +1685,7 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
         CcExpr* value = entry->value;
         if(!value) continue;
         uint32_t esz;
-        err = cc_sizeof_as_uint(p, value->type, value->loc, &esz);
+        err = cc_expr_sizeof_as_uint(p, value, &esz);
         if(err) return err;
         uint32_t off = dst.disp + (uint32_t)entry_loc.byte_offset;
         uint64_t start = entry_loc.byte_offset;
@@ -2526,17 +2526,17 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
     uint32_t size;
     if(ccqt_kind(e->type) == CC_FUNCTION) size = ctx->ptr_size;
     else {
-        err = cc_sizeof_as_uint(p, e->type, e->loc, &size);
+        err = cc_expr_sizeof_as_uint(p, e, &size);
         if(err) return err;
     }
     out->size = size;
-    out->canonical = ccqt_is_bool(e->type);
+    out->canonical = e->kind != CC_EXPR_BLOB && ccqt_is_bool(e->type);
     switch(e->kind){
         case CC_EXPR_FUNCTION:
             return ci_lower_cast_operand(ci, ctx, e, dest, out);
         case CC_EXPR_BLOB:
         case CC_EXPR_VALUE:{
-            if((ccqt_is_fixed_sequence(e->type) || ccqt_kind(e->type) == CC_VLA)){
+            if(e->kind == CC_EXPR_BLOB || ccqt_is_fixed_sequence(e->type) || ccqt_kind(e->type) == CC_VLA){
                 err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
                 if(err) return err;
                 out->slot = dest;
@@ -2549,7 +2549,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 *op = (CiOp){
                     .constant = {
                         .kind = CI_OP_CONST,
-                        .bt_kind = (uint32_t)(ccqt_is_basic(ccqt_array_element(e->type))?ccqt_basic_kind(ccqt_array_element(e->type)):CCBT_nullptr_t),
+                        .bt_kind = (uint32_t)(ccqt_is_basic(cc_expr_array_element(e))?ccqt_basic_kind(cc_expr_array_element(e)):CCBT_nullptr_t),
                         .is_anon_array = 1,
                         .immsize = 8,
                         .slot = aslot,
@@ -5280,7 +5280,7 @@ ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* han
     switch((uint32_t)rhs->kind){
         case CC_EXPR_BLOB:
         case CC_EXPR_VALUE:
-            if(ccqt_is_fixed_sequence(rhs->type))
+            if(rhs->kind == CC_EXPR_BLOB || ccqt_is_fixed_sequence(rhs->type))
                 break;
             return 0;
         case CC_EXPR_VARIABLE:
@@ -7503,7 +7503,7 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
     switch((uint32_t)lv->kind){
         case CC_EXPR_BLOB:
         case CC_EXPR_VALUE:{
-            if(!ccqt_is_fixed_sequence(lv->type))
+            if(lv->kind != CC_EXPR_BLOB && !ccqt_is_fixed_sequence(lv->type))
                 break; // not an lvalue; materialized below
             uint32_t aslot;
             err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &aslot);
@@ -7514,7 +7514,7 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
             *op = (CiOp){
                 .constant = {
                     .kind = CI_OP_CONST,
-                    .bt_kind = (uint32_t)(ccqt_is_basic(ccqt_array_element(lv->type))?ccqt_basic_kind(ccqt_array_element(lv->type)):CCBT_nullptr_t),
+                    .bt_kind = (uint32_t)(ccqt_is_basic(cc_expr_array_element(lv))?ccqt_basic_kind(cc_expr_array_element(lv)):CCBT_nullptr_t),
                     .is_anon_array = 1,
                     .immsize = ctx->ptr_size,
                     .slot = aslot,
@@ -8889,7 +8889,7 @@ ci_static_read_address(CiInterpreter* ci, CcExpr* e, CiStaticReloc* out, CiLower
     unsigned char bytes[8] = {0};
     uint32_t size = ci_target(ci)->sizeof_[CCBT_nullptr_t];
     uint32_t object_size;
-    int err = cc_sizeof_as_uint(&ci->parser, e->type, e->loc, &object_size);
+    int err = cc_expr_sizeof_as_uint(&ci->parser, e, &object_size);
     if(err) return err;
     if(object_size != size) return _cc_not_constant_error;
     CiStaticBuffer buffer = {.bytes = bytes, .size = size, .runtime_ctx = runtime_ctx};
@@ -8932,7 +8932,7 @@ ci_static_address(CiInterpreter* ci, CcExpr* e, _Bool lvalue, CiStaticReloc* out
             return 0;
         case CC_EXPR_BLOB:
         case CC_EXPR_VALUE:
-            if((ccqt_is_fixed_sequence(e->type) || ccqt_kind(e->type) == CC_VLA)){
+            if(e->kind == CC_EXPR_BLOB || ccqt_is_fixed_sequence(e->type) || ccqt_kind(e->type) == CC_VLA){
                 out->kind = CI_STATIC_RELOC_LITERAL;
                 out->literal = cc_expr_array_data(e);
                 return 0;
@@ -9167,7 +9167,7 @@ ci_static_read_range(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e,
     if(depth >= 256 || (e->is_lvalue && (e->type.is_volatile || e->type.is_atomic)))
         return _cc_not_constant_error;
     uint32_t object_size;
-    int err = cc_sizeof_as_uint(p, e->type, e->loc, &object_size);
+    int err = cc_expr_sizeof_as_uint(p, e, &object_size);
     if(err) return err;
     if(start > object_size || size > object_size-start) return _cc_not_constant_error;
     _Bool needed = 0;
@@ -9247,7 +9247,7 @@ ci_static_read_range(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e,
             err = ci_init_entry_loc(ci, e->type, entry, &loc);
             if(err) break;
             uint32_t sz;
-            err = cc_sizeof_as_uint(p, entry->value->type, entry->value->loc, &sz);
+            err = cc_expr_sizeof_as_uint(p, entry->value, &sz);
             if(err) break;
             uint64_t end = loc.byte_offset + (loc.bit_width ? (loc.bit_offset + loc.bit_width + 7u) / 8u : sz);
             if(loc.byte_offset >= (uint64_t)start+size || end <= start) continue;
@@ -9298,9 +9298,9 @@ ci_static_read_range(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e,
         Allocator_free(al, pending, size, 1, _Alignof(unsigned char));
         return err;
     }
-    if((e->kind == CC_EXPR_VALUE || e->kind == CC_EXPR_BLOB) && ccqt_is_fixed_sequence(e->type) && cc_expr_array_data(e)){
+    if((e->kind == CC_EXPR_BLOB || (e->kind == CC_EXPR_VALUE && ccqt_is_fixed_sequence(e->type))) && cc_expr_array_data(e)){
         uint32_t elem_size;
-        err = cc_sizeof_as_uint(p, ccqt_array_element(e->type), e->loc, &elem_size);
+        err = cc_sizeof_as_uint(p, cc_expr_array_element(e), e->loc, &elem_size);
         if(err) return err;
         uint64_t length = (uint64_t)cc_expr_array_count(e)*elem_size;
         for(uint32_t i = 0; i < size; i++)
@@ -9471,7 +9471,7 @@ ci_static_write(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e, uint32_t off
             if(entry_path_err) return entry_path_err;
             if(!entry->value) continue;
             uint32_t sz;
-            err = cc_sizeof_as_uint(p, entry->value->type, entry->value->loc, &sz);
+            err = cc_expr_sizeof_as_uint(p, entry->value, &sz);
             if(err) return err;
             uint64_t at = (uint64_t)offset + entry_loc.byte_offset;
             if(at > data->size) return _cc_not_constant_error;
@@ -9502,9 +9502,9 @@ ci_static_write(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e, uint32_t off
         }
         return 0;
     }
-    if((e->kind == CC_EXPR_VALUE || e->kind == CC_EXPR_BLOB) && ccqt_is_fixed_sequence(e->type) && cc_expr_array_data(e)){
+    if((e->kind == CC_EXPR_BLOB || (e->kind == CC_EXPR_VALUE && ccqt_is_fixed_sequence(e->type))) && cc_expr_array_data(e)){
         uint32_t elem_size;
-        err = cc_sizeof_as_uint(p, ccqt_array_element(e->type), e->loc, &elem_size);
+        err = cc_sizeof_as_uint(p, cc_expr_array_element(e), e->loc, &elem_size);
         if(err) return err;
         uint64_t bytes = (uint64_t)cc_expr_array_count(e) * elem_size;
         memcpy(data->bytes + offset, cc_expr_array_data(e), bytes < size ? (size_t)bytes : size);
@@ -9560,7 +9560,7 @@ ci_collect_template_entries(CiInterpreter* ci, CcExpr* e, CcFieldPath prefix, Ma
         if(entry_path_err) return entry_path_err;
         if(!entry->value) continue;
         uint32_t size;
-        int err = cc_sizeof_as_uint(&ci->parser, entry->value->type, entry->value->loc, &size);
+        int err = cc_expr_sizeof_as_uint(&ci->parser, entry->value, &size);
         if(err) return err;
         uint64_t start = entry_loc.byte_offset;
         uint64_t end = start + size;
@@ -9575,7 +9575,7 @@ ci_collect_template_entries(CiInterpreter* ci, CcExpr* e, CcFieldPath prefix, Ma
             if(prev_path_err) return prev_path_err;
             if(!prev->value) continue;
             uint32_t prev_size;
-            err = cc_sizeof_as_uint(&ci->parser, prev->value->type, prev->value->loc, &prev_size);
+            err = cc_expr_sizeof_as_uint(&ci->parser, prev->value, &prev_size);
             if(err) return err;
             uint64_t prev_start = prev_loc.byte_offset;
             uint64_t prev_end = prev_start + prev_size;
@@ -9650,7 +9650,7 @@ ci_partial_init_template(CiInterpreter* ci, CiStaticBuffer* buffer, CcExpr* e, C
         }
         if(err) goto cleanup;
         uint32_t size;
-        err = cc_sizeof_as_uint(&ci->parser, entry.value->type, entry.value->loc, &size);
+        err = cc_expr_sizeof_as_uint(&ci->parser, entry.value, &size);
         if(err) goto cleanup;
         uint64_t start = entry_loc.byte_offset;
         if(entry_loc.bit_width){
@@ -10278,6 +10278,7 @@ ci_fold_read(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* result)
 static
 int
 ci_fold_expr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue* folded){
+    if(e->kind == CC_EXPR_BLOB) return FOLD_FAIL;
     if(e->kind==CC_EXPR_VARIABLE && !e->type.is_volatile && !e->type.is_atomic){
         CiInlineBinding* b = ci_inline_binding(ctx,e->var);
         if(b && b->constant){
@@ -10358,6 +10359,7 @@ ci_fold_expr_uncached(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue
     _Bool truth;
     switch((uint32_t)e->kind){
         case CC_EXPR_BLOB:
+            return FOLD_FAIL;
         case CC_EXPR_VALUE:
             memcpy(result.bits, e->data, sz);
             *folded = result;

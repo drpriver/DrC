@@ -103,16 +103,6 @@ Allocator_free_all(Allocator a){
     ALLOC_BAD();
 }
 
-enum {
-    #if defined _MSC_VER && defined _WIN64
-    MALLOC_ALIGNMENT = 16,
-    #elif defined _MSC_VER && defined _WIN32
-    MALLOC_ALIGNMENT = 8,
-    #else
-    MALLOC_ALIGNMENT = _Alignof(max_align_t),
-    #endif
-};
-
 MALLOC_FUNC
 static inline
 warn_unused

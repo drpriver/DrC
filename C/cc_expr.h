@@ -443,6 +443,12 @@ struct CcExpr {
         } str;
         struct {
             CcExprKind kind: 8;
+            uint32_t _padding: 23;
+            uint32_t is_lvalue: 1;
+            uint32_t count;
+        } blob_info;
+        struct {
+            CcExprKind kind: 8;
             CcAtomicOp op: 8;
             CcMemoryOrder memorder: 4;
             CcMemoryOrder fail_memorder: 4; // compare_exchange only
@@ -480,7 +486,7 @@ struct CcExpr {
         } srcloc;
     };
     SrcLoc loc;
-    CcQualType type;
+    CcQualType type; // For BLOB this is the element type
     // For binary ops: lhs is the left operand, values[0] is the right operand.
     // For unary ops/casts: lhs is the operand.
     // For CC_EXPR_VALUE: reinterpret based on type (uinteger, float_, etc).
@@ -494,7 +500,7 @@ struct CcExpr {
         float float_;
         double double_;
         const char* text;
-        ByteView blob; // CC_EXPR_BLOB
+        ByteView blob;
         CcVariable* var;
         CcFunc* func;
         CcInitList* init_list;
@@ -520,7 +526,13 @@ cc_expr_array_data(const CcExpr* e){
 static inline
 size_t
 cc_expr_array_count(const CcExpr* e){
-    return e->kind == CC_EXPR_BLOB ? e->blob.n_bytes : e->str.length;
+    return e->kind == CC_EXPR_BLOB ? e->blob_info.count : e->str.length;
+}
+
+static inline
+CcQualType
+cc_expr_array_element(const CcExpr* e){
+    return e->kind == CC_EXPR_BLOB ? e->type : ccqt_array_element(e->type);
 }
 
 static inline

@@ -3566,9 +3566,9 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
-            "static subobject ranges: partially overwritten numeric storage", __LINE__,
+            "static subobject ranges: same member retains adjacent numeric bits", __LINE__,
             SVI("constexpr union U {unsigned long raw; struct B {unsigned a:3; unsigned b:5;} b;}\n"
-                "u={.raw=255,.b.a=2}; static unsigned long copy=u.raw;\n"
+                "u={.b={7,31},.b.a=2}; static unsigned long copy=u.raw;\n"
                 "return copy==250;\n"),
             .exit_code = 1,
         },
@@ -3789,9 +3789,9 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
-            "static union: complete overwrite replaces a slice pointer", __LINE__,
+            "static union: member switch discards slice count and pointer", __LINE__,
             SVI("constexpr union U {int s[:]; struct V {unsigned long count; int* p;} v;} u={.s=((int*)6)[:2],.v.p=(int*)7};\n"
-                "static struct V v=u.v; return v.count==2&&v.p==(int*)7;\n"),
+                "static struct V v=u.v; return v.count==0&&v.p==(int*)7;\n"),
             .exit_code = 1,
         },
         {
@@ -3807,9 +3807,9 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
-            "static union: later writes make a clipped relocation concrete", __LINE__,
+            "static union: member switch discards numeric storage and relocation", __LINE__,
             SVI("static int a; constexpr union U {struct A {unsigned long x; int* p;} a; struct B {unsigned x[3];} b;} u={.a={7,&a},.b.x[2]=9};\n"
-                "static struct B copy=u.b; return copy.x[0]==7&&copy.x[1]==0&&copy.x[2]==9;\n"),
+                "static struct B copy=u.b; return copy.x[0]==0&&copy.x[1]==0&&copy.x[2]==9;\n"),
             .exit_code = 1,
         },
         {
@@ -3856,11 +3856,11 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
-            "union initializer: masked reads preserve remaining numeric bits", __LINE__,
+            "union initializer: member switch zeros omitted bitfields", __LINE__,
             SVI("constexpr union U {unsigned long raw; struct B {unsigned a:3,b:5;} bits;} u={.raw=255,.bits.a=2};\n"
-                "_Static_assert(u.bits.a==2&&u.bits.b==31); static unsigned b=u.bits.b;\n"
+                "_Static_assert(u.bits.a==2&&u.bits.b==0); static unsigned b=u.bits.b;\n"
                 "volatile unsigned v=255; union U local={.raw=v,.bits.a=2};\n"
-                "return b==31&&local.bits.a==2&&local.bits.b==31;\n"),
+                "return b==0&&local.bits.a==2&&local.bits.b==0;\n"),
             .exit_code = 1,
         },
         {
@@ -3886,9 +3886,9 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
-            "union initializer: partial numeric overwrite forms a pointer", __LINE__,
-            SVI("constexpr union U {int* p; unsigned long bits; unsigned bit:1;} u={.bits=6,.bit=1};\n"
-                "_Static_assert(u.p==(int*)7); static int* p=u.p; return p==(int*)7;\n"),
+            "union initializer: same member preserves adjacent bitfields", __LINE__,
+            SVI("constexpr union U {unsigned raw; struct B {unsigned a:1,b:3;} bits;} u={.bits.b=3,.bits.a=1};\n"
+                "_Static_assert(u.bits.a==1&&u.bits.b==3); static union U copy=u; return copy.bits.a==1&&copy.bits.b==3;\n"),
             .exit_code = 1,
         },
         {
@@ -3906,10 +3906,305 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "union initializer: discarded relocations permit static numeric views", __LINE__,
+            SVI("static int target; constexpr union U {int* p; double d; unsigned long bits; unsigned bit:1;} u={.p=&target,.bit=1};\n"
+                "static double d=u.d; static int* p=u.p; static unsigned long bits=u.bits;\n"
+                "return d!=0&&p==(int*)1&&bits==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "union initializer: discarded numeric pointer and slice do not supply bits", __LINE__,
+            SVI("constexpr union U {int* p; unsigned bit:1;} u={.p=(int*)6,.bit=1};\n"
+                "_Static_assert(u.p==(int*)1);\n"
+                "constexpr union V {int s[:]; struct B {__SIZE_TYPE__ count; unsigned bit:1;} b; struct P {__SIZE_TYPE__ count; int* p;} p;} v={.s=((int*)6)[:2],.b.bit=1};\n"
+                "static struct P copy=v.p;return copy.count==0&&copy.p==(int*)1;\n"),
+            .exit_code = 1,
+        },
+        {
             "union initializer: final pointer replaces earlier relocation", __LINE__,
             SVI("static int a,b; constexpr union U {int* p; int* q;} u={.p=&a,.q=&b};\n"
                 "_Static_assert(u.p==&b); static union U copy=u; static int* p=u.p;\n"
                 "return copy.p==&b&&p==&b;\n"),
+            .exit_code = 1,
+        },
+#define INIT_INTS_32 "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31"
+#define INIT_REPEAT_8(x) x "," x "," x "," x "," x "," x "," x "," x
+#define INIT_REPEAT_32(x) INIT_REPEAT_8(x) "," INIT_REPEAT_8(x) "," INIT_REPEAT_8(x) "," INIT_REPEAT_8(x)
+        {
+            "integer initializer runs: byte batch boundaries and partial final batches", __LINE__,
+            SVI("#define R " INIT_INTS_32 "\n"
+                "int a[]={R,R};int b[]={R,R,99};int c[]={R,R,R,R};int d[]={R,R,R,R,99};\n"
+                "int calls;int one(void){calls++;return 1;}int e[]={R,R+one()};\n"
+                "unsigned long long u[]={R,99};unsigned char v[]={R,R,R,R,R,R,R,R,99};\n"
+                "for(int i=0;i<64;i++)if(a[i]!=i%32||b[i]!=i%32||e[i]!=i%32+(i==63))return 0;\n"
+                "for(int i=0;i<128;i++)if(c[i]!=i%32||d[i]!=i%32)return 0;\n"
+                "for(int i=0;i<32;i++)if(u[i]!=i)return 0;\n"
+                "for(int i=0;i<256;i++)if(v[i]!=i%32)return 0;\n"
+                "return b[64]==99&&d[128]==99&&u[32]==99&&v[256]==99&&calls==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "integer initializer runs: constexpr, static storage, addresses and runtime copies", __LINE__,
+            SVI("#define R " INIT_INTS_32 "\n"
+                "constexpr int a[]={R};_Static_assert(sizeof(a)==32*sizeof(int)&&a[0]==0&&a[31]==31);\n"
+                "static int s[]={R};static const int* p=&a[17];\n"
+                "int f(int n){int b[]={R};b[0]=n;return b[0]+b[31];}\n"
+                "return s[0]==0&&s[31]==31&&*p==17&&f(7)==38&&f(9)==40;\n"),
+            .exit_code = 1,
+        },
+        {
+            "integer initializer runs: narrowing, bool conversion and target integer widths", __LINE__,
+            SVI("signed char c[]={" INIT_REPEAT_8("0,255,256,257") "};\n"
+                "unsigned short s[]={" INIT_REPEAT_8("0,65535,65536,65537") "};\n"
+                "_Bool b[]={" INIT_REPEAT_8("0,256,4294967296ULL,0") "};\n"
+                "unsigned long long u[]={" INIT_REPEAT_8("0xffffffffL,0xffffffffffffffffULL,0U,1ULL") "};\n"
+                "long l[]={" INIT_REPEAT_32("0xffffffffffffffffULL") "};\n"
+                "long long chars[]={" INIT_REPEAT_32("'\\xff'") "};long long expected='\\xff';\n"
+                "for(int i=0;i<32;i+=4){if(c[i]!=0||c[i+1]!=-1||c[i+2]!=0||c[i+3]!=1)return 0;"
+                "if(s[i]!=0||s[i+1]!=65535||s[i+2]!=0||s[i+3]!=1)return 0;"
+                "if(b[i]||!b[i+1]||!b[i+2]||b[i+3])return 0;"
+                "if(u[i]!=0xffffffffULL||u[i+1]!=~0ULL||u[i+2]!=0||u[i+3]!=1)return 0;}"
+                "for(int i=0;i<32;i++)if(l[i]!=-1||chars[i]!=expected)return 0;return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "integer initializer runs: dynamic expressions split runs without losing effects", __LINE__,
+            SVI("#define R " INIT_INTS_32 "\n"
+                "int calls;int next(void){return ++calls;}"
+                "int f(void){calls=0;int a[]={R,1+next(),R,next(),77};"
+                "return sizeof(a)==67*sizeof(int)&&a[31]==31&&a[32]==2&&a[33]==0"
+                "&&a[64]==31&&a[65]==2&&a[66]==77&&calls==2;}return f()&&f();\n"),
+            .exit_code = 1,
+        },
+        {
+            "integer initializer runs: short probe and nonliteral suffix restore tokens", __LINE__,
+            SVI("int calls;int next(void){calls++;return 1;}\n"
+                "int a[]={0,1,2,3+next()};\n"
+                "int exact[]={0,1,2,3};int above[]={0,1,2,3,4};\n"
+                "int b[]={" INIT_INTS_32 ",-1,+2,(3),1?4:next()};\n"
+                "return sizeof(a)==4*sizeof(int)&&a[2]==2&&a[3]==4&&calls==1"
+                "&&sizeof(exact)==4*sizeof(int)&&exact[3]==3&&sizeof(above)==5*sizeof(int)&&above[4]==4"
+                "&&sizeof(b)==36*sizeof(int)&&b[31]==31&&b[32]==-1&&b[33]==2&&b[34]==3&&b[35]==4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "integer initializer runs: probing does not repeat macro expansion", __LINE__,
+            SVI("#define C4 __COUNTER__,__COUNTER__,__COUNTER__,__COUNTER__\n"
+                "#define C32 C4,C4,C4,C4,C4,C4,C4,C4\n"
+                "int a[]={C32};int following=__COUNTER__;int b[]={__COUNTER__,__COUNTER__,__COUNTER__,7+__COUNTER__};int last=__COUNTER__;\n"
+                "return a[0]==0&&a[31]==31&&following==32&&b[0]==33&&b[2]==35&&b[3]==43&&last==37;\n"),
+            .exit_code = 1,
+        },
+        {
+            "integer initializer runs: brace elision stops at subarray boundaries", __LINE__,
+            SVI("#define R " INIT_INTS_32 "\n"
+                "int a[2][64]={R,R,R,R};struct H {int a[64];int tail;} h={R,R,99};\n"
+                "int sparse[70]={[4]=9,R,[5]=17,[36]=44};\n"
+                "return a[0][0]==0&&a[0][31]==31&&a[0][32]==0&&a[0][63]==31"
+                "&&a[1][0]==0&&a[1][63]==31&&h.a[63]==31&&h.tail==99"
+                "&&sparse[4]==9&&sparse[5]==17&&sparse[6]==1&&sparse[35]==30&&sparse[36]==44&&sparse[37]==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "integer initializer runs: element, whole array and union member overrides", __LINE__,
+            SVI("#define R " INIT_INTS_32 "\n"
+                "constexpr int a[]={R,[0]=99,[16]=88,[31]=77};\n"
+                "_Static_assert(sizeof(a)==32*sizeof(int)&&a[0]==99&&a[15]==15&&a[16]==88&&a[30]==30&&a[31]==77);\n"
+                "constexpr union U {int a[32];struct S {int a,b;} s;} u={.a={R},.s.b=3};\n"
+                "_Static_assert(u.s.a==0&&u.s.b==3);\n"
+                "constexpr struct H {int a[32];} h={.a={R},.a={1}};\n"
+                "_Static_assert(h.a[0]==1&&h.a[31]==0);static int middle=a[15];return middle==15;\n"),
+            .exit_code = 1,
+        },
+        {
+            "integer initializer runs: volatile, atomic, floating and wide types use normal parsing", __LINE__,
+            SVI("#define R " INIT_INTS_32 "\n"
+                "volatile int v[]={R};_Atomic int a[]={R};double d[]={R};__int128 wide[]={R};\n"
+                "unsigned long long truncated[]={" INIT_REPEAT_32("0x10000000000000000ULLL") "};\n"
+                "for(int i=0;i<32;i++)if(v[i]!=i||a[i]!=i||d[i]!=i||wide[i]!=i||truncated[i]!=0)return 0;return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "integer initializer runs: packed embed tokens separate typed runs", __LINE__,
+            SVI("#define R " INIT_INTS_32 "\n"
+                "int a[]={R,_Embed(\"\\\"embed.bin\\\" limit(3)\"),R};\n"
+                "return sizeof(a)==67*sizeof(int)&&a[31]==31&&a[32]==1&&a[33]==2&&a[34]==3&&a[35]==0&&a[66]==31;\n"),
+            .exit_code = 1, .embed_files = 1,
+        },
+#undef INIT_REPEAT_32
+#undef INIT_REPEAT_8
+#undef INIT_INTS_32
+        // Keep the evaluation modes separate: a failed constant assertion must
+        // not prevent the runtime and static-storage regressions from running.
+        // v is volatile in dynamic cases so their initializer cannot be folded.
+#define INIT_OVERRIDE_CASE(name, decl, type, init, check) \
+        {"initializer override: " name " / constexpr", __LINE__, \
+            SVI("static int target; " decl " constexpr int v=7; constexpr " type " u=" init ";" \
+                "_Static_assert(" check "); return 1;"), .exit_code=1}, \
+        {"initializer override: " name " / static", __LINE__, \
+            SVI("static int target; " decl " constexpr int v=7; static " type " u=" init ";" \
+                "return " check ";"), .exit_code=1}, \
+        {"initializer override: " name " / constant local", __LINE__, \
+            SVI("static int target; " decl " int f(void){constexpr int v=7; " type " u=" init ";" \
+                "return " check ";} return f()&&f();"), .exit_code=1}, \
+        {"initializer override: " name " / dynamic local", __LINE__, \
+            SVI("static int target; " decl " int f(void){volatile int v=7; " type " u=" init ";" \
+                "return " check ";} return f()&&f();"), .exit_code=1}, \
+        {"initializer override: " name " / compound literal", __LINE__, \
+            SVI("static int target; " decl " int f(void){volatile int v=7; " type " u=(" type ")" init ";" \
+                "return " check ";} return f()&&f();"), .exit_code=1}, \
+        {"initializer override: " name " / constexpr copy", __LINE__, \
+            SVI("static int target; " decl " constexpr int v=7; constexpr " type " source=" init ";" \
+                "static " type " u=source; return " check ";"), .exit_code=1}, \
+        {"initializer override: " name " / folded static scalar", __LINE__, \
+            SVI("static int target; " decl " constexpr int v=7; constexpr " type " u=" init ";" \
+                "static int ok=(" check "); return ok;"), .exit_code=1}
+        INIT_OVERRIDE_CASE("scalar to struct",
+            "union U {int x; struct S {int a,b;} s;};", "union U",
+            "{.x=v,.s.b=3}", "u.s.a==0&&u.s.b==3"),
+        INIT_OVERRIDE_CASE("positional to struct",
+            "union U {int x; struct S {int a,b;} s;};", "union U",
+            "{v,.s.b=3}", "u.s.a==0&&u.s.b==3"),
+        INIT_OVERRIDE_CASE("switch back does not resurrect fields",
+            "union U {int x; struct S {int a,b;} s;};", "union U",
+            "{.s.a=v,.x=2,.s.b=3}", "u.s.a==0&&u.s.b==3"),
+        INIT_OVERRIDE_CASE("reused paths survive repeated subtree invalidation",
+            "union U {int x; struct S {int a,b;} s;};", "union U",
+            "{.s.a=v,.x=1,.s.a=2,.s.b=3,.x=4,.s.b=5}", "u.s.a==0&&u.s.b==5"),
+        INIT_OVERRIDE_CASE("merged brace group can be replaced and reopened",
+            "struct H {union U {int x; struct S {int a,b;} s;} q;};", "struct H",
+            "{.q={.s.a=v},.q.s.b=3,.q={.x=2},.q.s.a=5}", "u.q.s.a==5&&u.q.s.b==0"),
+        INIT_OVERRIDE_CASE("three member switches",
+            "union U {int x; struct S {int a,b;} s; int arr[3];};", "union U",
+            "{.s.a=v,.arr[2]=9,.x=2,.s.b=3}", "u.s.a==0&&u.s.b==3"),
+        INIT_OVERRIDE_CASE("same member repeated leaf retains siblings",
+            "union U {int x; struct S {int a,b;} s;};", "union U",
+            "{.s.a=v,.s.b=3,.s.a=5}", "u.s.a==5&&u.s.b==3"),
+        INIT_OVERRIDE_CASE("whole struct then leaf retains siblings",
+            "union U {int x; struct S {int a,b;} s;};", "union U",
+            "{.s={v,3},.s.b=5}", "u.s.a==7&&u.s.b==5"),
+        INIT_OVERRIDE_CASE("struct expression then leaf retains siblings",
+            // C17 6.7.9 example 12 / WG14 DR 413: implicit initialization
+            // does not erase explicit fields of the aggregate expression.
+            // GCC versions which discard that expression disagree with Clang.
+            "union U {int x; struct S {int a,b;} s;};", "union U",
+            "{.s=(struct S){v,3},.s.b=5}", "u.s.a==7&&u.s.b==5"),
+        INIT_OVERRIDE_CASE("leaf then whole struct resets siblings",
+            "union U {int x; struct S {int a,b;} s;};", "union U",
+            "{.s.a=v,.s={.b=3}}", "u.s.a==0&&u.s.b==3"),
+        INIT_OVERRIDE_CASE("empty braces replace populated member",
+            "union U {int x; struct S {int a,b;} s;};", "union U",
+            "{.s={v,3},.s={}}", "u.s.a==0&&u.s.b==0"),
+        INIT_OVERRIDE_CASE("empty member switch",
+            "union U {int x; struct S {int a,b;} s;};", "union U",
+            "{.x=v,.s={}}", "u.s.a==0&&u.s.b==0"),
+        INIT_OVERRIDE_CASE("array member switch preserves only new element",
+            "union U {int x[3]; int y[3];};", "union U",
+            "{.x={v,8,9},.y[2]=3}", "u.y[0]==0&&u.y[1]==0&&u.y[2]==3"),
+        INIT_OVERRIDE_CASE("same array member retains elements",
+            "union U {int x[3]; int y[3];};", "union U",
+            "{.x={v,8,9},.x[1]=3}", "u.x[0]==7&&u.x[1]==3&&u.x[2]==9"),
+        INIT_OVERRIDE_CASE("nested union switch preserves outer siblings",
+            "struct H {int before; union U {int x; struct S {int a,b;} s;} q; int after;};", "struct H",
+            "{.before=11,.q.x=v,.after=13,.q.s.b=3}",
+            "u.before==11&&u.q.s.a==0&&u.q.s.b==3&&u.after==13"),
+        INIT_OVERRIDE_CASE("separate array elements track independent members",
+            "struct H {union U {int x; struct S {int a,b;} s;} q[2];};", "struct H",
+            "{.q[0].s.a=v,.q[1].s.a=8,.q[0].x=2,.q[0].s.b=3}",
+            "u.q[0].s.a==0&&u.q[0].s.b==3&&u.q[1].s.a==8&&u.q[1].s.b==0"),
+        INIT_OVERRIDE_CASE("anonymous union and struct paths",
+            "struct H {int guard; union {int x; struct {int a,b;};};};", "struct H",
+            "{.guard=11,.x=v,.b=3}", "u.guard==11&&u.a==0&&u.b==3"),
+        INIT_OVERRIDE_CASE("inner union switch preserves selected outer member",
+            "union U {int raw; struct S {int guard; union V {int x; struct T {int a,b;} t;} q;} s;};", "union U",
+            "{.s.guard=11,.s.q.x=v,.s.q.t.b=3}",
+            "u.s.guard==11&&u.s.q.t.a==0&&u.s.q.t.b==3"),
+        INIT_OVERRIDE_CASE("outer union switch invalidates nested state",
+            "union U {int raw; struct S {int guard; union V {int x; struct T {int a,b;} t;} q;} s;};", "union U",
+            "{.s.guard=11,.s.q.t.a=v,.raw=2,.s.q.t.b=3}",
+            "u.s.guard==0&&u.s.q.t.a==0&&u.s.q.t.b==3"),
+        INIT_OVERRIDE_CASE("brace boundary then nested member switch",
+            "struct H {union U {int x; struct S {int a,b;} s;} q; int guard;};", "struct H",
+            "{.q={.x=v},.guard=11,.q.s.b=3}",
+            "u.q.s.a==0&&u.q.s.b==3&&u.guard==11"),
+        INIT_OVERRIDE_CASE("containing braced initializer partly survives nested union switch",
+            "struct H {struct P {int guard; union U {int x; struct S {int a,b;} s;} q;} p;};", "struct H",
+            "{.p={.guard=11,.q.x=v},.p.q.s.b=3}",
+            "u.p.guard==11&&u.p.q.s.a==0&&u.p.q.s.b==3"),
+        INIT_OVERRIDE_CASE("common initial sequence does not preserve old member",
+            "union U {struct A {int a,b;} x; struct B {int a,b;} y;};", "union U",
+            "{.x={v,8},.y.b=3}", "u.y.a==0&&u.y.b==3"),
+        INIT_OVERRIDE_CASE("bitfield switch resets omitted named bits",
+            "union U {unsigned raw; struct S {unsigned a:3,b:5;} bits;};", "union U",
+            "{.raw=v,.bits.b=3}", "u.bits.a==0&&u.bits.b==3"),
+        INIT_OVERRIDE_CASE("same member bitfield overrides retain adjacent bits",
+            "union U {unsigned raw; struct S {unsigned a:3,b:5;} bits;};", "union U",
+            "{.bits.a=v,.bits.b=17,.bits.a=2}", "u.bits.a==2&&u.bits.b==17"),
+        INIT_OVERRIDE_CASE("relocation discarded when selecting struct",
+            "union U {int* p; struct S {int* p; int n;} s;};", "union U",
+            "{.p=&target,.s.n=v}", "u.s.p==0&&u.s.n==7"),
+        INIT_OVERRIDE_CASE("nested braces discard opaque defaults on member switch",
+            "struct H {union U {int* p; struct S {unsigned a,b;} s;} q;};", "struct H",
+            "{.q={.p=&target},.q.s.b=v}", "u.q.s.a==0&&u.q.s.b==7"),
+        INIT_OVERRIDE_CASE("omitted nested union adopts later member defaults",
+            "struct H {struct P {int guard; union U {int* p; struct S {unsigned a,b;} s;} q;} p;};", "struct H",
+            "{.p={.guard=11},.p.q.s.b=v}", "u.p.guard==11&&u.p.q.s.a==0&&u.p.q.s.b==7"),
+        INIT_OVERRIDE_CASE("same member retains relocation under partial override",
+            "union U {int raw; struct S {int* p; int n;} s;};", "union U",
+            "{.s={&target,v},.s.n=3}", "u.s.p==&target&&u.s.n==3"),
+        INIT_OVERRIDE_CASE("deep path member switch",
+            "struct H {struct A {struct B {struct C {struct D {union U {int x; struct S {int a,b;} s;} q;} d;} c;} b;} a;};", "struct H",
+            "{.a.b.c.d.q.x=v,.a.b.c.d.q.s.b=3}", "u.a.b.c.d.q.s.a==0&&u.a.b.c.d.q.s.b==3"),
+        INIT_OVERRIDE_CASE("mixed template preserves unrelated constants",
+            "struct H {int a[6]; union U {int x; struct S {int a,b;} s;} q; int tail;};", "struct H",
+            "{.a={1,2,3,4,5,6},.q.x=v,.tail=11,.q.s.b=v}",
+            "u.a[0]==1&&u.a[5]==6&&u.q.s.a==0&&u.q.s.b==7&&u.tail==11"),
+        INIT_OVERRIDE_CASE("plain struct repeated field preserves siblings",
+            "struct S {int a,b;};", "struct S",
+            "{.a=v,.b=3,.a=5}", "u.a==5&&u.b==3"),
+        INIT_OVERRIDE_CASE("array element override retains other explicit elements",
+            "struct S {int a[3]; int guard;};", "struct S",
+            "{.a={v,8,9},.guard=11,.a[1]=3}", "u.a[0]==7&&u.a[1]==3&&u.a[2]==9&&u.guard==11"),
+        INIT_OVERRIDE_CASE("whole array replacement zeros omitted elements",
+            "struct S {int a[3]; int guard;};", "struct S",
+            "{.a={v,8,9},.guard=11,.a={3}}", "u.a[0]==3&&u.a[1]==0&&u.a[2]==0&&u.guard==11"),
+#undef INIT_OVERRIDE_CASE
+        {
+            "initializer override: reverse array paths grow the index and survive union switches", __LINE__,
+            SVI("#define E(i) .u.a[i]=(i)+1,\n"
+                "#define B(i) E((i)+3) E((i)+2) E((i)+1) E(i)\n"
+                "#define C(i) B((i)+12) B((i)+8) B((i)+4) B(i)\n"
+                "#define D(i) C((i)+48) C((i)+32) C((i)+16) C(i)\n"
+                "#define F(i) D((i)+192) D((i)+128) D((i)+64) D(i)\n"
+                "struct H {union U {int raw;int a[256];} u;};\n"
+                "constexpr struct H h={.u={},F(0) .u.a[0]=7}; static struct H copy=h;\n"
+                "volatile int v=5;struct H local={.u={},F(0) .u.raw=v,.u.a[255]=3};\n"
+                "for(int i=0;i<256;i++){if(copy.u.a[i]!=(i?i+1:7))return 0;"
+                "if(local.u.a[i]!=(i==255?3:0))return 0;}return 1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "initializer override: discarded side effects optional, surviving effects exactly once", __LINE__,
+            SVI("int dropped,kept; int old(void){dropped++;return 7;} int next(void){kept++;return 3;}\n"
+                "union U {int x; struct S {int a,b;} s;};\n"
+                "int f(void){union U u={.x=old(),.s.b=next()}; return u.s.a==0&&u.s.b==3;}\n"
+                "int ok=f()&&f(); return ok&&kept==2&&dropped>=0&&dropped<=2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "initializer override: same member overwritten leaf side effects optional", __LINE__,
+            SVI("int dropped,kept; int old(void){dropped++;return 7;} int next(void){kept++;return 3;}\n"
+                "union U {int x; struct S {int a,b;} s;};\n"
+                "int f(void){union U u={.s.a=old(),.s.b=next(),.s.a=5};return u.s.a==5&&u.s.b==3;}\n"
+                "int ok=f()&&f();return ok&&kept==2&&dropped>=0&&dropped<=2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "initializer override: partially retained aggregate expression runs once", __LINE__,
+            SVI("int calls; struct S {int a,b;}; struct S make(void){calls++;return (struct S){7,8};}\n"
+                "union U {int x; struct S s;};\n"
+                "int f(void){union U u={.s=make(),.s.b=3};return u.s.a==7&&u.s.b==3;}\n"
+                "return f()&&f()&&calls==2;\n"),
             .exit_code = 1,
         },
         {
@@ -17974,9 +18269,25 @@ TestFunction(test_interpreter){
             .embed_files = 1,
         },
         {
+            "integer initializer runs preserve lookahead and aggregate boundaries", __LINE__,
+            SVI("int x=10;"
+                "int short_run[]={1,2,3};"
+                "int expression[]={1,2,3,4+x,5};"
+                "int extended[]={1,2,3,4,5+x,6};"
+                "int rows[2][4]={1,2,3,4,5,6,7,8};"
+                "struct S{int a[4];int tail;} s={1,2,3,4,9};"
+                "constexpr int trailing[]={1,2,3,4,};"
+                "constexpr bool bits[]={0,2,0,4,5};"
+                "static_assert(trailing[3]==4 && !bits[0] && bits[1] && !bits[2] && bits[4]);"
+                "return sizeof(short_run)==3*sizeof(int) && short_run[2]==3 && "
+                "expression[3]==14 && expression[4]==5 && extended[4]==15 && extended[5]==6 && "
+                "rows[0][3]==4 && rows[1][0]==5 && rows[1][3]==8 && s.a[3]==4 && s.tail==9;"),
+            .exit_code=1,
+        },
+        {
             "embed: blob overrides, constexpr reads, nested arrays and conversions", __LINE__,
-            SVI("constexpr unsigned char a[]={_Embed(\"\\\"embed.bin\\\"\"),[3]=99};"
-                "static_assert(sizeof(a)==8 && a[2]==3 && a[3]==99 && a[4]==255);"
+            SVI("constexpr unsigned char a[]={_Embed(\"\\\"embed.bin\\\"\"),[0]=42,[3]=99};"
+                "static_assert(sizeof(a)==8 && a[0]==42 && a[2]==3 && a[3]==99 && a[4]==255);"
                 "unsigned char b[2][4]={_Embed(\"\\\"embed.bin\\\"\")};"
                 "double d[]={_Embed(\"\\\"embed.bin\\\"\")};"
                 "bool bits[]={_Embed(\"\\\"embed.bin\\\"\")};"

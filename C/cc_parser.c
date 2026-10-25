@@ -253,11 +253,51 @@ typedef struct CcStaticCase CcStaticCase;
 struct CcStaticCase { CiUint128 value, high; SrcLoc loc; _Bool empty; };
 #define MARRAY_T CcStaticCase
 #include "../Drp/Marray.h"
+typedef struct CcInitWorkEntry CcInitWorkEntry;
+struct CcInitWorkEntry {
+    CcInitEntry init;
+    uint32_t nested, next_blob;
+};
+#define MARRAY_T CcInitWorkEntry
+#include "../Drp/Marray.h"
+
+typedef struct CcInitWorkList CcInitWorkList;
+struct CcInitWorkList {
+    Marray(CcInitWorkEntry) entries;
+    SrcLoc loc;
+    CcQualType type;
+    uint32_t root;
+};
+#define MARRAY_T CcInitWorkList
+#include "../Drp/Marray.h"
+
+typedef struct CcInitPathNode CcInitPathNode;
+struct CcInitPathNode {
+    PointerMap children;
+    uint32_t index, child, next, slot, blobs;
+    _Bool active;
+};
+#define MARRAY_T CcInitPathNode
+#include "../Drp/Marray.h"
+
+typedef struct CcInitIndex CcInitIndex;
+struct CcInitIndex {
+    CcParser*_Nonnull parser;
+    Marray(CcInitWorkList) lists;
+    Marray(CcInitPathNode) nodes;
+};
+
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
 
-static int cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, SrcLoc loc, Marray(CcInitEntry)* buf, uint32_t*_Nullable out_max_index, CcExpr*_Nullable first_value, Marray(uint32_t)* path);
+typedef struct CcInitBuilder CcInitBuilder;
+struct CcInitBuilder {
+    Marray(CcInitEntry) entries;
+    _Bool may_override;
+};
+
+static int cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, SrcLoc loc, CcInitBuilder* buf, uint32_t*_Nullable out_max_index, CcExpr*_Nullable first_value, Marray(uint32_t)* path);
 
 typedef struct CcSpecifier CcSpecifier;
 struct CcSpecifier {
@@ -1356,7 +1396,7 @@ cc_lookup_external_entity(CcParser *p, Atom name, _Bool explicit_extern, CcSymbo
         return 1;
     }
     CcSymbol *entry = AM_get(&p->module->hidden_externs, name);
-    if(entry && !cc_symbol_has_linkage(entry)) 
+    if(entry && !cc_symbol_has_linkage(entry))
         entry = NULL;
     if(explicit_extern && !entry)
         entry = AM_get(&p->extern_symbols, name);
@@ -1777,6 +1817,16 @@ cc_sizeof_as_expr(CcParser* p, CcQualType t, SrcLoc loc, CcExpr* _Nullable* _Non
             return cc_type_error(p, loc, t, "sizeof applied to function type");
     }
     cc_unsafe_unreachable();
+}
+
+static
+int
+cc_expr_sizeof_as_uint(CcParser* p, const CcExpr* e, uint32_t* out){
+    if(e->kind == CC_EXPR_BLOB){
+        *out = (uint32_t)e->blob.n_bytes;
+        return 0;
+    }
+    return cc_sizeof_as_uint(p, e->type, e->loc, out);
 }
 
 static
@@ -10445,7 +10495,7 @@ cc_find_field_index(CcParser* p, CcField*_Nullable fields, uint32_t count, Atom 
     }
     uint32_t first = cc_field_path_component(member, 0);
     for(uint32_t i = 0, n = cc_field_path_count(member); i < n; i++){
-        if(ma_push(uint32_t)(path, cc_allocator(p), cc_field_path_component(member, i))){
+        if(ma_push(uint32_t)(path, cc_scratch_allocator(p), cc_field_path_component(member, i))){
             err = CC_OOM_ERROR;
             break;
         }
@@ -10499,7 +10549,7 @@ cc_lookup_field_offset(CcParser* p, CcQualType type, Atom name, uint64_t* out_of
 
 static
 int
-cc_push_scalar(CcParser* p, CcExpr* value, CcQualType target, Marray(CcInitEntry)* buf, Marray(uint32_t)* path){
+cc_push_scalar(CcParser* p, CcExpr* value, CcQualType target, CcInitBuilder* buf, Marray(uint32_t)* path){
     if(ccqt_array_incomplete(target)){
         if((value->kind == CC_EXPR_INIT_LIST || value->kind == CC_EXPR_COMPOUND_LITERAL) && !value->init_list->count){
             cc_release_expr(p, value);
@@ -10516,7 +10566,7 @@ cc_push_scalar(CcParser* p, CcExpr* value, CcQualType target, Marray(CcInitEntry
         cc_release_expr(p, casted);
         return CC_OOM_ERROR;
     }
-    err = ma_push(CcInitEntry)(buf, cc_allocator(p), entry);
+    err = ma_push(CcInitEntry)(&buf->entries, cc_scratch_allocator(p), entry);
     if(err){
         cc_field_path_free(cc_allocator(p), entry.path);
         cc_release_expr(p, casted);
@@ -10635,7 +10685,7 @@ cc_parse_desig_tail(CcParser* p, CcParseFlags flags, CcQualType* sub, Marray(uin
             if(idx_signed < 0 || idx_signed > UINT32_MAX)
                 return cc_error(p, peek.loc, "array designator value out of range");
             uint32_t idx = (uint32_t)idx_signed;
-            if(ma_push(uint32_t)(path, cc_allocator(p), idx)) return CC_OOM_ERROR;
+            if(ma_push(uint32_t)(path, cc_scratch_allocator(p), idx)) return CC_OOM_ERROR;
             err = cc_expect_punct(p, CC_rbracket);
             if(err) return err;
             if(!a->is_incomplete && idx >= a->length)
@@ -10652,7 +10702,7 @@ cc_parse_desig_tail(CcParser* p, CcParseFlags flags, CcQualType* sub, Marray(uin
 
 static
 int
-cc_init_apply_value(CcParser* p, CcParseFlags flags, CcQualType field_type, CcExpr* value, SrcLoc loc, Marray(CcInitEntry)* buf, Marray(uint32_t)* path){
+cc_init_apply_value(CcParser* p, CcParseFlags flags, CcQualType field_type, CcExpr* value, SrcLoc loc, CcInitBuilder* buf, Marray(uint32_t)* path){
     if(value->kind == CC_EXPR_COMPOUND_LITERAL)
         value->kind = CC_EXPR_INIT_LIST;
     CcQualType unqual = {.unqual=field_type.unqual};
@@ -10678,7 +10728,8 @@ cc_check_string_array(CcParser* p, CcQualType target_type, CcExpr* value){
 
 static
 int
-cc_parse_init_value(CcParser* p, CcParseFlags flags, CcQualType field_type, _Bool positional, SrcLoc loc, Marray(CcInitEntry)* buf, Marray(uint32_t)* path){
+cc_parse_init_value(CcParser* p, CcParseFlags flags, CcQualType field_type, _Bool positional, SrcLoc loc, CcInitBuilder* buf, Marray(uint32_t)* path){
+    if(!positional && buf->entries.count) buf->may_override = 1;
     int err;
     CcTypeKind ftk = ccqt_kind(field_type);
     if(ftk == CC_STRUCT || ftk == CC_UNION || ftk == CC_ARRAY || ftk == CC_VECTOR){
@@ -10762,7 +10813,7 @@ cc_is_parent_token(CcParser* p, _Bool* out){
 
 static
 int
-cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, SrcLoc loc, Marray(CcInitEntry)* buf, uint32_t*_Nullable out_max_index, CcExpr*_Nullable first_value, Marray(uint32_t)* path){
+cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, SrcLoc loc, CcInitBuilder* buf, uint32_t*_Nullable out_max_index, CcExpr*_Nullable first_value, Marray(uint32_t)* path){
     CcParseFlags constexpr_flags = flags;
     constexpr_flags.vc = CC_CONSTEXPR_VALUE;
     constexpr_flags.unevaluated = 1;
@@ -10800,7 +10851,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                     fi++;
                 if(fi >= s->field_count) break;
                 CcField* fld = &s->fields[fi];
-                if(ma_push(uint32_t)(path, cc_allocator(p), fi)) return CC_OOM_ERROR;
+                if(ma_push(uint32_t)(path, cc_scratch_allocator(p), fi)) return CC_OOM_ERROR;
                 err = cc_init_apply_value(p, flags, fld->type, fv, loc, buf, path);
                 if(err) return err;
                 first_value = NULL;
@@ -10870,7 +10921,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                 break;
             }
             CcField* fld = &s->fields[fi];
-            if(ma_push(uint32_t)(path, cc_allocator(p), fi)) return CC_OOM_ERROR;
+            if(ma_push(uint32_t)(path, cc_scratch_allocator(p), fi)) return CC_OOM_ERROR;
             err = cc_parse_init_value(p, flags, fld->type, 1, loc, buf, path);
             if(err) return err;
             fi++;
@@ -10960,7 +11011,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
         }
         if(!field)
             return cc_error(p, loc, "initializer for empty union");
-        if(ma_push(uint32_t)(path, cc_allocator(p), (uint32_t)(field - u->fields))) return CC_OOM_ERROR;
+        if(ma_push(uint32_t)(path, cc_scratch_allocator(p), (uint32_t)(field - u->fields))) return CC_OOM_ERROR;
         if(first_value){
             CcExpr* fv = first_value;
             first_value = NULL;
@@ -11017,7 +11068,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
             CcExpr* v;
             err = cc_parse_scalar_value(p, flags, elem, &v);
             if(err) return err;
-            if(ma_push(uint32_t)(path, cc_allocator(p), ai)) return CC_OOM_ERROR;
+            if(ma_push(uint32_t)(path, cc_scratch_allocator(p), ai)) return CC_OOM_ERROR;
             err = cc_push_scalar(p, v, elem, buf, path);
             if(err) return err;
             ai++;
@@ -11047,7 +11098,8 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
             err = cc_sizeof_as_uint(p, unqual, loc, &size);
             if(err) return err;
         }
-        uint32_t ai = 0, max_ai = 0;
+        uint32_t ai = 0, max_ai = 0, literal_skip = 0;
+        _Bool literal_runs = ccqt_kind(elem) == CC_BASIC && ccqt_is_integer(elem) && elem_size <= 8 && !elem.is_atomic && !elem.is_volatile;
         for(;;){
             path->count = path_depth;
             if(!first_value && (arr->is_incomplete || ai < arr->length)){
@@ -11061,17 +11113,16 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                     uint32_t next, size;
                     if(add_overflow(ai, n, &next) || mul_overflow(elem_size, next, &size))
                         return cc_error(p, packed.loc, "object size exceeds 32-bit layout limit");
-                    CcArray* type = cc_intern_array(&p->type_cache, cc_allocator(p), elem, n, 0);
-                    if(!type) return CC_OOM_ERROR;
-                    CcExpr* blob = cc_make_expr(p, CC_EXPR_BLOB, packed.loc, (CcQualType){.bits=(uintptr_t)type}, 0);
+                    CcExpr* blob = cc_make_expr(p, CC_EXPR_BLOB, packed.loc, elem, 0);
                     if(!blob) return CC_OOM_ERROR;
-                    blob->blob = (ByteView){.n_bytes=n, .buff=packed.embed.bytes.buff};
+                    blob->blob = (ByteView){.buff=packed.embed.bytes.buff, .n_bytes=n};
+                    blob->blob_info.count = n;
                     CcInitEntry entry = {.value=blob};
-                    err = ma_push(uint32_t)(path, cc_allocator(p), ai);
+                    err = ma_push(uint32_t)(path, cc_scratch_allocator(p), ai);
                     if(err) goto blob_cleanup;
                     err = cc_field_path_make(cc_allocator(p), path->data, (uint32_t)path->count, &entry.path);
                     if(err) goto blob_cleanup;
-                    err = ma_push(CcInitEntry)(buf, cc_allocator(p), entry);
+                    err = ma_push(CcInitEntry)(&buf->entries, cc_scratch_allocator(p), entry);
                     if(err) goto blob_cleanup;
                     if(n < packed.embed.bytes.n_bytes){
                         packed.embed.bytes.buff = (const unsigned char*)packed.embed.bytes.buff + n; packed.embed.bytes.n_bytes -= n;
@@ -11098,13 +11149,178 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                     cc_release_expr(p, blob);
                     return CC_OOM_ERROR;
                 }
-                err = cc_unget(p, &packed);
-                if(err) return err;
+                uint32_t limit = !literal_runs ? 0 : arr->is_incomplete ? UINT32_MAX / elem_size - ai : (uint32_t)(arr->length - ai);
+                enum { CC_INIT_LITERAL_MIN = 4 };
+                if(literal_runs
+                && !literal_skip
+                && limit >= CC_INIT_LITERAL_MIN
+                && packed.type == CC_CONSTANT
+                && !packed.constant.is_imaginary
+                && packed.constant.ctype <= CC_UNSIGNED_LONG_LONG){
+                    uint32_t count = 0;
+                    DRP_PROFILE_BEGIN(integer_run, "parser.initializer_integer_run");
+                    CcToken *probe = Allocator_alloc(cc_scratch_allocator(p), 2*CC_INIT_LITERAL_MIN, sizeof *probe, _Alignof(CcToken));
+                    if(!probe) return CC_OOM_ERROR;
+                    ByteBuilder bb = {.allocator=allocator_from_arena(&p->cpp.synth_arena)};
+                    CcToken tok = packed;
+                    CcToken last_sep;
+                    _Bool closed = 0;
+                    _Bool is_bool = ccqt_is_bool(elem);
+                    err = 0;
+                    for(;;){
+                        CcToken sep;
+                        err = cc_next_token_packed(p, &sep);
+                        if(err) goto run_cleanup;
+                        if(sep.type != CC_PUNCTUATOR || (sep.punct.punct != ',' && sep.punct.punct != CC_rbrace)){
+                            err = cc_unget(p, &sep);
+                            if(err) goto run_cleanup;
+                            err = cc_unget(p, &tok);
+                            if(err) goto run_cleanup;
+                            break;
+                        }
+                        probe[2*count] = tok;
+                        probe[2*count + 1] = sep;
+                        count++;
+                        last_sep = sep;
+                        closed = sep.punct.punct == CC_rbrace;
+                        if(count == CC_INIT_LITERAL_MIN || closed)
+                            break;
+                        err = cc_next_token_packed(p, &tok);
+                        if(err) goto run_cleanup;
+                        if(tok.type != CC_CONSTANT || tok.constant.is_imaginary || tok.constant.ctype > CC_UNSIGNED_LONG_LONG){
+                            err = cc_unget(p, &tok);
+                            if(err) goto run_cleanup;
+                            break;
+                        }
+                    }
+                    if(count < CC_INIT_LITERAL_MIN){
+                        for(uint32_t i = 2*count; i--;){
+                            err = cc_unget(p, &probe[i]);
+                            if(err) goto run_cleanup;
+                        }
+                        literal_skip += count? count - 1 : 0;
+                        count = 0;
+                        goto run_cleanup;
+                    }
+                    err = bb_ensure_additional(&bb, 512);
+                    _Static_assert(8 * CC_INIT_LITERAL_MIN <= 512, "unchecked put bounds check");
+                    if(err){
+                        err = CC_OOM_ERROR;
+                        goto run_cleanup;
+                    }
+                    if(is_bool){
+                        for(uint32_t i = 0; i < 2*count; i += 2)
+                            bb_put_uint8_assume(&bb, probe[i].constant.uint64_value != 0);
+                    }
+                    else {
+                        switch(elem_size){
+                            case 1:
+                            for(uint32_t i = 0; i < 2*count; i += 2)
+                                bb_put_uint8_assume(&bb, probe[i].constant.uint8_value);
+                            break;
+                            case 2:
+                            for(uint32_t i = 0; i < 2*count; i += 2)
+                                bb_put_uint16_assume(&bb, probe[i].constant.uint16_value);
+                            break;
+                            case 4:
+                            for(uint32_t i = 0; i < 2*count; i += 2)
+                                bb_put_uint32_assume(&bb, probe[i].constant.uint32_value);
+                            break;
+                            case 8:
+                            for(uint32_t i = 0; i < 2*count; i += 2)
+                                bb_put_uint64_assume(&bb, probe[i].constant.uint64_value);
+                            break;
+                            DRP_CASES_EXHAUSTED;
+                        }
+                    }
+                    for(; !closed && count < limit; count++){
+                        err = cc_next_token_packed(p, &tok);
+                        if(err) goto run_cleanup;
+                        if(tok.type != CC_CONSTANT || tok.constant.is_imaginary || tok.constant.ctype > CC_UNSIGNED_LONG_LONG){
+                            err = cc_unget(p, &tok);
+                            if(err) goto run_cleanup;
+                            break;
+                        }
+                        CcToken sep;
+                        err = cc_next_token_packed(p, &sep);
+                        if(err) goto run_cleanup;
+                        if(sep.type != CC_PUNCTUATOR || (sep.punct.punct != ',' && sep.punct.punct != CC_rbrace)){
+                            err = cc_unget(p, &sep);
+                            if(err) goto run_cleanup;
+                            err = cc_unget(p, &tok);
+                            if(err) goto run_cleanup;
+                            break;
+                        }
+                        last_sep = sep;
+                        closed = sep.punct.punct == CC_rbrace;
+                        if(is_bool)
+                            bb_put_uint8(&bb, tok.constant.uint64_value != 0);
+                        else
+                            switch(elem_size){
+                                case 1: bb_put_uint8(&bb, tok.constant.uint8_value); break;
+                                case 2: bb_put_uint16(&bb, tok.constant.uint16_value); break;
+                                case 4: bb_put_uint32(&bb, tok.constant.uint32_value); break;
+                                case 8: bb_put_uint64(&bb, tok.constant.uint64_value); break;
+                                DRP_CASES_EXHAUSTED;
+                            }
+                    }
+                    if(bb.errored){
+                        err = CC_OOM_ERROR;
+                        goto run_cleanup;
+                    }
+                    // Leave the final delimiter for normal list handling.
+                    err = cc_unget(p, &last_sep);
+                    if(err) goto run_cleanup;
+                    CcExpr* blob = cc_make_expr(p, CC_EXPR_BLOB, packed.loc, elem, 0);
+                    if(!blob){
+                        err = CC_OOM_ERROR;
+                        goto run_cleanup;
+                    }
+                    ByteBuffer blob_data = bb_detach(&bb);
+                    blob->blob = (ByteView){.buff=blob_data.buff, .n_bytes=blob_data.n_bytes};
+                    blob->blob_info.count = count;
+                    CcInitEntry entry = {.value=blob};
+                    if(ma_push(uint32_t)(path, cc_scratch_allocator(p), ai)
+                    || cc_field_path_make(cc_allocator(p), path->data, (uint32_t)path->count, &entry.path)
+                    || ma_push(CcInitEntry)(&buf->entries, cc_scratch_allocator(p), entry)){
+                        cc_field_path_free(cc_allocator(p), entry.path);
+                        cc_release_expr(p, blob);
+                        err = CC_OOM_ERROR;
+                        goto run_cleanup;
+                    }
+                    run_cleanup:
+                    Allocator_free(cc_scratch_allocator(p), probe, 2*CC_INIT_LITERAL_MIN, sizeof *probe, _Alignof(CcToken));
+                    bb_destroy(&bb);
+                    if(err) return err;
+                    DRP_PROFILE_END(integer_run);
+                    if(count){
+                        ai += count;
+                        if(ai > max_ai) max_ai = ai;
+                        if(braced){
+                            err = cc_init_list_comma(p);
+                            if(err) return err;
+                        }
+                        else {
+                            if(!arr->is_incomplete && ai >= arr->length) break;
+                            CcToken comma;
+                            err = cc_peek(p, &comma);
+                            if(err) return err;
+                            if(comma.type != CC_PUNCTUATOR || comma.punct.punct != ',') break;
+                            cc_next_token(p, &comma);
+                        }
+                        continue;
+                    }
+                }
+                else {
+                    if(literal_skip) literal_skip--;
+                    err = cc_unget(p, &packed);
+                    if(err) return err;
+                }
             }
             if(first_value){
                 CcExpr* fv = first_value;
                 if(!arr->is_incomplete && ai >= arr->length) break;
-                if(ma_push(uint32_t)(path, cc_allocator(p), ai)) return CC_OOM_ERROR;
+                if(ma_push(uint32_t)(path, cc_scratch_allocator(p), ai)) return CC_OOM_ERROR;
                 err = cc_init_apply_value(p, flags, elem, fv, loc, buf, path);
                 if(err) return err;
                 first_value = NULL;
@@ -11160,7 +11376,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                         return cc_error(p, desig_loc, "object size exceeds 32-bit layout limit");
                     if(ai > max_ai) max_ai = ai;
                     CcQualType sub = elem;
-                    if(ma_push(uint32_t)(path, cc_allocator(p), idx)) return CC_OOM_ERROR;
+                    if(ma_push(uint32_t)(path, cc_scratch_allocator(p), idx)) return CC_OOM_ERROR;
                     err = cc_parse_desig_tail(p, flags, &sub, path);
                     if(err) return err;
                     err = cc_parse_init_value(p, flags, sub, 0, desig_loc, buf, path);
@@ -11191,7 +11407,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
             uint32_t size, next;
             if(add_overflow(ai, 1u, &next) || mul_overflow(elem_size, next, &size))
                 return cc_error(p, peek.loc, "object size exceeds 32-bit layout limit");
-            if(ma_push(uint32_t)(path, cc_allocator(p), ai)) return CC_OOM_ERROR;
+            if(ma_push(uint32_t)(path, cc_scratch_allocator(p), ai)) return CC_OOM_ERROR;
             err = cc_parse_init_value(p, flags, elem, 1, loc, buf, path);
             if(err) return err;
             ai = next;
@@ -11241,9 +11457,314 @@ cc_complete_array_type(CcParser* p, CcQualType type, size_t length, CcQualType* 
     return out->bits ? 0 : CC_OOM_ERROR;
 }
 
+static void cc_init_index_clear(CcInitIndex*, uint32_t, uint32_t);
+static int cc_init_index_apply(CcInitIndex*, uint32_t, uint32_t);
+
+static
+void
+cc_init_index_drop(CcInitIndex* ctx, uint32_t group, uint32_t slot){
+    if(slot == UINT32_MAX) return;
+    CcInitWorkEntry* entry = &ctx->lists.data[group].entries.data[slot];
+    if(entry->nested != UINT32_MAX)
+        cc_init_index_clear(ctx, entry->nested, ctx->lists.data[entry->nested].root);
+    if(entry->init.value) cc_release_expr(ctx->parser, entry->init.value);
+    entry->init.value = NULL;
+    entry->nested = UINT32_MAX;
+}
+
+static
+void
+cc_init_index_clear_children(CcInitIndex* ctx, uint32_t group, uint32_t node){
+    uint32_t child = ctx->nodes.data[node].child;
+    ctx->nodes.data[node].child = UINT32_MAX;
+    while(child != UINT32_MAX){
+        uint32_t next = ctx->nodes.data[child].next;
+        cc_init_index_clear(ctx, group, child);
+        child = next;
+    }
+}
+
+static
+void
+cc_init_index_clear(CcInitIndex* ctx, uint32_t group, uint32_t node){
+    cc_init_index_clear_children(ctx, group, node);
+    CcInitPathNode* n = &ctx->nodes.data[node];
+    cc_init_index_drop(ctx, group, n->slot);
+    uint32_t blob = n->blobs;
+    while(blob != UINT32_MAX){
+        uint32_t next = ctx->lists.data[group].entries.data[blob].next_blob;
+        cc_init_index_drop(ctx, group, blob);
+        blob = next;
+    }
+    n->slot = n->blobs = UINT32_MAX;
+    n->active = 0;
+}
+
+static
+int
+cc_init_index_node(CcInitIndex* ctx, uint32_t index, uint32_t* out){
+    if(ctx->nodes.count >= UINT32_MAX) return CC_OOM_ERROR;
+    *out = (uint32_t)ctx->nodes.count;
+    CcInitPathNode node = {
+        .index = index,
+        .child = UINT32_MAX,
+        .next  = UINT32_MAX,
+        .slot  = UINT32_MAX,
+        .blobs = UINT32_MAX,
+    };
+    return ma_push(CcInitPathNode)(&ctx->nodes, cc_scratch_allocator(ctx->parser), node) ? CC_OOM_ERROR : 0;
+}
+
+static
+int
+cc_init_index_open(CcInitIndex* ctx, CcQualType type, SrcLoc loc, CcInitEntry* entries, uint32_t count, uint32_t* out){
+    if(ctx->lists.count >= UINT32_MAX) return CC_OOM_ERROR;
+    CcInitWorkList list = {.type=type, .loc=loc};
+    int err = cc_init_index_node(ctx, 0, &list.root);
+    if(err) return err;
+    uint32_t group = (uint32_t)ctx->lists.count;
+    if(ma_push(CcInitWorkList)(&ctx->lists, cc_scratch_allocator(ctx->parser), list))
+        return CC_OOM_ERROR;
+    *out = group;
+    // Transfer ownership incrementally so the caller can clean up any entries
+    // not yet moved if allocation fails.
+    for(uint32_t i = 0; i < count; i++){
+        CcInitWorkEntry entry = {.init=entries[i], .nested=UINT32_MAX, .next_blob=UINT32_MAX};
+        if(ma_push(CcInitWorkEntry)(&ctx->lists.data[group].entries, cc_scratch_allocator(ctx->parser), entry))
+            return CC_OOM_ERROR;
+        entries[i] = (CcInitEntry){0};
+    }
+    for(uint32_t i = 0; i < count; i++){
+        err = cc_init_index_apply(ctx, group, i);
+        if(err) return err;
+    }
+    return 0;
+}
+
+static
+int
+cc_init_index_apply(CcInitIndex* ctx, uint32_t group, uint32_t slot){
+    CcInitWorkEntry* entry = &ctx->lists.data[group].entries.data[slot];
+    if(!entry->init.value) return 0;
+    CcFieldPath path = entry->init.path;
+    uint32_t count = cc_field_path_count(path);
+    uint32_t node = ctx->lists.data[group].root;
+    CcQualType type = ctx->lists.data[group].type;
+    Allocator al = cc_allocator(ctx->parser);
+    for(uint32_t i = 0; i < count; i++){
+        uint32_t prev = ctx->nodes.data[node].slot;
+        if(prev != UINT32_MAX){
+            CcInitWorkEntry* owner = &ctx->lists.data[group].entries.data[prev];
+            if(owner->init.value->kind == CC_EXPR_INIT_LIST){
+                uint32_t nested = owner->nested;
+                if(nested == UINT32_MAX){
+                    CcInitList* original = owner->init.value->init_list;
+                    int err = cc_init_index_open(ctx, type, original->loc, original->entries, original->count, &nested);
+                    if(err) return err;
+                    owner->nested = nested;
+                }
+                CcFieldPath relative;
+                if(cc_field_path_drop(al, path, i, &relative)) return CC_OOM_ERROR;
+                if(ctx->lists.data[nested].entries.count >= UINT32_MAX){
+                    cc_field_path_free(al, relative);
+                    return CC_OOM_ERROR;
+                }
+                uint32_t next = (uint32_t)ctx->lists.data[nested].entries.count;
+                CcInitWorkEntry added = {.init={.path=relative, .value=entry->init.value},
+                    .nested=UINT32_MAX, .next_blob=UINT32_MAX};
+                if(ma_push(CcInitWorkEntry)(&ctx->lists.data[nested].entries, cc_scratch_allocator(ctx->parser), added)){
+                    cc_field_path_free(al, relative);
+                    return CC_OOM_ERROR;
+                }
+                entry->init.value = NULL;
+                return cc_init_index_apply(ctx, nested, next);
+            }
+        }
+        uint32_t index = cc_field_path_component(path, i);
+        CcTypeKind kind = ccqt_kind(type);
+        uint32_t child = ctx->nodes.data[node].child;
+        if(kind == CC_UNION && child != UINT32_MAX && ctx->nodes.data[child].index != index)
+            cc_init_index_clear_children(ctx, group, node);
+        // PointerMap only hashes these integer keys; it never dereferences them.
+        const void* key = (const void*)(uintptr_t)index;
+        uintptr_t found = (uintptr_t)PM_get(&ctx->nodes.data[node].children, key);
+        if(found) child = (uint32_t)(found-1);
+        else {
+            int err = cc_init_index_node(ctx, index, &child);
+            if(err) return err;
+            if(PM_put(&ctx->nodes.data[node].children, cc_scratch_allocator(ctx->parser), key, (const void*)(uintptr_t)(child+1))) return CC_OOM_ERROR;
+        }
+        if(!ctx->nodes.data[child].active){
+            ctx->nodes.data[child].active = 1;
+            ctx->nodes.data[child].next = ctx->nodes.data[node].child;
+            ctx->nodes.data[node].child = child;
+        }
+        node = child;
+        if(kind == CC_ARRAY || kind == CC_VECTOR) type = ccqt_array_element(type);
+        else type = ccqt_as_struct(type)->fields[index].type;
+    }
+    cc_init_index_clear_children(ctx, group, node);
+    cc_init_index_drop(ctx, group, ctx->nodes.data[node].slot);
+    ctx->nodes.data[node].slot = UINT32_MAX;
+    // A blob spans consecutive array elements. Replacing its first element
+    // does not replace its tail. Keep these constant writes in source order;
+    // replacing an ancestor or switching union members still discards them.
+    if(entry->init.value->kind == CC_EXPR_BLOB){
+        entry->next_blob = ctx->nodes.data[node].blobs;
+        ctx->nodes.data[node].blobs = slot;
+    }
+    else ctx->nodes.data[node].slot = slot;
+    return 0;
+}
+
+static
+int
+cc_init_index_finish(CcInitIndex* ctx, uint32_t group, CcInitList*_Nullable* _Nonnull out){
+    DRP_PROFILE_BEGIN(profile, "parser.initializer_compact");
+    CcInitWorkList* list = &ctx->lists.data[group];
+    uint32_t count = 0;
+    for(size_t i = 0; i < list->entries.count; i++){
+        CcInitWorkEntry* entry = &list->entries.data[i];
+        if(!entry->init.value) continue;
+        if(entry->nested != UINT32_MAX){
+            int err = cc_init_index_finish(ctx, entry->nested, &entry->init.value->init_list);
+            if(err) return err;
+        }
+        count++;
+    }
+    Allocator al = cc_allocator(ctx->parser);
+    CcInitList* result = Allocator_zalloc_extra(al, count, sizeof *result->entries, sizeof *result, _Alignof(CcInitList));
+    if(!result) return CC_OOM_ERROR;
+    result->count = count;
+    result->loc = list->loc;
+    uint32_t at = 0;
+    for(size_t i = 0; i < list->entries.count; i++){
+        CcInitWorkEntry* entry = &list->entries.data[i];
+        if(!entry->init.value) continue;
+        result->entries[at++] = entry->init;
+        entry->init = (CcInitEntry){0};
+    }
+    if(*out)
+        Allocator_free_extra(al, *out, (*out)->count, sizeof *result->entries, sizeof *result, _Alignof(CcInitList));
+    *out = result;
+    return 0;
+    DRP_PROFILE_END(profile);
+}
+
+static
+int
+cc_init_may_overlap(CcParser* p, CcQualType type, SrcLoc loc, Marray(CcInitEntry)* entries, _Bool* overlap){
+    uint64_t written_end = 0;
+    *overlap = 0;
+    for(size_t i = 0; i < entries->count; i++){
+        CcInitEntry* entry = &entries->data[i];
+        CcQualType sub = type;
+        uint64_t offset = 0, start = 0;
+        _Bool in_union = 0;
+        for(uint32_t j = 0, n = cc_field_path_count(entry->path); j < n; j++){
+            uint32_t index = cc_field_path_component(entry->path, j);
+            CcTypeKind kind = ccqt_kind(sub);
+            if(kind == CC_UNION && !in_union){ start = offset; in_union = 1; }
+            if(kind == CC_ARRAY || kind == CC_VECTOR){
+                sub = ccqt_array_element(sub);
+                uint32_t size;
+                int err = cc_sizeof_as_uint(p, sub, loc, &size);
+                if(err) return err;
+                offset += (uint64_t)index * size;
+            }
+            else {
+                CcField* field = &ccqt_as_struct(sub)->fields[index];
+                offset += field->offset;
+                sub = field->type;
+            }
+        }
+        if(!in_union) start = offset;
+        if(start < written_end){ *overlap = 1; return 0; }
+        uint32_t size;
+        int err = cc_expr_sizeof_as_uint(p, entry->value, &size);
+        if(err) return err;
+        if(offset + size > written_end) written_end = offset + size;
+    }
+    return 0;
+}
+
+static
+int
+cc_init_builder_finish(CcParser* p, CcQualType type, SrcLoc loc, CcInitBuilder* builder, CcInitList*_Nullable* _Nonnull out){
+    DRP_PROFILE_BEGIN(profile, "parser.initializer_overrides");
+    Marray(CcInitEntry)* entries = &builder->entries;
+    _Bool overlap = 0;
+    int err = 0;
+    if(builder->may_override && entries->count > 1){
+        err = cc_init_may_overlap(p, type, loc, entries, &overlap);
+        if(err) return err;
+    }
+    if(!overlap){
+        CcInitList* result = Allocator_zalloc_extra(cc_allocator(p), entries->count, sizeof *result->entries, sizeof *result, _Alignof(CcInitList));
+        if(!result) return CC_OOM_ERROR;
+        result->loc = loc;
+        result->count = (uint32_t)entries->count;
+        for(size_t i = 0; i < entries->count; i++) result->entries[i] = entries->data[i];
+        entries->count = 0;
+        *out = result;
+        return 0;
+    }
+    CcInitIndex ctx = {.parser=p};
+    uint32_t root;
+    err = cc_init_index_open(&ctx, type, loc, entries->data, (uint32_t)entries->count, &root);
+    if(!err) err = cc_init_index_finish(&ctx, root, out);
+    Allocator al = cc_allocator(p);
+    for(size_t i = 0; i < ctx.lists.count; i++){
+        Marray(CcInitWorkEntry)* work = &ctx.lists.data[i].entries;
+        for(size_t j = 0; j < work->count; j++){
+            cc_field_path_free(al, work->data[j].init.path);
+            if(work->data[j].init.value) cc_release_expr(p, work->data[j].init.value);
+        }
+        ma_cleanup(CcInitWorkEntry)(work, cc_scratch_allocator(p));
+    }
+    for(size_t i = 0; i < ctx.nodes.count; i++){
+        PointerMap* map = &ctx.nodes.data[i].children;
+        if(map->data) Allocator_free(cc_scratch_allocator(p), map->data, PM_alloc_size(map->cap), 1, _Alignof(PointerMapItem));
+    }
+    ma_cleanup(CcInitWorkList)(&ctx.lists, cc_scratch_allocator(p));
+    ma_cleanup(CcInitPathNode)(&ctx.nodes, cc_scratch_allocator(p));
+    return err;
+    DRP_PROFILE_END(profile);
+}
+
+
+static
+int
+cc_init_validate_entries(CcParser* p, CcQualType type, SrcLoc loc, CcInitEntry* entries, uint32_t count){
+    for(uint32_t i = 0; i < count; i++){
+        CcInitEntry* entry = &entries[i];
+        uint64_t offset;
+        int err = cc_field_path_offset(cc_target(p), type, entry->path, &offset);
+        if(err) return err;
+        CcQualType sub = type;
+        for(uint32_t j = 0, n = cc_field_path_count(entry->path);; j++){
+            if(ccqt_array_incomplete(sub)){
+                if(j < n || (entry->value && !(entry->value->kind == CC_EXPR_INIT_LIST && !entry->value->init_list->count)))
+                    return cc_error(p, entry->value ? entry->value->loc : loc, "initialization of flexible array members is not supported");
+            }
+            if(j == n) break;
+            uint32_t index = cc_field_path_component(entry->path, j);
+            CcTypeKind kind = ccqt_kind(sub);
+            if(kind == CC_ARRAY || kind == CC_VECTOR)
+                sub = ccqt_array_element(sub);
+            else if(kind == CC_STRUCT || kind == CC_UNION)
+                sub = ccqt_as_struct(sub)->fields[index].type;
+            else
+                break;
+        }
+    }
+    return 0;
+}
+
 static
 int
 cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out, CcQualType target_type){
+    DRP_PROFILE_BEGIN(profile, "parser.initializer_list");
     CcToken brace;
     int err = cc_next_token(p, &brace);
     if(err) return err;
@@ -11332,65 +11853,34 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
     }
     else {
         parse_aggregate:;
-        Marray(CcInitEntry) entries = {0};
+        CcInitBuilder builder = {0};
         Marray(uint32_t) path = {0};
         uint32_t max_index = 0;
-        err = cc_parse_init(p, flags, target_type, 1, loc, &entries, &max_index, first_value, &path);
-        ma_cleanup(uint32_t)(&path, cc_allocator(p));
-        if(!err && entries.count > UINT32_MAX) err = CC_OOM_ERROR;
-        if(err){
-            for(size_t i = 0; i < entries.count; i++){
-                cc_field_path_free(cc_allocator(p), entries.data[i].path);
-                if(entries.data[i].value) cc_release_expr(p, entries.data[i].value);
-            }
-            ma_cleanup(CcInitEntry)(&entries, cc_allocator(p));
-            return err;
-        }
-        list = Allocator_zalloc_extra(cc_allocator(p), entries.count, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
-        if(!list){
-            for(size_t i = 0; i < entries.count; i++){
-                cc_field_path_free(cc_allocator(p), entries.data[i].path);
-                if(entries.data[i].value) cc_release_expr(p, entries.data[i].value);
-            }
-            ma_cleanup(CcInitEntry)(&entries, cc_allocator(p));
-            return CC_OOM_ERROR;
-        }
-        list->loc = loc;
-        list->count = (uint32_t)entries.count;
-        for(size_t i = 0; i < entries.count; i++) list->entries[i] = entries.data[i];
-        ma_cleanup(CcInitEntry)(&entries, cc_allocator(p));
-        if(tk == CC_ARRAY){
+        err = cc_parse_init(p, flags, target_type, 1, loc, &builder, &max_index, first_value, &path);
+        ma_cleanup(uint32_t)(&path, cc_scratch_allocator(p));
+        if(!err && builder.entries.count > UINT32_MAX) err = CC_OOM_ERROR;
+        if(!err && tk == CC_ARRAY){
             CcArray* arr = ccqt_as_array(target_type);
-            if(arr->is_incomplete){
+            if(arr->is_incomplete)
                 err = cc_complete_array_type(p, target_type, max_index, &resolved_type);
-                if(err) goto release_list;
-            }
         }
+        if(!err)
+            err = cc_init_validate_entries(p, resolved_type, loc, builder.entries.data, (uint32_t)builder.entries.count);
+        if(!err)
+            err = cc_init_builder_finish(p, resolved_type, loc, &builder, &list);
+        for(size_t i = 0; i < builder.entries.count; i++){
+            cc_field_path_free(cc_allocator(p), builder.entries.data[i].path);
+            if(builder.entries.data[i].value)
+                cc_release_expr(p, builder.entries.data[i].value);
+        }
+        ma_cleanup(CcInitEntry)(&builder.entries, cc_scratch_allocator(p));
+        if(err) return err;
+        goto create_node;
     }
     make_node:;
-    for(uint32_t i = 0; i < list->count; i++){
-        CcInitEntry* entry = &list->entries[i];
-        uint64_t offset;
-        err = cc_field_path_offset(cc_target(p), resolved_type, entry->path, &offset);
-        if(err) goto release_list;
-        CcQualType sub = resolved_type;
-        for(uint32_t j = 0, n = cc_field_path_count(entry->path);; j++){
-            if(ccqt_array_incomplete(sub)){
-                // Empty braces are permitted, but no storage is allocated
-                // beyond the declared struct for flexible member contents.
-                if(j < n || (entry->value && !(entry->value->kind == CC_EXPR_INIT_LIST && !entry->value->init_list->count))){
-                    err = cc_error(p, entry->value ? entry->value->loc : loc, "initialization of flexible array members is not supported");
-                    goto release_list;
-                }
-            }
-            if(j == n) break;
-            uint32_t index = cc_field_path_component(entry->path, j);
-            CcTypeKind kind = ccqt_kind(sub);
-            if(kind == CC_ARRAY || kind == CC_VECTOR) sub = ccqt_array_element(sub);
-            else if(kind == CC_STRUCT || kind == CC_UNION) sub = ccqt_as_struct(sub)->fields[index].type;
-            else break;
-        }
-    }
+    err = cc_init_validate_entries(p, resolved_type, loc, list->entries, list->count);
+    if(err) goto release_list;
+    create_node:;
     CcExpr* node = cc_make_expr(p, CC_EXPR_INIT_LIST, loc, resolved_type, 0);
     if(!node){
         err = CC_OOM_ERROR;
@@ -11406,6 +11896,7 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
     }
     Allocator_free_extra(cc_allocator(p), list, (size_t)list->count, sizeof *list->entries, sizeof *list, _Alignof(CcInitList));
     return err;
+    DRP_PROFILE_END(profile);
 }
 
 static
@@ -18052,7 +18543,7 @@ cc_eval_object_address(CcEvalCtx* ctx, CcExpr* e, uint64_t offset, uint32_t size
     if(depth > 256 || e->type.is_volatile || e->type.is_atomic) return CC_NOT_CONSTANT_ERROR;
     CcParser* p = ctx->parser;
     uint32_t object_size;
-    int err = cc_sizeof_as_uint(p, e->type, e->loc, &object_size);
+    int err = cc_expr_sizeof_as_uint(p, e, &object_size);
     if(err) return err;
     if(offset > object_size || size > object_size - offset) return CC_NOT_CONSTANT_ERROR;
     CcExpr* source;
@@ -18097,7 +18588,7 @@ cc_eval_object_address(CcEvalCtx* ctx, CcExpr* e, uint64_t offset, uint32_t size
             if(err) return err;
             if(!entry->value) continue;
             uint32_t entry_size;
-            err = cc_sizeof_as_uint(p, entry->value->type, entry->value->loc, &entry_size);
+            err = cc_expr_sizeof_as_uint(p, entry->value, &entry_size);
             if(err) return err;
             uint64_t start = entry_offset;
             uint64_t end = start + entry_size;
@@ -18582,8 +19073,6 @@ struct CcEvalDefaultPath {
     uint32_t index, count;
 };
 
-// The first designator reaching a union determines its initial zeroed member.
-// Subsequent writes are merged separately, including writes to other members.
 static
 uint32_t
 cc_eval_default_union_member(CcInitList* list, const CcEvalDefaultPath*_Nullable path){
@@ -18695,7 +19184,7 @@ cc_check_linktime_view(CcEvalCtx* ctx, CcExpr* root, CcExpr* e, uint64_t offset,
     if(depth > 256) return CC_NOT_CONSTANT_ERROR;
     CcParser* p = ctx->parser;
     uint32_t object_size;
-    int err = cc_sizeof_as_uint(p, e->type, e->loc, &object_size);
+    int err = cc_expr_sizeof_as_uint(p, e, &object_size);
     if(err) return err;
     if(offset > object_size || size > object_size - offset) return CC_NOT_CONSTANT_ERROR;
     if(!size) return 0;
@@ -18739,7 +19228,7 @@ cc_check_linktime_view(CcEvalCtx* ctx, CcExpr* root, CcExpr* e, uint64_t offset,
             if(err) return err;
             if(!entry->value || cc_field_path_bit_width(e->type, entry->path)) continue;
             uint32_t entry_size;
-            err = cc_sizeof_as_uint(p, entry->value->type, entry->value->loc, &entry_size);
+            err = cc_expr_sizeof_as_uint(p, entry->value, &entry_size);
             if(err) return err;
             uint64_t start = entry_offset, end = start + entry_size;
             uint64_t lo = offset > start ? offset : start;
@@ -19115,9 +19604,9 @@ cc_eval_object_bytes_inner(CcEvalCtx* ctx, CcExpr* e, uint32_t offset, uint32_t 
         cc_field_path_free(cc_allocator(p), view.path);
         return err;
     }
-    if((e->kind == CC_EXPR_VALUE || e->kind == CC_EXPR_BLOB) && ccqt_is_fixed_sequence(e->type) && cc_expr_array_data(e) && cc_expr_array_count(e)){
+    if((e->kind == CC_EXPR_BLOB || (e->kind == CC_EXPR_VALUE && ccqt_is_fixed_sequence(e->type))) && cc_expr_array_data(e) && cc_expr_array_count(e)){
         uint32_t elem_size;
-        int err = cc_sizeof_as_uint(p, ccqt_array_element(e->type), e->loc, &elem_size);
+        int err = cc_sizeof_as_uint(p, cc_expr_array_element(e), e->loc, &elem_size);
         if(err) return err;
         uint64_t length = (uint64_t)cc_expr_array_count(e) * elem_size;
         if(offset < length){
@@ -19179,7 +19668,7 @@ cc_eval_object_bytes_inner(CcEvalCtx* ctx, CcExpr* e, uint32_t offset, uint32_t 
             CcInitEntry* ent = &il->entries[i-1];
             if(!ent->value) continue;
             uint32_t sz;
-            int err = cc_sizeof_as_uint(p, ent->value->type, e->loc, &sz);
+            int err = cc_expr_sizeof_as_uint(p, ent->value, &sz);
             if(err) return err;
             uint64_t entry_offset;
             err = cc_field_path_offset(cc_target(p), e->type, ent->path, &entry_offset);
@@ -19282,7 +19771,7 @@ cc_eval_object_type(CcEvalCtx* ctx, CcExpr* e, uint64_t offset, unsigned depth, 
     uint32_t size, object_size;
     int err = cc_sizeof_as_uint(p, ccqt_basic(CCBT__Type), e->loc, &size);
     if(err) return err;
-    err = cc_sizeof_as_uint(p, e->type, e->loc, &object_size);
+    err = cc_expr_sizeof_as_uint(p, e, &object_size);
     if(err) return err;
     if(offset > object_size || size > object_size - offset) return CC_NOT_CONSTANT_ERROR;
     CcExpr* source;
@@ -19329,7 +19818,7 @@ cc_eval_object_type(CcEvalCtx* ctx, CcExpr* e, uint64_t offset, unsigned depth, 
             if(err) return err;
             if(!entry->value) continue;
             uint32_t entry_size;
-            err = cc_sizeof_as_uint(p, entry->value->type, entry->value->loc, &entry_size);
+            err = cc_expr_sizeof_as_uint(p, entry->value, &entry_size);
             if(err) return err;
             uint64_t start = entry_offset, end = start + entry_size;
             if(start >= offset + size || end <= offset) continue;
@@ -19946,7 +20435,7 @@ cc_eval_path_select(CcEvalCtx* ctx, CcExpr* base, CcFieldPath path, CcQualType t
         }
         return 0;
     }
-    if((base->kind == CC_EXPR_VALUE || base->kind == CC_EXPR_BLOB) && ccqt_is_fixed_sequence(base->type) && cc_expr_array_data(base) && count == 1){
+    if((base->kind == CC_EXPR_BLOB || (base->kind == CC_EXPR_VALUE && ccqt_is_fixed_sequence(base->type))) && cc_expr_array_data(base) && count == 1){
         uint32_t index = cc_field_path_component(path, 0), size;
         int err = cc_sizeof_as_uint(p, type, base->loc, &size);
         if(err) return err;

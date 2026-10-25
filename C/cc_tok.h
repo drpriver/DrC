@@ -226,8 +226,12 @@ struct CcToken {
             uint32_t _pad;
             SrcLoc loc;
             union {
-                uint64_t integer_value;
                 CiUint128 integer128_value;
+                uint8_t  uint8_value;
+                uint16_t uint16_value;
+                uint32_t uint32_value;
+                uint64_t uint64_value;
+                uint64_t integer_value;
                 float float_value;
                 double double_value;
                 CiFloat80 x87_value;

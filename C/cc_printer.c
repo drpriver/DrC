@@ -521,6 +521,20 @@ void
 cc_print_expr(MStringBuilder*sb, CcExpr* e){
     switch(e->kind){
         case CC_EXPR_BLOB:
+            if(e->blob_info.count && e->blob_info.count <= 8){
+                size_t size = e->blob.n_bytes / e->blob_info.count;
+                msb_write_literal(sb, "<blob: ");
+                cc_print_type(sb, e->type);
+                msb_write_literal(sb, "{");
+                for(uint32_t i = 0; i < e->blob_info.count; i++){
+                    if(i) msb_write_literal(sb, ", ");
+                    CiUint128 bits;
+                    ci_uint128_read(&bits, (const unsigned char*)e->blob.buff + i*size, (uint32_t)size);
+                    cc_print_runtime_integer(sb, bits, (unsigned)(size*8), 0);
+                }
+                msb_write_literal(sb, "}>");
+                return;
+            }
             msb_sprintf(sb, "<blob: %zu bytes>", e->blob.n_bytes);
             return;
         case CC_EXPR_VALUE:

@@ -36,6 +36,24 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("#define R 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31\n"
+         "constexpr int a[]={R,R,R,R,99,[0]=99};_Static_assert(a[0]==99&&a[127]==31&&a[128]==99);"
+         "int calls;int next(void){return ++calls;}int b[]={R,1+next(),R};"
+         "return sizeof(b)==65*sizeof(int)&&b[32]==2&&b[64]==31&&calls==1;")},
+    {__LINE__, SVI("int x=3;int a[]={0,1,2,3+x};return sizeof(a)==4*sizeof(int)&&a[3]==6;")},
+    {__LINE__, SVI("struct H {union U {int raw;int a[9];} u;};"
+         "struct H h={.u={},.u.a[0]=1,.u.a[1]=2,.u.a[2]=3,.u.a[3]=4,.u.a[4]=5,"
+         ".u.a[5]=6,.u.a[6]=7,.u.a[7]=8,.u.a[8]=9,.u.raw=1,.u.a[7]=3};"
+         "return h.u.a[0]==0&&h.u.a[7]==3&&h.u.a[8]==0;")},
+    {__LINE__, SVI("struct H {union U {int x; struct S {int a,b;} s;} q;};"
+         "struct H h={.q={.s.a=7},.q.s.b=3,.q={.x=2},.q.s.a=5};"
+         "return h.q.s.a==5&&h.q.s.b==0;")},
+    {__LINE__, SVI("struct H {int guard; union U {int x; struct S {int a,b;} s;} q;};"
+         "struct H h={.guard=11,.q={.s={7,8},.x=2},.q.s.b=3};"
+         "return h.guard==11&&h.q.s.a==0&&h.q.s.b==3;")},
+    {__LINE__, SVI("struct H {struct A {struct B {struct C {struct D {union U {int x; struct S {int a,b;} s;} q;} d;} c;} b;} a;};"
+         "struct H h={.a.b.c.d.q.s.a=7,.a.b.c.d.q.x=2,.a.b.c.d.q.s.b=3};"
+         "return h.a.b.c.d.q.s.a==0&&h.a.b.c.d.q.s.b==3;")},
     {__LINE__, SVI("static int x=3;"
          "_Module a=__compile(\"static int y=4;return __compile(\\\"return x+y;\\\",\\\"\\\").run();\",\"\");"
          "return a&&a.run()==7;")},

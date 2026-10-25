@@ -1,8 +1,8 @@
-//
-// Copyright © 2021-2025, David Priver <david@davidpriver.com>
-//
 #ifndef MSTRING_BUILDER_H
 #define MSTRING_BUILDER_H
+//
+// Copyright © 2021-2026, David Priver <david@davidpriver.com>
+//
 #include <stddef.h>
 #include <string.h>
 #include <assert.h>

@@ -9,6 +9,7 @@
 #include "../Drp/free_list.h"
 #include "../Drp/parray.h"
 #include "../Drp/Allocators/arena_allocator.h"
+#include "../Drp/ByteBuilder.h"
 #include "cc_tok.h"
 #include "cc_type.h"
 #include "cc_type_cache.h"

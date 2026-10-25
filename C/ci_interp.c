@@ -108,6 +108,7 @@ static void ci_lock_resolver(CiInterpreter*);
 static void ci_unlock_resolver(CiInterpreter*);
 // re-declare here as I'm not sure if this should be used in the interpreter or not
 static int cc_sizeof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
+static int cc_expr_sizeof_as_uint(CcParser* p, const CcExpr* e, uint32_t* out);
 static int cc_alignof_as_uint(CcParser* p, CcQualType t, SrcLoc loc, uint32_t* out);
 static inline int cc_align_to(CcParser* p, SrcLoc loc, uint32_t offset, uint32_t alignment, uint32_t* out);
 static int cc_lookup_field_offset(CcParser*, CcQualType, Atom, uint64_t*, CcQualType*, CcField*_Nullable*_Nonnull);
