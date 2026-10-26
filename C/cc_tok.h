@@ -9,6 +9,7 @@
 #include "../Drp/typed_enum.h"
 #include "../Drp/atom.h"
 #include "ci_softnum.h"
+#include "cc_type.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -25,26 +26,6 @@ enum CcTokenType TYPED_ENUM(uint32_t) {
 };
 TYPEDEF_ENUM(CcTokenType, uint32_t);
 
-enum CcConstantType TYPED_ENUM(uint32_t){
-    CC_INT,
-    CC_UNSIGNED,
-    CC_LONG,
-    CC_UNSIGNED_LONG,
-    CC_LONG_LONG,
-    CC_UNSIGNED_LONG_LONG,
-    CC_INT128,
-    CC_UNSIGNED_INT128,
-    CC_FLOAT16,
-    CC_BFLOAT16,
-    CC_FLOAT,
-    CC_DOUBLE,
-    CC_LONG_DOUBLE,
-    CC_WCHAR,
-    CC_CHAR16,
-    CC_CHAR32,
-    CC_UCHAR,
-};
-TYPEDEF_ENUM(CcConstantType, uint32_t);
 enum CcStringType TYPED_ENUM(uint32_t){
     CC_STRING,
     CC_LSTRING,
@@ -220,7 +201,7 @@ struct CcToken {
         } ident;
         struct {
             CcTokenType type: 8;
-            CcConstantType ctype: 8;
+            uint32_t ctype: 8; // CcBasicTypeKind, but keep uint32
             uint32_t is_imaginary: 1;
             uint32_t _bitpadding: 15;
             uint32_t _pad;
@@ -272,6 +253,7 @@ struct CcToken {
 _Static_assert(sizeof(CiFloat128)==16, "");
 _Static_assert(sizeof(CiFloat80)==16, "");
 _Static_assert(sizeof(CcToken) == 4*sizeof(uint64_t), "");
+_Static_assert(CCBT_COUNT <= 256, "basic types must fit in a constant token");
 #ifdef __clang__
 #pragma clang assume_nonnull end
 #endif

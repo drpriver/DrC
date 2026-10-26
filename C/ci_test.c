@@ -58,6 +58,74 @@ TestFunction(test_interpreter){
         const CcTargetConfig*_Nullable target;
     } testcases[] = {
         {
+            "packed signed character constants widen like scalar initializers", __LINE__,
+            SVI("long long scalar = '\\xff\\xff\\xff\\xff';"
+                "long long a[] = {'\\xff\\xff\\xff\\xff', '\\xff\\xff\\xff\\xff',"
+                "'\\xff\\xff\\xff\\xff', '\\xff\\xff\\xff\\xff'};"
+                "return scalar != -1 || a[0] != scalar || a[3] != scalar;"),
+        },
+        {
+            "packed literal widening preserves signed values after the probe batch", __LINE__,
+            SVI("long long a[] = {1, 2, 3, 4, 0x80000000i32, 0xFFFFFFFFi32};"
+                "unsigned long long b[] = {0xFFFFFFFFi32, 0xFFFFFFFFi32,"
+                "0xFFFFFFFFi32, 0xFFFFFFFFi32, 0x80000000i32, 0xFFFFFFFFi32};"
+                "return a[4] != -2147483647LL - 1 || a[5] != -1"
+                " || b[0] != ~0ULL || b[4] != (unsigned long long)(-2147483647LL - 1)"
+                " || b[5] != ~0ULL;"),
+        },
+        {
+            "packed literal separators at the probe threshold and array boundary", __LINE__,
+            SVI("struct S { int a[8]; int tail; };"
+                "struct S a = {1, 2, 3, 4, .tail = 9};"
+                "struct S b = {1, 2, 3, 4, 5, 6, 7, 8, .tail = 10};"
+                "return a.a[3] != 4 || a.a[4] != 0 || a.tail != 9"
+                " || b.a[7] != 8 || b.tail != 10;"),
+        },
+        {
+            "statement expression result preserves aliased source", __LINE__,
+            SVI("struct S { int x, y; };\nint\nf(void) { struct S s = {1, 2};"
+                "s = ({ (struct S){s.y, s.x}; }); return s.x != 2 || s.y != 1; } return f();"),
+        },
+        {
+            "inline returned literal with three fields preserves source", __LINE__,
+            SVI("struct S { int x, y, z; };\nstruct S\ng(struct S *p) { return (struct S){p->y, p->z, p->x}; }"
+                "\nint\nf(void) { struct S s = {1, 2, 3}; s = g(&s);"
+                "return s.x != 2 || s.y != 3 || s.z != 1; } return f();"),
+        },
+        {
+            "inlined union return preserves aliased source", __LINE__,
+            SVI("union U { unsigned long long x; unsigned char b[8]; };"
+                "\nunion U\ng(union U *p) { return (union U){.x = p->x + 1}; }"
+                "\nint\nf(void) { union U u = {.x = 7}; u = g(&u); return u.x != 8; } return f();"),
+        },
+        {
+            "packed signed i32 literals widen like scalar initializers", __LINE__,
+            SVI("long long scalar = 0xFFFFFFFFi32;"
+                "long long a[] = {0xFFFFFFFFi32, 0xFFFFFFFFi32, 0xFFFFFFFFi32, 0xFFFFFFFFi32};"
+                "return scalar != -1 || a[0] != scalar || a[1] != scalar || a[2] != scalar || a[3] != scalar;"),
+        },
+        {
+            "packed signed i32 literals preserve sign in constexpr arrays", __LINE__,
+            SVI("constexpr long long a[] = {0xFFFFFFFFi32, 0xFFFFFFFFi32, 0xFFFFFFFFi32, 0xFFFFFFFFi32};"
+                "static_assert(a[0] == -1 && a[3] == -1); return 0;"),
+        },
+        {
+            "designated array continuation after packed run", __LINE__,
+            SVI("int a[2][10] = {1, 2, 3, 4, 5, [1][1] = 9};"
+                "return a[0][4] != 5 || a[0][5] != 0 || a[1][1] != 9;"),
+        },
+        {
+            "assignment call result may read old destination", __LINE__,
+            SVI("struct S { int x, y; };\nstruct S\nswap(struct S *s) { return (struct S){s->y, s->x}; }"
+                "\nint\nf(void) { struct S s = {1, 2}; s = swap(&s); return 10 * s.x + s.y; } return f();"),
+            .exit_code = 21,
+        },
+        {
+            "packed literal run returns comma to enclosing initializer", __LINE__,
+            SVI("struct S { int a[10]; int tail; }; struct S s = {1, 2, 3, 4, 5, .tail = 9};"
+                "return s.a[0] != 1 || s.a[4] != 5 || s.a[5] != 0 || s.tail != 9;"),
+        },
+        {
             "modules: root statements use module execution", __LINE__,
             SVI("int count; int running; if(running){count++;return count;} running=1;"
                 "_Module root=__root_module();return root.run()!=1 || root.run()!=2 || count!=2;"),

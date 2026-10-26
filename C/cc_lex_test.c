@@ -157,11 +157,11 @@ cc_lex_string_expect_error(StringView txt, StringView* err_out){
 }
 
 // Helpers for building expected tokens
-static CcToken cc_int_tok(uint64_t v, CcConstantType ctype){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=ctype, .integer_value=v}}; }
-static CcToken cc_float_tok(float v){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=CC_FLOAT, .float_value=v}}; }
-static CcToken cc_double_tok(double v){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=CC_DOUBLE, .double_value=v}}; }
+static CcToken cc_int_tok(uint64_t v, CcBasicTypeKind ctype){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=(uint32_t)ctype, .integer_value=v}}; }
+static CcToken cc_float_tok(float v){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=CCBT_float, .float_value=v}}; }
+static CcToken cc_double_tok(double v){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=CCBT_double, .double_value=v}}; }
 // IEEE 754 binary128 words, least significant word first.
-static CcToken cc_long_double_tok(uint64_t val[2]){ CcToken tok = {.constant={.type=CC_CONSTANT, .ctype=CC_LONG_DOUBLE}}; memcpy(&tok.constant.quad_value, val, 16); return tok;}
+static CcToken cc_long_double_tok(uint64_t val[2]){ CcToken tok = {.constant={.type=CC_CONSTANT, .ctype=CCBT_long_double}}; memcpy(&tok.constant.quad_value, val, 16); return tok;}
 static CcToken cc_kw_tok(CcKeyword kw){ return (CcToken){.kw={.type=CC_KEYWORD, .kw=kw}}; }
 static CcToken cc_punct_tok(CcPunct p){ return (CcToken){.punct={.type=CC_PUNCTUATOR, .punct=p}}; }
 // Abuse: stash a const char* in the Atom field. cc_tok_matches knows to
@@ -208,30 +208,32 @@ cc_tok_matches(CcToken got, CcToken exp){
             if(got.constant.ctype != exp.constant.ctype) return 0;
             if(got.constant.is_imaginary != exp.constant.is_imaginary) return 0;
             switch(got.constant.ctype){
-                case CC_BFLOAT16:
-                case CC_FLOAT16:
+                case CCBT_bfloat16:
+                case CCBT_float16:
                     return got.constant.integer_value == exp.constant.integer_value;
-                case CC_FLOAT:
+                case CCBT_float:
                     return got.constant.float_value == exp.constant.float_value;
-                case CC_DOUBLE:
+                case CCBT_double:
                     return got.constant.double_value == exp.constant.double_value;
-                case CC_LONG_DOUBLE:
+                case CCBT_long_double:
                     return memcmp(&got.constant.quad_value, &exp.constant.quad_value, sizeof got.constant.quad_value) == 0;
-                case CC_INT128:
-                case CC_UNSIGNED_INT128:
+                case CCBT_int128:
+                case CCBT_unsigned_int128:
                     return ci_uint128_eq(got.constant.integer128_value, exp.constant.integer128_value);
-                case CC_INT:
-                case CC_UNSIGNED:
-                case CC_LONG:
-                case CC_UNSIGNED_LONG:
-                case CC_LONG_LONG:
-                case CC_UNSIGNED_LONG_LONG:
-                case CC_WCHAR:
-                case CC_CHAR16:
-                case CC_CHAR32:
-                case CC_UCHAR:
+                case CCBT_int:
+                case CCBT_unsigned:
+                case CCBT_long:
+                case CCBT_unsigned_long:
+                case CCBT_long_long:
+                case CCBT_unsigned_long_long:
+                case CCBT_bool:
+                case CCBT_char:
+                case CCBT_signed_char:
+                case CCBT_unsigned_char:
+                case CCBT_short:
+                case CCBT_unsigned_short:
                     return got.constant.integer_value == exp.constant.integer_value;
-                DRP_CASES_EXHAUSTED;
+                default: return 0;
             }
         case CC_STRING_LITERAL:
             if(got.str.stype != exp.str.stype) return 0;
@@ -254,8 +256,8 @@ cc_tok_matches(CcToken got, CcToken exp){
     return 0;
 }
 
-static CcToken cc_int128_tok(uint64_t hi, uint64_t lo, CcConstantType ctype){
-    return (CcToken){.constant={.type=CC_CONSTANT, .ctype=ctype,
+static CcToken cc_int128_tok(uint64_t hi, uint64_t lo, CcBasicTypeKind ctype){
+    return (CcToken){.constant={.type=CC_CONSTANT, .ctype=(uint32_t)ctype,
         .integer128_value=ci_uint128_or(ci_uint128_shl(ci_uint128_from_uint64(hi), 64), ci_uint128_from_uint64(lo))}};
 }
 
@@ -269,71 +271,75 @@ TestFunction(test_cc_lex_integers){
     struct {
         const char* name; StringView inp; CcToken exp; int line;
     } test_cases[] = {
-        {"zero",         SVI("0"),          cc_int_tok(0, CC_INT), __LINE__},
-        {"decimal",      SVI("42"),         cc_int_tok(42, CC_INT), __LINE__},
-        {"imaginary_integer", SVI("42i"),   cc_imaginary_tok(cc_int_tok(42, CC_INT)), __LINE__},
+        {"zero",         SVI("0"),          cc_int_tok(0, CCBT_int), __LINE__},
+        {"decimal",      SVI("42"),         cc_int_tok(42, CCBT_int), __LINE__},
+        {"imaginary_integer", SVI("42i"),   cc_imaginary_tok(cc_int_tok(42, CCBT_int)), __LINE__},
         {"imaginary_unsigned_long", SVI("42ulJ"),
-                                           cc_imaginary_tok(cc_int_tok(42, CC_UNSIGNED_LONG)), __LINE__},
+                                           cc_imaginary_tok(cc_int_tok(42, CCBT_unsigned_long)), __LINE__},
         {"imaginary_hex_integer", SVI("0xfi"),
-                                           cc_imaginary_tok(cc_int_tok(15, CC_INT)), __LINE__},
-        {"hex",          SVI("0xFF"),       cc_int_tok(0xFF, CC_INT), __LINE__},
-        {"hex_upper",    SVI("0XAB"),       cc_int_tok(0xAB, CC_INT), __LINE__},
-        {"hex_f16_digits", SVI("0xf16"),    cc_int_tok(0xf16, CC_INT), __LINE__},
-        {"hex_F16_digits", SVI("0XF16"),    cc_int_tok(0xf16, CC_INT), __LINE__},
-        {"binary",       SVI("0b1010"),     cc_int_tok(10, CC_INT), __LINE__},
-        {"octal",        SVI("077"),        cc_int_tok(077, CC_INT), __LINE__},
-        {"prefixed_octal", SVI("0o755"),    cc_int_tok(493, CC_INT), __LINE__},
+                                           cc_imaginary_tok(cc_int_tok(15, CCBT_int)), __LINE__},
+        {"hex",          SVI("0xFF"),       cc_int_tok(0xFF, CCBT_int), __LINE__},
+        {"hex_upper",    SVI("0XAB"),       cc_int_tok(0xAB, CCBT_int), __LINE__},
+        {"hex_f16_digits", SVI("0xf16"),    cc_int_tok(0xf16, CCBT_int), __LINE__},
+        {"hex_F16_digits", SVI("0XF16"),    cc_int_tok(0xf16, CCBT_int), __LINE__},
+        {"binary",       SVI("0b1010"),     cc_int_tok(10, CCBT_int), __LINE__},
+        {"octal",        SVI("077"),        cc_int_tok(077, CCBT_int), __LINE__},
+        {"prefixed_octal", SVI("0o755"),    cc_int_tok(493, CCBT_int), __LINE__},
         {"prefixed_octal_upper", SVI("0O7'55ULL"),
-                                           cc_int_tok(493, CC_UNSIGNED_LONG_LONG), __LINE__},
-        {"prefixed_octal_zero", SVI("0o0"), cc_int_tok(0, CC_INT), __LINE__},
+                                           cc_int_tok(493, CCBT_unsigned_long_long), __LINE__},
+        {"prefixed_octal_zero", SVI("0o0"), cc_int_tok(0, CCBT_int), __LINE__},
         {"prefixed_octal_unsigned", SVI("0o37777777777"),
-                                           cc_int_tok(UINT32_MAX, CC_UNSIGNED), __LINE__},
+                                           cc_int_tok(UINT32_MAX, CCBT_unsigned), __LINE__},
         {"prefixed_octal_128", SVI("0O2000000000000000000000i128"),
-                                           cc_int128_tok(1, 0, CC_INT128), __LINE__},
-        {"unsigned",     SVI("42u"),        cc_int_tok(42, CC_UNSIGNED), __LINE__},
-        {"unsigned_U",   SVI("42U"),        cc_int_tok(42, CC_UNSIGNED), __LINE__},
-        {"long",         SVI("42l"),        cc_int_tok(42, CC_LONG), __LINE__},
-        {"long_L",       SVI("42L"),        cc_int_tok(42, CC_LONG), __LINE__},
-        {"ulong",        SVI("42ul"),       cc_int_tok(42, CC_UNSIGNED_LONG), __LINE__},
-        {"ulong_LU",     SVI("42LU"),       cc_int_tok(42, CC_UNSIGNED_LONG), __LINE__},
-        {"llong",        SVI("42ll"),       cc_int_tok(42, CC_LONG_LONG), __LINE__},
-        {"ullong",       SVI("42ull"),      cc_int_tok(42, CC_UNSIGNED_LONG_LONG), __LINE__},
-        {"ullong_ULL",   SVI("42ULL"),      cc_int_tok(42, CC_UNSIGNED_LONG_LONG), __LINE__},
-        {"hex_ul",       SVI("0xDEADul"),   cc_int_tok(0xDEAD, CC_UNSIGNED_LONG), __LINE__},
-        {"digit_sep",    SVI("1'000'000"),  cc_int_tok(1000000, CC_INT), __LINE__},
-        {"hex_sep",      SVI("0xFF'FF"),    cc_int_tok(0xFFFF, CC_INT), __LINE__},
+                                           cc_int128_tok(1, 0, CCBT_int128), __LINE__},
+        {"unsigned",     SVI("42u"),        cc_int_tok(42, CCBT_unsigned), __LINE__},
+        {"unsigned_U",   SVI("42U"),        cc_int_tok(42, CCBT_unsigned), __LINE__},
+        {"long",         SVI("42l"),        cc_int_tok(42, CCBT_long), __LINE__},
+        {"long_L",       SVI("42L"),        cc_int_tok(42, CCBT_long), __LINE__},
+        {"ulong",        SVI("42ul"),       cc_int_tok(42, CCBT_unsigned_long), __LINE__},
+        {"ulong_LU",     SVI("42LU"),       cc_int_tok(42, CCBT_unsigned_long), __LINE__},
+        {"llong",        SVI("42ll"),       cc_int_tok(42, CCBT_long_long), __LINE__},
+        {"ullong",       SVI("42ull"),      cc_int_tok(42, CCBT_unsigned_long_long), __LINE__},
+        {"ullong_ULL",   SVI("42ULL"),      cc_int_tok(42, CCBT_unsigned_long_long), __LINE__},
+        {"hex_ul",       SVI("0xDEADul"),   cc_int_tok(0xDEAD, CCBT_unsigned_long), __LINE__},
+        {"digit_sep",    SVI("1'000'000"),  cc_int_tok(1000000, CCBT_int), __LINE__},
+        {"hex_sep",      SVI("0xFF'FF"),    cc_int_tok(0xFFFF, CCBT_int), __LINE__},
         {"large",        SVI("18446744073709551615ULL"),
-                                           cc_int_tok(UINT64_MAX, CC_UNSIGNED_LONG_LONG), __LINE__},
+                                           cc_int_tok(UINT64_MAX, CCBT_unsigned_long_long), __LINE__},
         // Suffix order variations
-        {"LLU",          SVI("0LLU"),       cc_int_tok(0, CC_UNSIGNED_LONG_LONG), __LINE__},
-        {"Ull",          SVI("0Ull"),       cc_int_tok(0, CC_UNSIGNED_LONG_LONG), __LINE__},
-        {"llu",          SVI("0llu"),       cc_int_tok(0, CC_UNSIGNED_LONG_LONG), __LINE__},
-        {"Lu",           SVI("42Lu"),       cc_int_tok(42, CC_UNSIGNED_LONG), __LINE__},
-        {"uL",           SVI("42uL"),       cc_int_tok(42, CC_UNSIGNED_LONG), __LINE__},
+        {"LLU",          SVI("0LLU"),       cc_int_tok(0, CCBT_unsigned_long_long), __LINE__},
+        {"Ull",          SVI("0Ull"),       cc_int_tok(0, CCBT_unsigned_long_long), __LINE__},
+        {"llu",          SVI("0llu"),       cc_int_tok(0, CCBT_unsigned_long_long), __LINE__},
+        {"Lu",           SVI("42Lu"),       cc_int_tok(42, CCBT_unsigned_long), __LINE__},
+        {"uL",           SVI("42uL"),       cc_int_tok(42, CCBT_unsigned_long), __LINE__},
         // Digit separators in binary/octal
-        {"bin_sep",      SVI("0b1'0'1'0"), cc_int_tok(10, CC_INT), __LINE__},
-        {"oct_sep",      SVI("0'77"),       cc_int_tok(077, CC_INT), __LINE__},
+        {"bin_sep",      SVI("0b1'0'1'0"), cc_int_tok(10, CCBT_int), __LINE__},
+        {"oct_sep",      SVI("0'77"),       cc_int_tok(077, CCBT_int), __LINE__},
         // 0 through decimal path (not octal)
-        {"zero_u",       SVI("0u"),         cc_int_tok(0, CC_UNSIGNED), __LINE__},
-        {"zero_ll",      SVI("0LL"),        cc_int_tok(0, CC_LONG_LONG), __LINE__},
+        {"zero_u",       SVI("0u"),         cc_int_tok(0, CCBT_unsigned), __LINE__},
+        {"zero_ll",      SVI("0LL"),        cc_int_tok(0, CCBT_long_long), __LINE__},
         {"binary_i128", SVI("0b10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001i128"),
-                                           cc_int128_tok(UINT64_C(1) << 36, 1, CC_INT128), __LINE__},
+                                           cc_int128_tok(UINT64_C(1) << 36, 1, CCBT_int128), __LINE__},
         {"decimal_i128", SVI("18446744073709551617i128"),
-                                           cc_int128_tok(1, 1, CC_INT128), __LINE__},
+                                           cc_int128_tok(1, 1, CCBT_int128), __LINE__},
         {"hex_ulll", SVI("0xffffffffffffffffffffffffffffffffulll"),
-                                           cc_int128_tok(UINT64_MAX, UINT64_MAX, CC_UNSIGNED_INT128), __LINE__},
+                                           cc_int128_tok(UINT64_MAX, UINT64_MAX, CCBT_unsigned_int128), __LINE__},
         // MSVC integer suffixes
-        {"msvc_i8",      SVI("42i8"),       cc_int_tok(42, CC_INT), __LINE__},
-        {"msvc_i16",     SVI("42i16"),      cc_int_tok(42, CC_INT), __LINE__},
-        {"msvc_i32",     SVI("42i32"),      cc_int_tok(42, CC_INT), __LINE__},
-        {"msvc_i64",     SVI("42i64"),      cc_int_tok(42, CC_LONG_LONG), __LINE__},
-        {"msvc_ui8",     SVI("42ui8"),      cc_int_tok(42, CC_UNSIGNED), __LINE__},
-        {"msvc_ui16",    SVI("42ui16"),     cc_int_tok(42, CC_UNSIGNED), __LINE__},
-        {"msvc_ui32",    SVI("42ui32"),     cc_int_tok(42, CC_UNSIGNED), __LINE__},
-        {"msvc_ui64",    SVI("42ui64"),     cc_int_tok(42, CC_UNSIGNED_LONG_LONG), __LINE__},
-        {"msvc_hex_i32", SVI("0xFFFFFFFFi32"), cc_int_tok(0xFFFFFFFF, CC_INT), __LINE__},
-        {"msvc_hex_ui64",SVI("0xFFFFFFFFFFFFFFFFui64"), cc_int_tok(UINT64_MAX, CC_UNSIGNED_LONG_LONG), __LINE__},
-        {"msvc_I64_upper", SVI("42I64"),    cc_int_tok(42, CC_LONG_LONG), __LINE__},
+        {"msvc_i8",      SVI("42i8"),       cc_int_tok(42, CCBT_int), __LINE__},
+        {"msvc_i16",     SVI("42i16"),      cc_int_tok(42, CCBT_int), __LINE__},
+        {"msvc_i32",     SVI("42i32"),      cc_int_tok(42, CCBT_int), __LINE__},
+        {"msvc_i64",     SVI("42i64"),      cc_int_tok(42, CCBT_long_long), __LINE__},
+        {"msvc_ui8",     SVI("42ui8"),      cc_int_tok(42, CCBT_unsigned), __LINE__},
+        {"msvc_ui16",    SVI("42ui16"),     cc_int_tok(42, CCBT_unsigned), __LINE__},
+        {"msvc_ui32",    SVI("42ui32"),     cc_int_tok(42, CCBT_unsigned), __LINE__},
+        {"msvc_ui64",    SVI("42ui64"),     cc_int_tok(42, CCBT_unsigned_long_long), __LINE__},
+        {"msvc_hex_i32", SVI("0xFFFFFFFFi32"), cc_int_tok(UINT64_MAX, CCBT_int), __LINE__},
+        {"msvc_i32_min", SVI("0x80000000i32"), cc_int_tok(UINT64_C(0xffffffff80000000), CCBT_int), __LINE__},
+        {"msvc_i32_max", SVI("0x7FFFFFFFi32"), cc_int_tok(0x7fffffff, CCBT_int), __LINE__},
+        {"msvc_hex_ui32", SVI("0xFFFFFFFFui32"), cc_int_tok(0xffffffff, CCBT_unsigned), __LINE__},
+        {"msvc_hex_i64", SVI("0xFFFFFFFFFFFFFFFFi64"), cc_int_tok(UINT64_MAX, CCBT_long_long), __LINE__},
+        {"msvc_hex_ui64",SVI("0xFFFFFFFFFFFFFFFFui64"), cc_int_tok(UINT64_MAX, CCBT_unsigned_long_long), __LINE__},
+        {"msvc_I64_upper", SVI("42I64"),    cc_int_tok(42, CCBT_long_long), __LINE__},
     };
     static int case_idx = 0;
     for(size_t i = test_atomic_increment(&case_idx); i < countof(test_cases); i = test_atomic_increment(&case_idx)){
@@ -397,36 +403,36 @@ TestFunction(test_cc_lex_floats){
         const char* name; StringView inp; CcToken exp; int line;
     } test_cases[] = {
         {"float_f",      SVI("3.14f"),      cc_float_tok(3.14f), __LINE__},
-        {"half_zero",    SVI("0.0f16"),     cc_int_tok(0, CC_FLOAT16), __LINE__},
-        {"half_upper",   SVI("1.5F16"),     cc_int_tok(0x3e00, CC_FLOAT16), __LINE__},
-        {"half_exp",     SVI("1.5e2f16"),   cc_int_tok(0x58b0, CC_FLOAT16), __LINE__},
-        {"half_hex",     SVI("0x1.8p0f16"), cc_int_tok(0x3e00, CC_FLOAT16), __LINE__},
-        {"half_hex_upper", SVI("0X1P-24F16"), cc_int_tok(1, CC_FLOAT16), __LINE__},
-        {"half_hex_tie", SVI("0x1.002p0f16"), cc_int_tok(0x3c00, CC_FLOAT16), __LINE__},
-        {"half_decimal_subnormal", SVI("0.000000059604644775390625f16"), cc_int_tok(1, CC_FLOAT16), __LINE__},
-        {"half_decimal_above_tie", SVI("1.0004882812500000000000000000000000000001f16"), cc_int_tok(0x3c01, CC_FLOAT16), __LINE__},
-        {"half_decimal_below_tie", SVI("1.0014648437499999999999999999999999999999f16"), cc_int_tok(0x3c01, CC_FLOAT16), __LINE__},
+        {"half_zero",    SVI("0.0f16"),     cc_int_tok(0, CCBT_float16), __LINE__},
+        {"half_upper",   SVI("1.5F16"),     cc_int_tok(0x3e00, CCBT_float16), __LINE__},
+        {"half_exp",     SVI("1.5e2f16"),   cc_int_tok(0x58b0, CCBT_float16), __LINE__},
+        {"half_hex",     SVI("0x1.8p0f16"), cc_int_tok(0x3e00, CCBT_float16), __LINE__},
+        {"half_hex_upper", SVI("0X1P-24F16"), cc_int_tok(1, CCBT_float16), __LINE__},
+        {"half_hex_tie", SVI("0x1.002p0f16"), cc_int_tok(0x3c00, CCBT_float16), __LINE__},
+        {"half_decimal_subnormal", SVI("0.000000059604644775390625f16"), cc_int_tok(1, CCBT_float16), __LINE__},
+        {"half_decimal_above_tie", SVI("1.0004882812500000000000000000000000000001f16"), cc_int_tok(0x3c01, CCBT_float16), __LINE__},
+        {"half_decimal_below_tie", SVI("1.0014648437499999999999999999999999999999f16"), cc_int_tok(0x3c01, CCBT_float16), __LINE__},
         {"float_F",      SVI("3.14F"),      cc_float_tok(3.14f), __LINE__},
         {"double",       SVI("3.14"),       cc_double_tok(3.14), __LINE__},
-        {"bfloat16", SVI("1.5bf16"), cc_int_tok(0x3fc0, CC_BFLOAT16), __LINE__},
-        {"bfloat16_upper", SVI("1.5BF16"), cc_int_tok(0x3fc0, CC_BFLOAT16), __LINE__},
-        {"bfloat16_zero", SVI("0.0bf16"), cc_int_tok(0, CC_BFLOAT16), __LINE__},
-        {"bfloat16_exponent", SVI("1.5e2bf16"), cc_int_tok(0x4316, CC_BFLOAT16), __LINE__},
-        {"bfloat16_hex", SVI("0x1.8p0bf16"), cc_int_tok(0x3fc0, CC_BFLOAT16), __LINE__},
-        {"bfloat16_hex_upper", SVI("0X1.8P0BF16"), cc_int_tok(0x3fc0, CC_BFLOAT16), __LINE__},
-        {"bfloat16_tie_even", SVI("1.00390625bf16"), cc_int_tok(0x3f80, CC_BFLOAT16), __LINE__},
-        {"bfloat16_above_tie", SVI("1.003906250000000000000000000000000000001bf16"), cc_int_tok(0x3f81, CC_BFLOAT16), __LINE__},
-        {"bfloat16_below_tie", SVI("1.003906249999999999999999999999999999999bf16"), cc_int_tok(0x3f80, CC_BFLOAT16), __LINE__},
-        {"bfloat16_tie_odd", SVI("1.01171875bf16"), cc_int_tok(0x3f82, CC_BFLOAT16), __LINE__},
-        {"bfloat16_hex_tie", SVI("0x1.01p0bf16"), cc_int_tok(0x3f80, CC_BFLOAT16), __LINE__},
-        {"bfloat16_subnormal", SVI("0x1p-133bf16"), cc_int_tok(1, CC_BFLOAT16), __LINE__},
-        {"bfloat16_decimal_subnormal", SVI("9.18355e-41bf16"), cc_int_tok(1, CC_BFLOAT16), __LINE__},
-        {"bfloat16_decimal_above_underflow_tie", SVI("4.5917748078995606e-41bf16"), cc_int_tok(1, CC_BFLOAT16), __LINE__},
-        {"bfloat16_hex_integer", SVI("0xbf16"), cc_int_tok(0xbf16, CC_INT), __LINE__},
-        {"bfloat16_underflow_tie", SVI("0x1p-134bf16"), cc_int_tok(0, CC_BFLOAT16), __LINE__},
-        {"bfloat16_above_underflow_tie", SVI("0x1.0001p-134bf16"), cc_int_tok(1, CC_BFLOAT16), __LINE__},
-        {"bfloat16_overflow", SVI("1e100bf16"), cc_int_tok(0x7f80, CC_BFLOAT16), __LINE__},
-        {"bfloat16_underflow", SVI("1e-100bf16"), cc_int_tok(0, CC_BFLOAT16), __LINE__},
+        {"bfloat16", SVI("1.5bf16"), cc_int_tok(0x3fc0, CCBT_bfloat16), __LINE__},
+        {"bfloat16_upper", SVI("1.5BF16"), cc_int_tok(0x3fc0, CCBT_bfloat16), __LINE__},
+        {"bfloat16_zero", SVI("0.0bf16"), cc_int_tok(0, CCBT_bfloat16), __LINE__},
+        {"bfloat16_exponent", SVI("1.5e2bf16"), cc_int_tok(0x4316, CCBT_bfloat16), __LINE__},
+        {"bfloat16_hex", SVI("0x1.8p0bf16"), cc_int_tok(0x3fc0, CCBT_bfloat16), __LINE__},
+        {"bfloat16_hex_upper", SVI("0X1.8P0BF16"), cc_int_tok(0x3fc0, CCBT_bfloat16), __LINE__},
+        {"bfloat16_tie_even", SVI("1.00390625bf16"), cc_int_tok(0x3f80, CCBT_bfloat16), __LINE__},
+        {"bfloat16_above_tie", SVI("1.003906250000000000000000000000000000001bf16"), cc_int_tok(0x3f81, CCBT_bfloat16), __LINE__},
+        {"bfloat16_below_tie", SVI("1.003906249999999999999999999999999999999bf16"), cc_int_tok(0x3f80, CCBT_bfloat16), __LINE__},
+        {"bfloat16_tie_odd", SVI("1.01171875bf16"), cc_int_tok(0x3f82, CCBT_bfloat16), __LINE__},
+        {"bfloat16_hex_tie", SVI("0x1.01p0bf16"), cc_int_tok(0x3f80, CCBT_bfloat16), __LINE__},
+        {"bfloat16_subnormal", SVI("0x1p-133bf16"), cc_int_tok(1, CCBT_bfloat16), __LINE__},
+        {"bfloat16_decimal_subnormal", SVI("9.18355e-41bf16"), cc_int_tok(1, CCBT_bfloat16), __LINE__},
+        {"bfloat16_decimal_above_underflow_tie", SVI("4.5917748078995606e-41bf16"), cc_int_tok(1, CCBT_bfloat16), __LINE__},
+        {"bfloat16_hex_integer", SVI("0xbf16"), cc_int_tok(0xbf16, CCBT_int), __LINE__},
+        {"bfloat16_underflow_tie", SVI("0x1p-134bf16"), cc_int_tok(0, CCBT_bfloat16), __LINE__},
+        {"bfloat16_above_underflow_tie", SVI("0x1.0001p-134bf16"), cc_int_tok(1, CCBT_bfloat16), __LINE__},
+        {"bfloat16_overflow", SVI("1e100bf16"), cc_int_tok(0x7f80, CCBT_bfloat16), __LINE__},
+        {"bfloat16_underflow", SVI("1e-100bf16"), cc_int_tok(0, CCBT_bfloat16), __LINE__},
         {"imaginary_i", SVI("3.14i"), cc_imaginary_tok(cc_double_tok(3.14)), __LINE__},
         {"imaginary_I", SVI("3.14I"), cc_imaginary_tok(cc_double_tok(3.14)), __LINE__},
         {"imaginary_j", SVI("3.14j"), cc_imaginary_tok(cc_double_tok(3.14)), __LINE__},
@@ -434,15 +440,15 @@ TestFunction(test_cc_lex_floats){
         {"imaginary_fi", SVI("3.14fi"), cc_imaginary_tok(cc_float_tok(3.14f)), __LINE__},
         {"imaginary_if", SVI("3.14if"), cc_imaginary_tok(cc_float_tok(3.14f)), __LINE__},
         {"imaginary_integer_if", SVI("1if"), cc_imaginary_tok(cc_float_tok(1.0f)), __LINE__},
-        {"imaginary_half", SVI("1.5f16i"), cc_imaginary_tok(cc_int_tok(0x3e00, CC_FLOAT16)), __LINE__},
-        {"imaginary_half_prefix", SVI("1.5if16"), cc_imaginary_tok(cc_int_tok(0x3e00, CC_FLOAT16)), __LINE__},
-        {"imaginary_half_integer", SVI("1if16"), cc_imaginary_tok(cc_int_tok(0x3c00, CC_FLOAT16)), __LINE__},
-        {"imaginary_half_hex", SVI("0x1.8p0f16J"), cc_imaginary_tok(cc_int_tok(0x3e00, CC_FLOAT16)), __LINE__},
-        {"imaginary_half_hex_prefix", SVI("0x1.8p0jf16"), cc_imaginary_tok(cc_int_tok(0x3e00, CC_FLOAT16)), __LINE__},
-        {"imaginary_half_subnormal", SVI("0x1p-24f16i"), cc_imaginary_tok(cc_int_tok(1, CC_FLOAT16)), __LINE__},
+        {"imaginary_half", SVI("1.5f16i"), cc_imaginary_tok(cc_int_tok(0x3e00, CCBT_float16)), __LINE__},
+        {"imaginary_half_prefix", SVI("1.5if16"), cc_imaginary_tok(cc_int_tok(0x3e00, CCBT_float16)), __LINE__},
+        {"imaginary_half_integer", SVI("1if16"), cc_imaginary_tok(cc_int_tok(0x3c00, CCBT_float16)), __LINE__},
+        {"imaginary_half_hex", SVI("0x1.8p0f16J"), cc_imaginary_tok(cc_int_tok(0x3e00, CCBT_float16)), __LINE__},
+        {"imaginary_half_hex_prefix", SVI("0x1.8p0jf16"), cc_imaginary_tok(cc_int_tok(0x3e00, CCBT_float16)), __LINE__},
+        {"imaginary_half_subnormal", SVI("0x1p-24f16i"), cc_imaginary_tok(cc_int_tok(1, CCBT_float16)), __LINE__},
         {"imaginary_integer_fi", SVI("1fi"), cc_imaginary_tok(cc_float_tok(1.0f)), __LINE__},
         {"imaginary_integer_IF", SVI("1IF"), cc_imaginary_tok(cc_float_tok(1.0f)), __LINE__},
-        {"imaginary_integer_il", SVI("1il"), cc_imaginary_tok(cc_int_tok(1, CC_LONG)), __LINE__},
+        {"imaginary_integer_il", SVI("1il"), cc_imaginary_tok(cc_int_tok(1, CCBT_long)), __LINE__},
         {"imaginary_large_integer_if", SVI("18446744073709551616if"), cc_imaginary_tok(cc_float_tok(18446744073709551616.0f)), __LINE__},
         {"imaginary_hex", SVI("0x1.8p0fi"), cc_imaginary_tok(cc_float_tok(1.5f)), __LINE__},
         {"imaginary_long_double", SVI("3.14Li"), cc_imaginary_tok(cc_long_double_tok((uint64_t[2]){0xeb851eb851eb851fULL, 0x400091eb851eb851ULL})), __LINE__},
@@ -488,39 +494,76 @@ TestFunction(test_cc_lex_floats){
     TESTEND();
 }
 
+static int cpp_char_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
+
 TestFunction(test_cc_lex_chars){
     TESTBEGIN();
     static const struct {
-        const char* name; StringView inp; uint64_t exp_value; CcConstantType exp_ctype; int line;
+        StringView text;
+        uint64_t signed_value;
+        uint64_t unsigned_value;
+    } byte_cases[] = {
+        {SVI("'\\xff'"), UINT64_MAX, 255},
+        {SVI("'\\377'"), UINT64_MAX, 255},
+        {SVI("'\\x80'"), UINT64_MAX - 127, 128},
+        {SVI("'\\x7f'"), 127, 127},
+        {SVI("'\377'"), UINT64_MAX, 255},
+        {SVI("'\\xff\\xff'"), 65535, 65535},
+        {SVI("L'\\xff'"), 255, 255},
+        {SVI("u'\\xff'"), 255, 255},
+        {SVI("U'\\xff'"), 255, 255},
+        {SVI("u8'\\xff'"), 255, 255},
+    };
+    for(int is_signed = 0; is_signed < 2; is_signed++){
+        CcTargetConfig target = cc_target_test;
+        target.char_is_signed = is_signed;
+        CppPreprocessor cpp = {.target = &target};
+        static int byte_idx[2] = {0};
+        for(size_t i = test_atomic_increment(&byte_idx[is_signed]); i < countof(byte_cases); i = test_atomic_increment(&byte_idx[is_signed])){
+            CppToken input = {.txt = byte_cases[i].text};
+            CcToken out;
+            int err = cpp_char_to_cc_tok(&cpp, &input, &out);
+            TestExpectFalse(int, err);
+            if(err) continue;
+            TestExpectEquals(uint64_t, out.constant.integer_value,
+                is_signed ? byte_cases[i].signed_value : byte_cases[i].unsigned_value);
+        }
+    }
+    static const struct {
+        const char* name; StringView inp; uint64_t exp_value; CcBasicTypeKind exp_ctype; int line;
     } test_cases[] = {
-        {"simple_a",          SVI("'a'"),           'a',            CC_INT,    __LINE__},
-        {"simple_z",          SVI("'z'"),           'z',            CC_INT,    __LINE__},
-        {"escape_n",          SVI("'\\n'"),         '\n',           CC_INT,    __LINE__},
-        {"escape_t",          SVI("'\\t'"),         '\t',           CC_INT,    __LINE__},
-        {"escape_0",          SVI("'\\0'"),         '\0',           CC_INT,    __LINE__},
-        {"escape_sq",         SVI("'\\''"),         '\'',           CC_INT,    __LINE__},
-        {"escape_bs",         SVI("'\\\\'"),        '\\',           CC_INT,    __LINE__},
-        {"hex_escape",        SVI("'\\x41'"),       0x41,           CC_INT,    __LINE__},
-        {"octal_esc",         SVI("'\\101'"),       0101,           CC_INT,    __LINE__},
-        {"delimited_octal",   SVI("'\\o{000123}'"), 83,             CC_INT,    __LINE__},
-        {"delimited_hex",     SVI("'\\x{41}'"),     65,             CC_INT,    __LINE__},
-        {"delimited_unicode", SVI("U'\\u{1F600}'"), 0x1F600,        CC_CHAR32, __LINE__},
-        {"multichar",         SVI("'ab'"),          (('a'<<8)|'b'), CC_INT,    __LINE__},
-        {"L_prefix",          SVI("L'a'"),          'a',            CC_WCHAR,  __LINE__},
-        {"u_prefix",          SVI("u'a'"),          'a',            CC_CHAR16, __LINE__},
-        {"U_prefix",          SVI("U'a'"),          'a',            CC_CHAR32, __LINE__},
-        {"u8_prefix",         SVI("u8'a'"),         'a',            CC_UCHAR,  __LINE__},
+        {"simple_a",          SVI("'a'"),           'a',            CCBT_int,    __LINE__},
+        {"simple_z",          SVI("'z'"),           'z',            CCBT_int,    __LINE__},
+        {"escape_n",          SVI("'\\n'"),         '\n',           CCBT_int,    __LINE__},
+        {"escape_t",          SVI("'\\t'"),         '\t',           CCBT_int,    __LINE__},
+        {"escape_0",          SVI("'\\0'"),         '\0',           CCBT_int,    __LINE__},
+        {"escape_sq",         SVI("'\\''"),         '\'',           CCBT_int,    __LINE__},
+        {"escape_bs",         SVI("'\\\\'"),        '\\',           CCBT_int,    __LINE__},
+        {"hex_escape",        SVI("'\\x41'"),       0x41,           CCBT_int,    __LINE__},
+        {"octal_esc",         SVI("'\\101'"),       0101,           CCBT_int,    __LINE__},
+        {"delimited_octal",   SVI("'\\o{000123}'"), 83,             CCBT_int,    __LINE__},
+        {"delimited_hex",     SVI("'\\x{41}'"),     65,             CCBT_int,    __LINE__},
+        {"delimited_unicode", SVI("U'\\u{1F600}'"), 0x1F600,        CCBT_unsigned, __LINE__},
+        {"multichar",         SVI("'ab'"),          (('a'<<8)|'b'), CCBT_int,    __LINE__},
+        {"multichar_sign",    SVI("'\\xff\\xff\\xff\\xff'"), UINT64_MAX, CCBT_int, __LINE__},
+        {"L_prefix",          SVI("L'a'"),          'a',            CCBT_int,  __LINE__},
+        {"L_signed_value",    SVI("L'\\xffffffff'"), UINT64_MAX,     CCBT_int, __LINE__},
+        {"U_unsigned_value",  SVI("U'\\xffffffff'"), UINT32_MAX,     CCBT_unsigned, __LINE__},
+        {"u_unsigned_value",  SVI("u'\\xffff'"),     UINT16_MAX,     CCBT_unsigned_short, __LINE__},
+        {"u_prefix",          SVI("u'a'"),          'a',            CCBT_unsigned_short, __LINE__},
+        {"U_prefix",          SVI("U'a'"),          'a',            CCBT_unsigned, __LINE__},
+        {"u8_prefix",         SVI("u8'a'"),         'a',            CCBT_unsigned_char,  __LINE__},
         // Universal character names
-        {"ucn_u",             SVI("'\\u0041'"),     0x0041,         CC_INT,    __LINE__},
-        {"ucn_U",             SVI("'\\U00000041'"), 0x0041,         CC_INT,    __LINE__},
-        {"ucn_u_hi",          SVI("'\\u00E9'"),     0x00E9,         CC_INT,    __LINE__},
-        {"ucn_u_3byte",       SVI("'\\u250c'"),     0x250c,         CC_INT,    __LINE__},
-        {"ucn_u_cjk",         SVI("'\\u4e16'"),     0x4e16,         CC_INT,    __LINE__},
-        {"ucn_U_4byte",       SVI("'\\U0001F600'"), 0x1F600,        CC_INT,    __LINE__},
+        {"ucn_u",             SVI("'\\u0041'"),     0x0041,         CCBT_int,    __LINE__},
+        {"ucn_U",             SVI("'\\U00000041'"), 0x0041,         CCBT_int,    __LINE__},
+        {"ucn_u_hi",          SVI("'\\u00E9'"),     0x00E9,         CCBT_int,    __LINE__},
+        {"ucn_u_3byte",       SVI("'\\u250c'"),     0x250c,         CCBT_int,    __LINE__},
+        {"ucn_u_cjk",         SVI("'\\u4e16'"),     0x4e16,         CCBT_int,    __LINE__},
+        {"ucn_U_4byte",       SVI("'\\U0001F600'"), 0x1F600,        CCBT_int,    __LINE__},
         // Prefixed with escape
-        {"u8_escape_n",       SVI("u8'\\n'"),       '\n',           CC_UCHAR,  __LINE__},
-        {"L_escape_0",        SVI("L'\\0'"),        '\0',           CC_WCHAR,  __LINE__},
-        {"U_hex_esc",         SVI("U'\\x41'"),      0x41,           CC_CHAR32, __LINE__},
+        {"u8_escape_n",       SVI("u8'\\n'"),       '\n',           CCBT_unsigned_char,  __LINE__},
+        {"L_escape_0",        SVI("L'\\0'"),        '\0',           CCBT_int,  __LINE__},
+        {"U_hex_esc",         SVI("U'\\x41'"),      0x41,           CCBT_unsigned, __LINE__},
     };
     static int case_idx = 0;
     for(size_t i = test_atomic_increment(&case_idx); i < countof(test_cases); i = test_atomic_increment(&case_idx)){
@@ -543,7 +586,7 @@ TestFunction(test_cc_lex_chars){
             TEST_stats.failures++;
             TestReport("test '%s' (line %d): expected ctype=%d value=%llu, got type=%s ctype=%d value=%llu",
                 test_cases[i].name, test_cases[i].line,
-                test_cases[i].exp_ctype, (unsigned long long)test_cases[i].exp_value,
+                (int)test_cases[i].exp_ctype, (unsigned long long)test_cases[i].exp_value,
                 cc_type_name(toks[0].type), toks[0].constant.ctype,
                 (unsigned long long)toks[0].constant.integer_value);
         }
@@ -846,9 +889,9 @@ TestFunction(test_cc_lex_multi_token){
         const char* name; StringView inp; int exp_count; CcToken exp[8]; int line;
     } test_cases[] = {
         {"simple_expr", SVI("1 + 2"), 3, {
-            cc_int_tok(1, CC_INT),
+            cc_int_tok(1, CCBT_int),
             cc_punct_tok(CC_plus),
-            cc_int_tok(2, CC_INT),
+            cc_int_tok(2, CCBT_int),
         }, __LINE__},
         {"decl", SVI("int x;"), 3, {
             cc_kw_tok(CC_int),
@@ -858,26 +901,26 @@ TestFunction(test_cc_lex_multi_token){
         {"assign", SVI("x = 42;"), 4, {
             cc_ident_tok("x"),
             cc_punct_tok(CC_assign),
-            cc_int_tok(42, CC_INT),
+            cc_int_tok(42, CCBT_int),
             cc_punct_tok(CC_semi),
         }, __LINE__},
         {"func_call", SVI("foo(1, 2)"), 6, {
             cc_ident_tok("foo"),
             cc_punct_tok(CC_lparen),
-            cc_int_tok(1, CC_INT),
+            cc_int_tok(1, CCBT_int),
             cc_punct_tok(CC_comma),
-            cc_int_tok(2, CC_INT),
+            cc_int_tok(2, CCBT_int),
             cc_punct_tok(CC_rparen),
         }, __LINE__},
         {"string_and_int", SVI("\"hello\" 42"), 2, {
             cc_str_tok(CC_STRING, SV("hello\0")),
-            cc_int_tok(42, CC_INT),
+            cc_int_tok(42, CCBT_int),
         }, __LINE__},
         // No-whitespace adjacency
         {"no_ws_add", SVI("1+2"), 3, {
-            cc_int_tok(1, CC_INT),
+            cc_int_tok(1, CCBT_int),
             cc_punct_tok(CC_plus),
-            cc_int_tok(2, CC_INT),
+            cc_int_tok(2, CCBT_int),
         }, __LINE__},
         {"no_ws_assign", SVI("a=b"), 3, {
             cc_ident_tok("a"),
@@ -971,23 +1014,23 @@ TestFunction(test_literal_regressions){
         {SVI("0x1.a'bp1'0"), cc_double_tok(0x1.abp10)},
         {SVI("#define HEX 0x1.8p2f\nHEX"), cc_float_tok(6.0f)},
         {SVI("#define CAT(a,b) a##b\nCAT(0x1p, 2)"), cc_double_tok(4.0)},
-        {SVI("U'\\x1234'"), cc_int_tok(0x1234, CC_CHAR32)},
-        {SVI("U'\\777'"), cc_int_tok(0777, CC_CHAR32)},
-        {SVI("u'\\x1234'"), cc_int_tok(0x1234, CC_CHAR16)},
-        {SVI("L'\\x1234'"), cc_int_tok(0x1234, CC_WCHAR)},
-        {SVI("U'α'"), cc_int_tok(0x3B1, CC_CHAR32)},
-        {SVI("u'α'"), cc_int_tok(0x3B1, CC_CHAR16)},
-        {SVI("U'😀'"), cc_int_tok(0x1F600, CC_CHAR32)},
-        {SVI("U'\\U0001f600'"), cc_int_tok(0x1F600, CC_CHAR32)},
-        {SVI("u8'\\xff'"), cc_int_tok(255, CC_UCHAR)},
-        {SVI("__calc(U'\\x1234')"), cc_int_tok(0x1234, CC_INT)},
-        {SVI("__calc(U'α')"), cc_int_tok(0x3B1, CC_INT)},
-        {SVI("__mixin(\"\\x31\")"), cc_int_tok(1, CC_INT)},
-        {SVI("__mixin(\"\\u0031\")"), cc_int_tok(1, CC_INT)},
-        {SVI("__mixin(\"\\U00000031\")"), cc_int_tok(1, CC_INT)},
-        {SVI("__mixin(\"\\40\" \"1\")"), cc_int_tok(1, CC_INT)},
-        {SVI("__mixin(u8\"123\")"), cc_int_tok(123, CC_INT)},
-        {SVI("__mixin(L\"123\")"), cc_int_tok(123, CC_INT)},
+        {SVI("U'\\x1234'"), cc_int_tok(0x1234, CCBT_unsigned)},
+        {SVI("U'\\777'"), cc_int_tok(0777, CCBT_unsigned)},
+        {SVI("u'\\x1234'"), cc_int_tok(0x1234, CCBT_unsigned_short)},
+        {SVI("L'\\x1234'"), cc_int_tok(0x1234, CCBT_int)},
+        {SVI("U'α'"), cc_int_tok(0x3B1, CCBT_unsigned)},
+        {SVI("u'α'"), cc_int_tok(0x3B1, CCBT_unsigned_short)},
+        {SVI("U'😀'"), cc_int_tok(0x1F600, CCBT_unsigned)},
+        {SVI("U'\\U0001f600'"), cc_int_tok(0x1F600, CCBT_unsigned)},
+        {SVI("u8'\\xff'"), cc_int_tok(255, CCBT_unsigned_char)},
+        {SVI("__calc(U'\\x1234')"), cc_int_tok(0x1234, CCBT_int)},
+        {SVI("__calc(U'α')"), cc_int_tok(0x3B1, CCBT_int)},
+        {SVI("__mixin(\"\\x31\")"), cc_int_tok(1, CCBT_int)},
+        {SVI("__mixin(\"\\u0031\")"), cc_int_tok(1, CCBT_int)},
+        {SVI("__mixin(\"\\U00000031\")"), cc_int_tok(1, CCBT_int)},
+        {SVI("__mixin(\"\\40\" \"1\")"), cc_int_tok(1, CCBT_int)},
+        {SVI("__mixin(u8\"123\")"), cc_int_tok(123, CCBT_int)},
+        {SVI("__mixin(L\"123\")"), cc_int_tok(123, CCBT_int)},
         {SVI("__mixin(\"\\\"\\?\\\"\")"), cc_str_tok(CC_STRING, SV("?\0"))},
         {SVI("__mixin(\"\\\"a\\\\nb\\\"\")"), cc_str_tok(CC_STRING, SV("a\nb\0"))},
         {SVI("__format(\"%s2\", \"\\1\")"), cc_str_tok(CC_STRING, SV("\0012\0"))},
@@ -999,10 +1042,10 @@ TestFunction(test_literal_regressions){
         {SVI("__format(L\"%s\", U\"α\")"), cc_str_tok(CC_STRING, SV("α\0"))},
         {SVI("__format(\"%s\", \"\\0\\\"\\\\\\n\")"), cc_str_tok(CC_STRING, SV("\0\"\\\n\0"))},
         {SVI("__env(u8\"literal_\\164est\")"), cc_str_tok(CC_STRING, SV("C:\\new\\test\"\n\0"))},
-        {SVI("#define decoded 42\n__ident(u8\"de\\143oded\")"), cc_int_tok(42, CC_INT)},
-        {SVI("_Pragma(\"message(\\\"a\\\\nb\\\")\") 1"), cc_int_tok(1, CC_INT)},
-        {SVI("_Pragma(L\"once\") 1"), cc_int_tok(1, CC_INT)},
-        {SVI("_Pragma(\"message(\\\"a\\\\\\\"b\\\")\") 1"), cc_int_tok(1, CC_INT)},
+        {SVI("#define decoded 42\n__ident(u8\"de\\143oded\")"), cc_int_tok(42, CCBT_int)},
+        {SVI("_Pragma(\"message(\\\"a\\\\nb\\\")\") 1"), cc_int_tok(1, CCBT_int)},
+        {SVI("_Pragma(L\"once\") 1"), cc_int_tok(1, CCBT_int)},
+        {SVI("_Pragma(\"message(\\\"a\\\\\\\"b\\\")\") 1"), cc_int_tok(1, CCBT_int)},
         {SVI("\"\\xff\" \"f\""), cc_str_tok(CC_STRING, SV("\377f\0"))},
         {SVI("u\"\\x1234\""), cc_str16_tok(CC_uSTRING, (const unsigned short[]){0x1234, 0}, 2)},
         {SVI("u\"😀\""), cc_str16_tok(CC_uSTRING, (const unsigned short[]){0xD83D, 0xDE00, 0}, 3)},
@@ -1092,6 +1135,7 @@ TestFunction(test_literal_regressions){
         TestExpectFalse(int, err);
         TestExpectEquals(int, count, 2);
         if(!err && count == 2){
+            TestExpectEquals(uint32_t, out[0].constant.ctype, CCBT_unsigned_short);
             TestExpectEquals(uint64_t, out[0].constant.integer_value, 0x1234);
             TestExpectEquals(uint32_t, out[1].str.length, 3);
             TestExpectEquals(unsigned short, out[1].str.utf16[0], 0xD83D);
@@ -1141,7 +1185,7 @@ TestFunction(test_long_double_targets){
             CcToken out;
             int err = cpp_number_to_cc_tok(&cpp, &input, &out);
             TestExpectFalse(int, err);
-            TestExpectEquals(int, out.constant.ctype, CC_LONG_DOUBLE);
+            TestExpectEquals(int, out.constant.ctype, CCBT_long_double);
             uint64_t words[2] = {0};
             if(formats[f] == CC_LONG_DOUBLE_BINARY128){
                 memcpy(words, &out.constant.quad_value, 16);
@@ -1214,7 +1258,7 @@ TestFunction(test_long_double_macros){
             TestExpectFalse(int, err);
             TestExpectEquals(int, tok.type, CC_CONSTANT);
             if(err || tok.type != CC_CONSTANT) continue;
-            TestExpectEquals(int, tok.constant.ctype, CC_LONG_DOUBLE);
+            TestExpectEquals(int, tok.constant.ctype, CCBT_long_double);
             uint64_t bits[2] = {0};
             switch(format){
                 case CC_LONG_DOUBLE_BINARY64: memcpy(bits, &tok.constant.double_value, 8); break;

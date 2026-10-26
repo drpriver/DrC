@@ -2315,7 +2315,8 @@ ci_lower_assign_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
     if(ci_frame_lvalue(ci, ctx, lhs, &vslot)){
         _Bool stage = !(lhs->kind == CC_EXPR_VARIABLE && lhs->var->initializer == rhs)
             && (ccqt_kind(rhs->type) == CC_STRUCT || ccqt_kind(rhs->type) == CC_UNION || ccqt_is_fixed_sequence(rhs->type) || ccqt_kind(rhs->type) == CC_SLICE)
-            && (rhs->kind == CC_EXPR_TERNARY || rhs->kind == CC_EXPR_COMMA || rhs->kind == CC_EXPR_CAST);
+            && (rhs->kind == CC_EXPR_TERNARY || rhs->kind == CC_EXPR_COMMA || rhs->kind == CC_EXPR_CAST
+                || rhs->kind == CC_EXPR_CALL || rhs->kind == CC_EXPR_STATEMENT_EXPRESSION);
         CiLowerVal v;
         err = ci_lower_expr(ci, ctx, rhs, stage ? CI_NO_SLOT : vslot, &v);
         if(err) return err;

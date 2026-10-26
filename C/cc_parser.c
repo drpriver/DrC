@@ -3692,82 +3692,9 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
     if(err) return err;
     switch(tok.type){
         case CC_CONSTANT: {
-            CcExpr* node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, (CcQualType){0}, 0);
+            CcExpr* node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(tok.constant.ctype), 0);
             if(!node) return CC_OOM_ERROR;
-            switch(tok.constant.ctype){
-                case CC_BFLOAT16:
-                case CC_FLOAT16:
-                    node->type.basic.kind = tok.constant.ctype == CC_BFLOAT16 ? CCBT_bfloat16 : CCBT_float16;
-                    node->uinteger = tok.constant.integer_value;
-                    break;
-                case CC_FLOAT:
-                    node->type.basic.kind = CCBT_float;
-                    node->float_ = tok.constant.float_value;
-                    break;
-                case CC_DOUBLE:
-                    node->type.basic.kind = CCBT_double;
-                    node->double_ = tok.constant.double_value;
-                    break;
-                case CC_LONG_DOUBLE:
-                    node->type.basic.kind = CCBT_long_double;
-                    switch(p->cpp.target->long_double_format){
-                        case CC_LONG_DOUBLE_BINARY64:
-                            node->double_ = tok.constant.double_value;
-                            break;
-                        case CC_LONG_DOUBLE_X87:
-                            node->x87 = tok.constant.x87_value;
-                            break;
-                        case CC_LONG_DOUBLE_BINARY128:
-                            node->quad = tok.constant.quad_value;
-                            break;
-                    }
-                    break;
-                case CC_INT:
-                    node->type.basic.kind = CCBT_int;
-                    node->uinteger = tok.constant.integer_value;
-                    break;
-                case CC_UNSIGNED:
-                    node->type.basic.kind = CCBT_unsigned;
-                    node->uinteger = tok.constant.integer_value;
-                    break;
-                case CC_LONG:
-                    node->type.basic.kind = CCBT_long;
-                    node->uinteger = tok.constant.integer_value;
-                    break;
-                case CC_UNSIGNED_LONG:
-                    node->type.basic.kind = CCBT_unsigned_long;
-                    node->uinteger = tok.constant.integer_value;
-                    break;
-                case CC_LONG_LONG:
-                    node->type.basic.kind = CCBT_long_long;
-                    node->uinteger = tok.constant.integer_value;
-                    break;
-                case CC_UNSIGNED_LONG_LONG:
-                    node->type.basic.kind = CCBT_unsigned_long_long;
-                    node->uinteger = tok.constant.integer_value;
-                    break;
-                case CC_INT128:
-                case CC_UNSIGNED_INT128:
-                    node->type.basic.kind = tok.constant.ctype == CC_INT128 ? CCBT_int128 : CCBT_unsigned_int128;
-                    node->uinteger128 = tok.constant.integer128_value;
-                    break;
-                case CC_WCHAR:
-                    node->type.basic.kind = cc_target(p)->wchar_type;
-                    node->uinteger = tok.constant.integer_value;
-                    break;
-                case CC_CHAR16:
-                    node->type.basic.kind = cc_target(p)->char16_type;
-                    node->uinteger = tok.constant.integer_value;
-                    break;
-                case CC_CHAR32:
-                    node->type.basic.kind = cc_target(p)->char32_type;
-                    node->uinteger = tok.constant.integer_value;
-                    break;
-                case CC_UCHAR:
-                    node->type.basic.kind = CCBT_unsigned_char;
-                    node->uinteger = tok.constant.integer_value;
-                    break;
-            }
+            memcpy(node->data, &tok.constant.integer128_value, sizeof node->data);
             if(tok.constant.is_imaginary){
                 CcBasicTypeKind scalar = ccqt_basic_kind(node->type);
                 if(ccbt_complex_kind(scalar) == CCBT_INVALID){
@@ -8486,7 +8413,7 @@ cc_next_token(CcParser* p, CcToken* tok){
     CcToken tail = *tok;
     *tok = (CcToken){.constant={
         .type=CC_CONSTANT,
-        .ctype=CC_INT,
+        .ctype=CCBT_int,
         .loc=tail.loc,
         .integer_value=((const unsigned char*)tail.embed.bytes.buff)[0]
     }};
@@ -10882,7 +10809,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
         err = cc_next_token(p, &tok);
         if(err) return err;
         // DrC also accepts {0}, normalized to empty initialization.
-        if(tok.type == CC_CONSTANT && tok.constant.ctype == CC_INT && !tok.constant.integer_value){
+        if(tok.type == CC_CONSTANT && tok.constant.ctype == CCBT_int && !tok.constant.integer_value){
             err = cc_next_token(p, &tok);
             if(err) return err;
         }
@@ -11201,7 +11128,9 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                 && limit >= CC_INIT_LITERAL_MIN
                 && packed.type == CC_CONSTANT
                 && !packed.constant.is_imaginary
-                && packed.constant.ctype <= CC_UNSIGNED_LONG_LONG){
+                && ccbt_is_integer(packed.constant.ctype)
+                && packed.constant.ctype != CCBT_int128
+                && packed.constant.ctype != CCBT_unsigned_int128){
                     uint32_t count = 0;
                     DRP_PROFILE_BEGIN(integer_run, "parser.initializer_integer_run");
                     CcToken *probe = Allocator_alloc(cc_scratch_allocator(p), 2*CC_INIT_LITERAL_MIN, sizeof *probe, _Alignof(CcToken));
@@ -11232,7 +11161,11 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                             break;
                         err = cc_next_token_packed(p, &tok);
                         if(err) goto run_cleanup;
-                        if(tok.type != CC_CONSTANT || tok.constant.is_imaginary || tok.constant.ctype > CC_UNSIGNED_LONG_LONG){
+                        if(tok.type != CC_CONSTANT
+                        || tok.constant.is_imaginary
+                        || !ccbt_is_integer(tok.constant.ctype)
+                        || tok.constant.ctype == CCBT_int128
+                        || tok.constant.ctype == CCBT_unsigned_int128){
                             err = cc_unget(p, &tok);
                             if(err) goto run_cleanup;
                             break;
@@ -11281,7 +11214,11 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                     for(; !closed && count < limit; count++){
                         err = cc_next_token_packed(p, &tok);
                         if(err) goto run_cleanup;
-                        if(tok.type != CC_CONSTANT || tok.constant.is_imaginary || tok.constant.ctype > CC_UNSIGNED_LONG_LONG){
+                        if(tok.type != CC_CONSTANT
+                        || tok.constant.is_imaginary
+                        || !ccbt_is_integer(tok.constant.ctype)
+                        || tok.constant.ctype == CCBT_int128
+                        || tok.constant.ctype == CCBT_unsigned_int128){
                             err = cc_unget(p, &tok);
                             if(err) goto run_cleanup;
                             break;
@@ -11347,11 +11284,10 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                         }
                         else {
                             if(!arr->is_incomplete && ai >= arr->length) break;
-                            CcToken comma;
-                            err = cc_peek(p, &comma);
+                            _Bool stop;
+                            err = cc_init_unbraced_comma(p, &stop);
                             if(err) return err;
-                            if(comma.type != CC_PUNCTUATOR || comma.punct.punct != ',') break;
-                            cc_next_token(p, &comma);
+                            if(stop) break;
                         }
                         continue;
                     }

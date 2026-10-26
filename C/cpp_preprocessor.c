@@ -91,7 +91,7 @@ static SrcLocExp*_Nullable cpp_srcloc_to_exp(CppPreprocessor* cpp, SrcLoc loc);
 static SrcLoc cpp_chain_loc(CppPreprocessor* cpp, SrcLoc tok_loc, SrcLocExp* parent);
 static int cpp_ident_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
 static int cpp_number_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
-static int cpp_parse_char_body(CppPreprocessor*, SrcLoc, const char*, const char*, int64_t*, CcConstantType);
+static int cpp_parse_char_body(CppPreprocessor*, SrcLoc, const char*, const char*, int64_t*, CcStringType);
 static int cpp_char_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
 static int cpp_punct_to_cc_tok(CppPreprocessor*, CppToken*, CcToken*);
 static int cpp_handle_directive(CppPreprocessor *cpp);
@@ -8075,19 +8075,20 @@ cpp_eval_parse_number(CppPreprocessor* cpp, CppToken tok, int64_t* value){
 
 static
 int
-cpp_parse_char_body(CppPreprocessor* cpp, SrcLoc loc, const char* p, const char* e, int64_t* value, CcConstantType ctype){
+cpp_parse_char_body(CppPreprocessor* cpp, SrcLoc loc, const char* p, const char* e, int64_t* value, CcStringType stype){
     StringView body = {(size_t)(e - p), p};
     uint64_t v = 0;
     unsigned nchars = 0;
+    _Bool byte_character = 0;
     for(size_t i = 0; i < body.length;){
-        if(ctype != CC_INT && nchars)
+        if(stype != CC_STRING && nchars)
             return cpp_error(cpp, loc, "Multi-character character constant with prefix is not allowed");
         if(nchars++ == 4) return cpp_error(cpp, loc, "Character constant too long");
         uint32_t cp;
         _Bool numeric;
         size_t start = i;
         // Preserve the ordinary multicharacter convention of packing raw bytes.
-        if(ctype == CC_INT && (unsigned char)body.text[i] >= 0x80){
+        if(stype == CC_STRING && (unsigned char)body.text[i] >= 0x80){
             cp = (unsigned char)body.text[i++];
             numeric = 1;
         }
@@ -8095,15 +8096,16 @@ cpp_parse_char_body(CppPreprocessor* cpp, SrcLoc loc, const char* p, const char*
             int err = cpp_decode_literal_char(cpp, loc, body, &i, &cp, &numeric);
             if(err) return err;
         }
+        byte_character = numeric;
         uint32_t limit = UINT32_MAX;
-        if(ctype == CC_UCHAR) limit = numeric ? UINT8_MAX : 0x7F;
-        else if(ctype == CC_CHAR16 || (ctype == CC_WCHAR && cpp->target->wchar_type == CCBT_unsigned_short))
+        if(stype == CC_U8STRING) limit = numeric ? UINT8_MAX : 0x7F;
+        else if(stype == CC_uSTRING || (stype == CC_LSTRING && cpp->target->wchar_type == CCBT_unsigned_short))
             limit = UINT16_MAX;
-        else if(ctype == CC_INT && numeric) limit = UINT8_MAX;
+        else if(stype == CC_STRING && numeric) limit = UINT8_MAX;
         if(cp > limit) return cpp_error(cpp, loc, "Character constant out of range");
         unsigned shift = 8;
         // Preserve existing ordinary UCN values and packing, but check overflow.
-        if(ctype == CC_INT && body.text[start] == '\\' && start + 1 < body.length){
+        if(stype == CC_STRING && body.text[start] == '\\' && start + 1 < body.length){
             if(body.text[start+1] == 'u') shift = 16;
             else if(body.text[start+1] == 'U') shift = 32;
         }
@@ -8111,6 +8113,8 @@ cpp_parse_char_body(CppPreprocessor* cpp, SrcLoc loc, const char* p, const char*
             return cpp_error(cpp, loc, "Character constant too long");
         v = (v << shift) | cp;
     }
+    if(stype == CC_STRING && nchars == 1 && byte_character && cpp->target->char_is_signed)
+        v = (v ^ UINT64_C(0x80)) - UINT64_C(0x80);
     *value = (int64_t)v;
     return 0;
 }
@@ -8403,7 +8407,7 @@ cpp_tokenize_text_impl(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppToke
     return 0;
 }
 
-static 
+static
 int
 cpp_tokenize_text(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppTokens* out){
     return cpp_tokenize_text_impl(cpp, loc, str, out, 1);
@@ -8507,7 +8511,7 @@ cpp_long_double_to_cc_tok(CppPreprocessor* cpp, CppToken* tok,
         : fast_float_from_chars_binary128(s, s+len, words, FASTFLOAT_FORMAT_GENERAL);
     if(result.error || result.ptr != s+len)
         return cpp_error(cpp, tok->loc, "Invalid floating-point literal");
-    *out = (CcToken){.constant={.type=CC_CONSTANT, .ctype=CC_LONG_DOUBLE, .loc=tok->loc}};
+    *out = (CcToken){.constant={.type=CC_CONSTANT, .ctype=CCBT_long_double, .loc=tok->loc}};
     if(x87) out->constant.x87_value = ci_float80_read(words);
     else memcpy(&out->constant.quad_value, words, 16);
     return 0;
@@ -8561,28 +8565,28 @@ cpp_hex_float_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, CcToken* out){
         else break;
     }
     if(!exponent_digits) goto invalid;
-    CcConstantType type = CC_DOUBLE;
+    CcBasicTypeKind type = CCBT_double;
     if(i < len){
         if(i + 4 == len && (!memcmp(s+i, "bf16", 4) || !memcmp(s+i, "BF16", 4))){
-            type = CC_BFLOAT16;
+            type = CCBT_bfloat16;
             i += 3;
         }
-        else if(s[i] == 'f' || s[i] == 'F') type = CC_FLOAT;
-        else if(s[i] == 'l' || s[i] == 'L') type = CC_LONG_DOUBLE;
+        else if(s[i] == 'f' || s[i] == 'F') type = CCBT_float;
+        else if(s[i] == 'l' || s[i] == 'L') type = CCBT_long_double;
         else goto invalid;
         i++;
-        if(type == CC_FLOAT && i + 2 == len && s[i] == '1' && s[i+1] == '6'){
-            type = CC_FLOAT16;
+        if(type == CCBT_float && i + 2 == len && s[i] == '1' && s[i+1] == '6'){
+            type = CCBT_float16;
             i += 2;
         }
     }
     if(i != len) goto invalid;
     if(negative_exp) exponent = -exponent;
     exponent += bits - 1 - 4*fractional_digits;
-    _Bool x87 = type == CC_LONG_DOUBLE && cpp->target->long_double_format == CC_LONG_DOUBLE_X87;
-    _Bool quad = type == CC_LONG_DOUBLE && cpp->target->long_double_format == CC_LONG_DOUBLE_BINARY128;
-    int precision = quad ? 113 : x87 ? 64 : type == CC_BFLOAT16 ? 8 : type == CC_FLOAT16 ? 11 : type == CC_FLOAT ? 24 : 53;
-    int bias = (quad || x87) ? 16383 : type == CC_FLOAT16 ? 15 : (type == CC_FLOAT || type == CC_BFLOAT16) ? 127 : 1023;
+    _Bool x87 = type == CCBT_long_double && cpp->target->long_double_format == CC_LONG_DOUBLE_X87;
+    _Bool quad = type == CCBT_long_double && cpp->target->long_double_format == CC_LONG_DOUBLE_BINARY128;
+    int precision = quad ? 113 : x87 ? 64 : type == CCBT_bfloat16 ? 8 : type == CCBT_float16 ? 11 : type == CCBT_float ? 24 : 53;
+    int bias = (quad || x87) ? 16383 : type == CCBT_float16 ? 15 : (type == CCBT_float || type == CCBT_bfloat16) ? 127 : 1023;
     uint64_t lo = 0, hi = 0;
     int encoded_exponent = 0;
     if(bits){
@@ -8627,7 +8631,7 @@ cpp_hex_float_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, CcToken* out){
             else encoded_exponent = exponent+bias;
         }
     }
-    *out = (CcToken){.constant={.type=CC_CONSTANT, .ctype=type, .loc=tok->loc}};
+    *out = (CcToken){.constant={.type=CC_CONSTANT, .ctype=(uint32_t)type, .loc=tok->loc}};
     if(quad){
         uint64_t words[2] = {lo, (hi & UINT64_C(0x0000ffffffffffff)) | ((uint64_t)encoded_exponent << 48)};
         memcpy(&out->constant.quad_value, words, 16);
@@ -8636,13 +8640,13 @@ cpp_hex_float_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, CcToken* out){
         uint64_t words[2] = {lo | (encoded_exponent ? (uint64_t)1 << 63 : 0), (uint64_t)encoded_exponent};
         out->constant.x87_value = ci_float80_read(words);
     }
-    else if(type == CC_BFLOAT16){
+    else if(type == CCBT_bfloat16){
         out->constant.integer_value = (lo & 0x7f) | ((uint64_t)encoded_exponent << 7);
     }
-    else if(type == CC_FLOAT16){
+    else if(type == CCBT_float16){
         out->constant.integer_value = (lo & 0x3ff) | ((uint64_t)encoded_exponent << 10);
     }
-    else if(type == CC_FLOAT){
+    else if(type == CCBT_float){
         uint32_t word = ((uint32_t)lo & 0x7fffff) | ((uint32_t)encoded_exponent << 23);
         memcpy(&out->constant.float_value, &word, sizeof word);
     }
@@ -8802,13 +8806,13 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
             return cpp_error(cpp, cpptok->loc, "Invalid integer suffix on floating-point literal");
         if(has_u)
             return cpp_error(cpp, cpptok->loc, "Invalid suffix: 'u' on floating-point literal");
-        CcConstantType ctype;
+        CcBasicTypeKind ctype;
         if(has_bf16){
             uint16_t value;
             fast_float_from_chars_result result = fast_float_from_chars_bfloat16(buf, buf + buf_len, &value, FASTFLOAT_FORMAT_GENERAL);
             if(result.error || result.ptr != buf + buf_len)
                 return cpp_error(cpp, cpptok->loc, "Invalid floating-point literal");
-            *cctok = (CcToken){.constant={.type=CC_CONSTANT, .ctype=CC_BFLOAT16, .integer_value=value, .loc=cpptok->loc}};
+            *cctok = (CcToken){.constant={.type=CC_CONSTANT, .ctype=CCBT_bfloat16, .integer_value=value, .loc=cpptok->loc}};
         }
         else if(has_f16){
             uint16_t value;
@@ -8816,14 +8820,13 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
                 buf, buf + buf_len, &value, FASTFLOAT_FORMAT_GENERAL);
             if(result.error || result.ptr != buf + buf_len)
                 return cpp_error(cpp, cpptok->loc, "Invalid floating-point literal");
-            *cctok = (CcToken){.constant={.type=CC_CONSTANT, .ctype=CC_FLOAT16,
-                .integer_value=value, .loc=cpptok->loc}};
+            *cctok = (CcToken){.constant={.type=CC_CONSTANT, .ctype=CCBT_float16, .integer_value=value, .loc=cpptok->loc}};
         }
         else if(has_f){
-            ctype = CC_FLOAT;
+            ctype = CCBT_float;
             float fval; err = parse_float(buf, buf_len, &fval);
             if(err) return cpp_error(cpp, cpptok->loc, "Invalid floating-point literal");
-            *cctok = (CcToken){.constant = { .type = CC_CONSTANT, .ctype = ctype, .float_value = fval, .loc = cpptok->loc},
+            *cctok = (CcToken){.constant = { .type = CC_CONSTANT, .ctype = (uint32_t)ctype, .float_value = fval, .loc = cpptok->loc},
             };
         }
         else if(num_l && cpp->target->long_double_format != CC_LONG_DOUBLE_BINARY64){
@@ -8833,10 +8836,10 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
             double dval; err = parse_double(buf, buf_len, &dval);
             if(err) return cpp_error(cpp, cpptok->loc, "Invalid floating-point literal");
             if(num_l)
-                ctype = CC_LONG_DOUBLE;
+                ctype = CCBT_long_double;
             else
-                ctype = CC_DOUBLE;
-            *cctok = (CcToken){.constant = { .type = CC_CONSTANT, .ctype = ctype, .double_value = dval, .loc = cpptok->loc }};
+                ctype = CCBT_double;
+            *cctok = (CcToken){.constant = { .type = CC_CONSTANT, .ctype = (uint32_t)ctype, .double_value = dval, .loc = cpptok->loc }};
         }
         return 0;
     }
@@ -8874,7 +8877,7 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
         // The i128 spelling keeps its explicitly requested signedness.
         _Bool unsigned_type = has_u || (!msvc_bits && (ci_uint128_hi(v) >> 63));
         *cctok = (CcToken){.constant = {
-            .type = CC_CONSTANT, .ctype = unsigned_type ? CC_UNSIGNED_INT128 : CC_INT128,
+            .type = CC_CONSTANT, .ctype = unsigned_type ? CCBT_unsigned_int128 : CCBT_int128,
             .integer128_value = v, .loc = cpptok->loc,
         }};
         return 0;
@@ -8899,15 +8902,23 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
         if(err) return cpp_error(cpp, cpptok->loc, "Invalid digit in number");
     }
     // Determine type.
-    CcConstantType ctype;
+    CcBasicTypeKind ctype;
     if(msvc_bits){
         // MSVC suffix: explicit type, no promotion.
         // i8/i16/i32 map to int/unsigned (C has no short literals).
         // i64 maps to long long/unsigned long long.
         if(msvc_bits == 64)
-            ctype = has_u ? CC_UNSIGNED_LONG_LONG : CC_LONG_LONG;
+            ctype = has_u ? CCBT_unsigned_long_long : CCBT_long_long;
         else
-            ctype = has_u ? CC_UNSIGNED : CC_INT;
+            ctype = has_u ? CCBT_unsigned : CCBT_int;
+        // Msvc allows overflow into the sign bit so we have to sign-extend
+        // to store it in 64 bits.
+        uint32_t bits = cpp->target->sizeof_[ctype] * 8;
+        if(!has_u && bits < 64){
+            uint64_t sign = (uint64_t)1 << (bits - 1);
+            v &= (sign << 1) - 1;
+            v = (v ^ sign) - sign;
+        }
     }
     else {
         // Standard suffix: start from suffix-implied minimum type,
@@ -8919,27 +8930,27 @@ cpp_number_to_cc_tok_inner(CppPreprocessor* cpp, CppToken* cpptok, CcToken* ccto
         const uint8_t* sizes = cpp->target->sizeof_;
         #define SMAX(bt) (sizes[bt] >= 8 ? (uint64_t)INT64_MAX  : ((uint64_t)1 << (sizes[bt] * 8 - 1)) - 1)
         #define UMAX(bt) (sizes[bt] >= 8 ? UINT64_MAX           : ((uint64_t)1 << (sizes[bt] * 8)) - 1)
-        if(has_u && num_l >= 2)      ctype = CC_UNSIGNED_LONG_LONG;
-        else if(num_l >= 2)          ctype = CC_LONG_LONG;
-        else if(has_u && num_l == 1) ctype = CC_UNSIGNED_LONG;
-        else if(num_l == 1)          ctype = CC_LONG;
-        else if(has_u)               ctype = CC_UNSIGNED;
-        else                         ctype = CC_INT;
+        if(has_u && num_l >= 2)      ctype = CCBT_unsigned_long_long;
+        else if(num_l >= 2)          ctype = CCBT_long_long;
+        else if(has_u && num_l == 1) ctype = CCBT_unsigned_long;
+        else if(num_l == 1)          ctype = CCBT_long;
+        else if(has_u)               ctype = CCBT_unsigned;
+        else                         ctype = CCBT_int;
         // Promote if value doesn't fit
-        if(ctype == CC_INT && v > SMAX(CCBT_int))
-            ctype = is_decimal ? CC_LONG : CC_UNSIGNED;
-        if(ctype == CC_UNSIGNED && v > UMAX(CCBT_unsigned))
-            ctype = CC_UNSIGNED_LONG;
-        if(ctype == CC_LONG && v > SMAX(CCBT_long))
-            ctype = is_decimal ? CC_LONG_LONG : CC_UNSIGNED_LONG;
-        if(ctype == CC_UNSIGNED_LONG && v > UMAX(CCBT_unsigned_long))
-            ctype = CC_UNSIGNED_LONG_LONG;
-        if(ctype == CC_LONG_LONG && v > SMAX(CCBT_long_long))
-            ctype = CC_UNSIGNED_LONG_LONG;
+        if(ctype == CCBT_int && v > SMAX(CCBT_int))
+            ctype = is_decimal ? CCBT_long : CCBT_unsigned;
+        if(ctype == CCBT_unsigned && v > UMAX(CCBT_unsigned))
+            ctype = CCBT_unsigned_long;
+        if(ctype == CCBT_long && v > SMAX(CCBT_long))
+            ctype = is_decimal ? CCBT_long_long : CCBT_unsigned_long;
+        if(ctype == CCBT_unsigned_long && v > UMAX(CCBT_unsigned_long))
+            ctype = CCBT_unsigned_long_long;
+        if(ctype == CCBT_long_long && v > SMAX(CCBT_long_long))
+            ctype = CCBT_unsigned_long_long;
         #undef SMAX
         #undef UMAX
     }
-    *cctok = (CcToken){.constant = { .type = CC_CONSTANT, .ctype = ctype, .integer_value = v, .loc = cpptok->loc}};
+    *cctok = (CcToken){.constant = { .type = CC_CONSTANT, .ctype = (uint32_t)ctype, .integer_value = v, .loc = cpptok->loc}};
     return 0;
 }
 
@@ -8957,11 +8968,11 @@ cpp_char_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     // Skip prefix (L, u, U, u8) to find opening quote, track type
     const char* p = s;
     const char* end = s + len;
-    CcConstantType ctype = CC_INT;
-    if(p < end && *p == 'L'){ p++; ctype = CC_WCHAR; }
-    else if(p < end && *p == 'U'){ p++; ctype = CC_CHAR32; }
-    else if(p + 1 < end && p[0] == 'u' && p[1] == '8'){ p += 2; ctype = CC_UCHAR; }
-    else if(p < end && *p == 'u'){ p++; ctype = CC_CHAR16; }
+    CcStringType stype = CC_STRING;
+    if(p < end && *p == 'L'){ p++; stype = CC_LSTRING; }
+    else if(p < end && *p == 'U'){ p++; stype = CC_USTRING; }
+    else if(p + 1 < end && p[0] == 'u' && p[1] == '8'){ p += 2; stype = CC_U8STRING; }
+    else if(p < end && *p == 'u'){ p++; stype = CC_uSTRING; }
     if(p >= end || *p != '\'')
         return ((void)cpp_error(cpp, cpptok->loc, "Invalid character constant"), CPP_SYNTAX_ERROR); // old version of GCC gets confused without this comma expr
     p++; // skip opening quote
@@ -8969,9 +8980,35 @@ cpp_char_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
     if(e <= p || *e != '\'')
         return ((void)cpp_error(cpp, cpptok->loc, "Invalid character constant"), CPP_SYNTAX_ERROR);
     int64_t v = 0;
-    int err = cpp_parse_char_body(cpp, cpptok->loc, p, e, &v, ctype);
+    int err = cpp_parse_char_body(cpp, cpptok->loc, p, e, &v, stype);
     if(err) return err;
-    *cctok = (CcToken){.constant={.type = CC_CONSTANT, .ctype = ctype, .integer_value = (uint64_t)v, .loc = cpptok->loc}};
+    CcBasicTypeKind ctype;
+    switch(stype){
+        case CC_STRING: ctype = CCBT_int; break;
+        case CC_LSTRING: ctype = cpp->target->wchar_type; break;
+        case CC_uSTRING: ctype = cpp->target->char16_type; break;
+        case CC_USTRING: ctype = cpp->target->char32_type; break;
+        case CC_U8STRING: ctype = CCBT_unsigned_char; break;
+        DRP_CASES_EXHAUSTED;
+    }
+    uint64_t value = (uint64_t)v;
+    switch(ctype){
+        case CCBT_signed_char:
+        case CCBT_short:
+        case CCBT_int:
+        case CCBT_long:
+        case CCBT_long_long: {
+            // Character constants can have negative values in their target type.
+            uint32_t bits = cpp->target->sizeof_[ctype] * 8;
+            if(bits >= 64) break;
+            uint64_t sign = (uint64_t)1 << (bits - 1);
+            value &= (sign << 1) - 1;
+            value = (value ^ sign) - sign;
+            break;
+        }
+        default: break;
+    }
+    *cctok = (CcToken){.constant={.type = CC_CONSTANT, .ctype = (uint32_t)ctype, .integer_value = value, .loc = cpptok->loc}};
     return 0;
 }
 static
