@@ -16980,6 +16980,71 @@ TestFunction(test_interpreter){
             .exit_code = 6,
         },
         {
+            "nested designator: resume array elements", __LINE__,
+            SVI("int a[2][2]={[0][0]=1,2,3,4};\n"
+                "return a[0][0]==1&&a[0][1]==2&&a[1][0]==3&&a[1][1]==4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "nested designator: resume inferred outer array", __LINE__,
+            SVI("int a[][2][2]={[0][0][1]=2,3,4,5,6,7,8};\n"
+                "return sizeof(a)==8*sizeof(int)&&a[0][0][0]==0"
+                "&&a[0][0][1]==2&&a[0][1][0]==3&&a[0][1][1]==4"
+                "&&a[1][0][0]==5&&a[1][0][1]==6&&a[1][1][0]==7&&a[1][1][1]==8;\n"),
+            .exit_code = 1,
+        },
+        {
+            "nested designator: resume struct and array", __LINE__,
+            SVI("struct S {int a[2]; int :3; int b;};\n"
+                "struct S s[2]={[0].a[0]=1,2,3,{4,5,6}};\n"
+                "return s[0].a[0]==1&&s[0].a[1]==2&&s[0].b==3"
+                "&&s[1].a[0]==4&&s[1].a[1]==5&&s[1].b==6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "nested designator: anonymous struct continuation", __LINE__,
+            SVI("struct S {struct {int x,y;}; int z;};\n"
+                "struct S s={.x=1,2,3};\n"
+                "return s.x==1&&s.y==2&&s.z==3;\n"),
+            .exit_code = 1,
+        },
+        {
+            "nested designator: union member continuation", __LINE__,
+            SVI("union U {struct {int x,y;} s; int other;};\n"
+                "struct S {union U u; int z;};\n"
+                "struct S s={.u.s.x=1,2,3};\n"
+                "union U u={.s.x=4,5};\n"
+                "return s.u.s.x==1&&s.u.s.y==2&&s.z==3&&u.s.x==4&&u.s.y==5;\n"),
+            .exit_code = 1,
+        },
+        {
+            "nested designator: later designation resets continuation", __LINE__,
+            SVI("int a[2][3]={[0][0]=1,2,[0][1]=3,4,[1][1]=5,6,};\n"
+                "return a[0][0]==1&&a[0][1]==3&&a[0][2]==4"
+                "&&a[1][0]==0&&a[1][1]==5&&a[1][2]==6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "nested designator: interrupt brace elision", __LINE__,
+            SVI("int a[2][2][2]={[0][0][0]=1,2,3,[1][0][0]=4};\n"
+                "struct S {int a[2]; int b[2];};\n"
+                "struct S s={.a[0]=5,6,7,.b[1]=8};\n"
+                "return a[0][0][0]==1&&a[0][0][1]==2&&a[0][1][0]==3"
+                "&&a[0][1][1]==0&&a[1][0][0]==4&&a[1][0][1]==0"
+                "&&s.a[0]==5&&s.a[1]==6&&s.b[0]==7&&s.b[1]==8;\n"),
+            .exit_code = 1,
+        },
+        {
+            "nested designator: aggregate values and brace boundaries", __LINE__,
+            SVI("struct I {int x,y;}; struct S {struct I i[2]; int z;};\n"
+                "struct I v={3,4}; struct S s={.i[0]={1,2},v,5};\n"
+                "int a[2][2]={{[0]=6},7,8};\n"
+                "return s.i[0].x==1&&s.i[0].y==2&&s.i[1].x==3"
+                "&&s.i[1].y==4&&s.z==5&&a[0][0]==6&&a[0][1]==0"
+                "&&a[1][0]==7&&a[1][1]==8;\n"),
+            .exit_code = 1,
+        },
+        {
             "chained array designator", __LINE__,
             SVI("struct S { int arr[3]; };\n"
                "struct S s = {.arr[1] = 42};\n"

@@ -10792,7 +10792,7 @@ cc_parse_init_value(CcParser* p, CcParseFlags flags, CcQualType field_type, _Boo
 
 static
 int
-cc_is_parent_token(CcParser* p, _Bool* out){
+cc_is_parent_token(CcParser *p, _Bool *out){
     CcToken peek;
     int err = cc_peek(p, &peek);
     if(err) return err;
@@ -10808,6 +10808,67 @@ cc_is_parent_token(CcParser* p, _Bool* out){
         return 0;
     }
     *out = 0;
+    return 0;
+}
+
+static
+int
+cc_init_unbraced_comma(CcParser *p, _Bool *stop){
+    CcToken comma;
+    int err = cc_peek(p, &comma);
+    if(err) return err;
+    *stop = comma.type != CC_PUNCTUATOR || comma.punct.punct != ',';
+    if(*stop) return 0;
+    err = cc_next_token(p, &comma);
+    if(err) return err;
+    err = cc_is_parent_token(p, stop);
+    if(err) return err;
+    // Leave the separator for the enclosing list when brace elision ends.
+    return *stop ? cc_unget(p, &comma) : 0;
+}
+
+static
+int
+cc_parse_designated_init(CcParser *p, CcParseFlags flags, CcQualType target, size_t depth, SrcLoc loc, CcInitBuilder* buf, Marray(uint32_t) *path){
+    int err;
+    if(depth == path->count){
+        err = cc_parse_init_value(p, flags, target, 0, loc, buf, path);
+        if(err) return err;
+        return cc_init_list_comma(p);
+    }
+    CcTypeKind kind = ccqt_kind(target);
+    CcField *fields = NULL;
+    uint32_t count = 0;
+    CcQualType element = CCQT_NONE;
+    if(kind == CC_ARRAY){
+        CcArray *array = ccqt_as_array(target);
+        count = (uint32_t)array->length;
+        element = array->element;
+    }
+    else {
+        err = cc_get_fields(target, &fields, &count);
+        if(err) return err;
+    }
+    uint32_t index = path->data[depth];
+    CcQualType sub = fields ? fields[index].type : element;
+    err = cc_parse_designated_init(p, flags, sub, depth + 1, loc, buf, path);
+    if(err) return err;
+    if(kind == CC_UNION) return 0;
+    for(; ++index < count;){
+        if(fields && !fields[index].name && fields[index].is_bitfield) 
+            continue;
+        _Bool stop;
+        err = cc_is_parent_token(p, &stop);
+        if(err) return err;
+        if(stop) break;
+        path->count = depth;
+        if(ma_push(uint32_t)(path, cc_scratch_allocator(p), index)) return CC_OOM_ERROR;
+        sub = fields ? fields[index].type : element;
+        err = cc_parse_init_value(p, flags, sub, 1, loc, buf, path);
+        if(err) return err;
+        err = cc_init_list_comma(p);
+        if(err) return err;
+    }
     return 0;
 }
 
@@ -10859,12 +10920,10 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                 while(fi < s->field_count && !s->fields[fi].name && s->fields[fi].is_bitfield)
                     fi++;
                 if(fi >= s->field_count) break;
-                CcToken peek;
-                err = cc_peek(p, &peek);
+                _Bool stop;
+                err = cc_init_unbraced_comma(p, &stop);
                 if(err) return err;
-                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ',')
-                    cc_next_token(p, &peek);
-                else break;
+                if(stop) break;
                 continue;
             }
             CcToken peek;
@@ -10895,9 +10954,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                     fi = idx + 1;
                     err = cc_parse_desig_tail(p, flags, &sub, path);
                     if(err) return err;
-                    err = cc_parse_init_value(p, flags, sub, 0, desig_loc, buf, path);
-                    if(err) return err;
-                    err = cc_init_list_comma(p);
+                    err = cc_parse_designated_init(p, flags, s->fields[idx].type, path_depth + 1, desig_loc, buf, path);
                     if(err) return err;
                     continue;
                 }
@@ -10933,11 +10990,10 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
             }
             else {
                 if(fi >= s->field_count) break;
-                err = cc_peek(p, &peek);
+                _Bool stop;
+                err = cc_init_unbraced_comma(p, &stop);
                 if(err) return err;
-                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ',')
-                    cc_next_token(p, &peek);
-                else break;
+                if(stop) break;
             }
         }
     } break;
@@ -10972,12 +11028,10 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                     return cc_error(p, desig_loc, "no member named '%.*s'", field_tok.ident.ident->length, field_tok.ident.ident->data);
                 err = cc_parse_desig_tail(p, flags, &sub, path);
                 if(err) return err;
-                err = cc_parse_init_value(p, flags, sub, 0, desig_loc, buf, path);
+                err = cc_parse_designated_init(p, flags, u->fields[ufi].type, path_depth + 1, desig_loc, buf, path);
                 if(err) return err;
                 for(;;){
                     path->count = path_depth;
-                    err = cc_init_list_comma(p);
-                    if(err) return err;
                     err = cc_peek(p, &peek);
                     if(err) return err;
                     if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rbrace)
@@ -10996,7 +11050,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                         return cc_error(p, desig_loc, "no member named '%.*s'", field_tok.ident.ident->length, field_tok.ident.ident->data);
                     err = cc_parse_desig_tail(p, flags, &sub, path);
                     if(err) return err;
-                    err = cc_parse_init_value(p, flags, sub, 0, desig_loc, buf, path);
+                    err = cc_parse_designated_init(p, flags, u->fields[ufi].type, path_depth + 1, desig_loc, buf, path);
                     if(err) return err;
                 }
                 return cc_expect_punct(p, CC_rbrace);
@@ -11078,11 +11132,10 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
             }
             else {
                 if(ai >= length) break;
-                err = cc_peek(p, &peek);
+                _Bool stop;
+                err = cc_init_unbraced_comma(p, &stop);
                 if(err) return err;
-                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ',')
-                    cc_next_token(p, &peek);
-                else break;
+                if(stop) break;
             }
         }
         break;
@@ -11332,12 +11385,10 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                     continue;
                 }
                 if(!arr->is_incomplete && ai >= arr->length) break;
-                CcToken peek;
-                err = cc_peek(p, &peek);
+                _Bool stop;
+                err = cc_init_unbraced_comma(p, &stop);
                 if(err) return err;
-                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ',')
-                    cc_next_token(p, &peek);
-                else break;
+                if(stop) break;
                 continue;
             }
             CcToken peek;
@@ -11379,9 +11430,7 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
                     if(ma_push(uint32_t)(path, cc_scratch_allocator(p), idx)) return CC_OOM_ERROR;
                     err = cc_parse_desig_tail(p, flags, &sub, path);
                     if(err) return err;
-                    err = cc_parse_init_value(p, flags, sub, 0, desig_loc, buf, path);
-                    if(err) return err;
-                    err = cc_init_list_comma(p);
+                    err = cc_parse_designated_init(p, flags, elem, path_depth + 1, desig_loc, buf, path);
                     if(err) return err;
                     continue;
                 }
@@ -11418,11 +11467,10 @@ cc_parse_init(CcParser* p, CcParseFlags flags, CcQualType target, _Bool braced, 
             }
             else {
                 if(!arr->is_incomplete && ai >= arr->length) break;
-                err = cc_peek(p, &peek);
+                _Bool stop;
+                err = cc_init_unbraced_comma(p, &stop);
                 if(err) return err;
-                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == ',')
-                    cc_next_token(p, &peek);
-                else break;
+                if(stop) break;
             }
         }
         if(out_max_index) *out_max_index = max_ai;
