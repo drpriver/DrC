@@ -1673,12 +1673,14 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
         }
     }
     if(has_clean) b_rm_directory(ctx, ctx->build_dir->data);
-    b_mkdirs_if_not_exists(ctx, AT_to_CSV(ctx->build_dir));
-    b_mkdirs_if_not_exists(ctx, AT_to_CSV(ctx->gen_dir));
-    b_mkdirs_if_not_exists(ctx, AT_to_CSV(ctx->bin_dir));
-    b_mkdirs_if_not_exists(ctx, AT_to_CSV(ctx->lib_dir));
-    b_mkdirs_if_not_exists(ctx, AT_to_CSV(ctx->obj_dir));
-    b_mkdirs_if_not_exists(ctx, AT_to_CSV(ctx->deps_dir));
+    Atom directories[] = {ctx->build_dir, ctx->gen_dir, ctx->bin_dir, ctx->lib_dir, ctx->obj_dir, ctx->deps_dir};
+    for(size_t i = 0; i < countof(directories); i++){
+        err = b_mkdirs_if_not_exists(ctx, AT_to_CSV(directories[i]));
+        if(err){
+            b_loglvl(BLOG_ERROR, ctx, "Unable to create directory '%s' (error %d)\n", directories[i]->data, err);
+            goto fail;
+        }
+    }
     write_to_json_file(ctx, &ctx->target, &TI_BuildTargetSettings.type_info, ctx->settings_cache_path);
     if(ctx->njobs == 0) ctx->njobs = 1;
     if(ctx->njobs < 0) ctx->njobs = b_num_cpus();
@@ -1965,11 +1967,19 @@ b_mkdirs_if_not_exists(BuildCtx* ctx, CStringView path){
     MStringBuilder sb = {.allocator=tmp};
     int ret = 0;
     const char* end = path.text + path.length;
-    const char* p = path.text;
+    _Bool windows = BUILD_OS == OS_WINDOWS;
+    PathRoot root = path_parse_root((StringView){path.length, path.text}, windows);
+    const char* p = path.text + root.length;
+    msb_write_str(&sb, path.text, root.length);
     for(;p < end;){
-        const char* sep = path_memsep(p, end - p, BUILD_OS == OS_WINDOWS);
-        if(!sep) break;
+        const char* sep = p;
+        while(sep < end && !path_is_sep(*sep, windows)) sep++;
+        if(sep == end) break;
         msb_write_str(&sb, p, sep-p);
+        if(sb.errored){
+            ret = 1;
+            goto finally;
+        }
         CStringView d = msb_borrow_csv(&sb);
         int err = b_mkdir_if_not_exists(ctx, d.text);
         if(err){
@@ -1979,7 +1989,7 @@ b_mkdirs_if_not_exists(BuildCtx* ctx, CStringView path){
         p = sep+1;
         msb_write_char(&sb, BUILD_OS==OS_WINDOWS?'\\':'/');
     }
-    b_mkdir_if_not_exists(ctx, path.text);
+    ret = b_mkdir_if_not_exists(ctx, path.text);
     finally:
     msb_destroy(&sb);
     return ret;
@@ -2000,8 +2010,13 @@ b_mkdir_if_not_exists(BuildCtx* ctx, const char* path){
             int ok = CreateDirectoryW((wchar_t*)msb.data, NULL);
             if(!ok){
                 DWORD err = GetLastError();
-                if(err == ERROR_ALREADY_EXISTS)
-                    ret = 0;
+                if(err == ERROR_ALREADY_EXISTS){
+                    DWORD attributes = GetFileAttributesW((wchar_t*)msb.data);
+                    if(attributes == INVALID_FILE_ATTRIBUTES)
+                        ret = GetLastError();
+                    else if(!(attributes & FILE_ATTRIBUTE_DIRECTORY))
+                        ret = ERROR_DIRECTORY;
+                }
                 else
                     ret = err;
             }
@@ -2014,7 +2029,14 @@ b_mkdir_if_not_exists(BuildCtx* ctx, const char* path){
         ret = mkdir(path, 0755);
         if(ret < 0){
             ret = errno;
-            if(ret == EEXIST) return 0;
+            if(ret == EEXIST){
+                struct stat st;
+                if(stat(path, &st))
+                    return errno;
+                if(S_ISDIR(st.st_mode))
+                    return 0;
+                return ENOTDIR;
+            }
         }
         #endif
     }

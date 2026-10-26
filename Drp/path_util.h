@@ -180,94 +180,67 @@ path_skip_seps(const char *buff, size_t pos, size_t len, _Bool is_windows){
     return pos;
 }
 
+typedef struct PathRoot PathRoot;
+struct PathRoot {
+    size_t length; // Includes trailing separators
+    _Bool absolute;
+    _Bool unc;
+};
+
+static
+PathRoot
+path_parse_root(StringView path, _Bool windows){
+    const char* text = path.text;
+    size_t n = path.length;
+    if(!n) return (PathRoot){0};
+    if(windows && n >= 2 && (text[0] | 0x20) >= 'a' && (text[0] | 0x20) <= 'z' && text[1] == ':'){
+        size_t end = path_skip_seps(text, 2, n, windows);
+        return (PathRoot){.length = end, .absolute = end > 2};
+    }
+    if(!path_is_sep(text[0], windows)) return (PathRoot){0};
+    if(!windows || n < 2 || !path_is_sep(text[1], windows))
+        return (PathRoot){.length = path_skip_seps(text, 1, n, windows), .absolute = 1};
+
+    // //server/share, //?/C:, //./C:, or //?/UNC/server/share.
+    StringView components[2] = {0};
+    size_t p = 2, count = 0, required = 2;
+    while(count < required){
+        p = path_skip_seps(text, p, n, windows);
+        if(p == n) break;
+        size_t start = p;
+        while(p < n && !path_is_sep(text[p], windows)) p++;
+        if(count < 2) components[count] = (StringView){p - start, text + start};
+        count++;
+        if(count == 2 && components[0].length == 1
+        && (components[0].text[0] == '?' || components[0].text[0] == '.')
+        && sv_iequals2(SV("UNC"), components[1].text, components[1].length))
+            required = 4;
+    }
+    return (PathRoot){.length = path_skip_seps(text, p, n, windows), .absolute = 1, .unc = 1};
+}
+
 static
 void
 path_normalize_keep_relative(char *buff, size_t *len, _Bool is_windows){
     if(*len == 0) return;
     const size_t n = *len;
-    // reader index, writer index, floor for absolute paths
-    size_t r = 0, w = 0, floor = 0;
-    _Bool absolute = 0, root_needs_sep = 0;
-    if(!is_windows){
-        if(buff[0] == '/'){
-            absolute = 1;
-            buff[w++] = '/';
-            r = path_skip_seps(buff, 1, n, 0);
-            floor = w;
-        }
+    PathRoot root = path_parse_root((StringView){n, buff}, is_windows);
+    size_t r = 0, w = 0;
+    if(root.unc){
+        buff[w++] = '/';
+        buff[w++] = '/';
+        r = path_skip_seps(buff, 2, root.length, is_windows);
     }
-    else if(n >= 2 && (buff[0] | 0x20) >= 'a' && (buff[0] | 0x20) <= 'z' && buff[1] == ':'){
-        // C:foo -> drive relative
-        // C:/ C:\ drive-absolute
-        buff[w++] = buff[0];
-        buff[w++] = ':';
-        r = 2;
-        if(r < n && path_is_sep(buff[r], 1)){
-            absolute = 1;
-            buff[w++] = '/';
-            r = path_skip_seps(buff, r, n, 1);
+    while(r < root.length){
+        if(path_is_sep(buff[r], is_windows)){
+            r = path_skip_seps(buff, r, root.length, is_windows);
+            if(!root.unc || r < root.length) buff[w++] = '/';
         }
-        floor = w;
+        else buff[w++] = buff[r++];
     }
-    else if(is_windows && path_is_sep(buff[0], 1)){
-        if(n >= 2 && path_is_sep(buff[1], 1)){
-            // UNC/device path
-            // Ordinary UNC: //server/share/foo
-            // Device/extended paths:
-            //    //?/C:/foo
-            //    //./C:/foo
-            //    //?/UNC/server/share/foo
-            size_t start[4], end[4];
-            size_t count = 0, p = 2;
-            while(count < 2){
-                p = path_skip_seps(buff, p, n, 1);
-                if(p == n)
-                    break;
-                start[count] = p;
-                while(p < n && !path_is_sep(buff[p], 1))
-                    ++p;
-                end[count] = p;
-                ++count;
-            }
-            //
-            // //?/UNC/server/share
-            // //./UNC/server/share
-            const _Bool extended_unc = count == 2
-                                    && end[0] - start[0] == 1
-                                    && (buff[start[0]] == '?' || buff[start[0]] == '.')
-                                    && sv_iequals2(SV("UNC"), buff+start[1], end[1]-start[1]);
-            if(extended_unc){
-                while(count < 4){
-                    p = path_skip_seps(buff, p, n, 1);
-                    if (p == n)
-                        break;
-                    start[count] = p;
-                    while(p < n && !path_is_sep(buff[p], 1))
-                        ++p;
-                    end[count] = p;
-                    ++count;
-                }
-            }
-            buff[w++] = '/';
-            buff[w++] = '/';
-            for(size_t i = 0; i < count; ++i){
-                if (i != 0)
-                    buff[w++] = '/';
-                for (size_t j = start[i]; j < end[i]; ++j)
-                    buff[w++] = buff[j];
-            }
-            r = path_skip_seps(buff, p, n, 1);
-            absolute = 1;
-            floor = w;
-            root_needs_sep = (count != 0);
-        }
-        else {
-            absolute = 1;
-            buff[w++] = '/';
-            r = path_skip_seps(buff, 1, n, 1);
-            floor = w;
-        }
-    }
+    size_t floor = w;
+    _Bool absolute = root.absolute;
+    _Bool root_needs_sep = root.unc && w > 2;
     while(r < n){
         r = path_skip_seps(buff, r, n, is_windows);
         if(r == n) break;
