@@ -18,7 +18,8 @@
 #endif
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-    if(size > 10000) return 0;
+    if(size > 10000) return -1;
+    int result = 0;
     ArenaAllocator aa = {0};
     Allocator al = allocator_from_arena(&aa);
     FileCache* fc = fc_create(al, FC_FLAGS_NONE);
@@ -55,6 +56,26 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if(err) goto done;
     err = cpp_include_file_via_file_cache(&cc.cpp, path);
     if(err) goto done;
+    enum {MAX_FUZZ_TOKENS=512};
+    for(;;){
+        CcToken tok;
+        err = cpp_next_c_token(&cc.cpp, &tok);
+        if(err) goto done;
+        if(tok.type != CC_EOF && cc.pending.count == MAX_FUZZ_TOKENS){
+            result = -1;
+            goto done;
+        }
+        err = ma_push(CcToken)(&cc.pending, al, tok);
+        if(err) goto done;
+        if(tok.type == CC_EOF)
+            break;
+    }
+    for(size_t i = 0; i < cc.pending.count / 2; i++){
+        size_t j = cc.pending.count - 1 - i;
+        CcToken tok = cc.pending.data[i];
+        cc.pending.data[i] = cc.pending.data[j];
+        cc.pending.data[j] = tok;
+    }
     err = cc_parse_all(&cc);
     (void)err;
 
@@ -63,7 +84,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     ArenaAllocator_free_all(&aa);
     ArenaAllocator_free_all(&cc.cpp.synth_arena);
     ArenaAllocator_free_all(&cc.scratch_arena);
-    return 0;
+    return result;
 }
 
 #ifdef __clang__
