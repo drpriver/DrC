@@ -6300,6 +6300,69 @@ TestFunction(test_interpreter){
             SVI("return 0 ? 10 : 20;\n"),
             .exit_code = 20,
         },
+        {
+            "brace inference: conditional initialization assignment and arguments", __LINE__,
+            SVI("struct S {int x,y;}; int sum(struct S s){return s.x+s.y;}\n"
+                "int f(int c){int left=0,right=0;\n"
+                "struct S s=(c ? {++left,10} : {++right,20});\n"
+                "if(s.x!=1 || s.y!=(c?10:20) || left!=c || right!=!c)return 0;\n"
+                "s=c ? {s.y,s.x} : {s.y+1,s.x+1};\n"
+                "return s.x==(c?10:21) && s.y==(c?1:2)\n"
+                " && sum(c ? {1,2} : {3,4})==(c?3:7);}\n"
+                "return f(0)&&f(1);\n"),
+            .exit_code = 1,
+        },
+        {
+            "brace inference: comma aggregate assignment preserves old fields", __LINE__,
+            SVI("struct S {int x,y;};\n"
+                "int f(int c){struct S s={3,7}; int count=0;\n"
+                "s=(++count,c ? (++count,{s.y,s.x}) : (++count,{s.y+1,s.x+1}));\n"
+                "if(count!=2||s.x!=(c?7:8)||s.y!=(c?3:4))return 0;\n"
+                "s=(++count,{s.y,s.x});\n"
+                "return count==3&&s.x==(c?3:4)&&s.y==(c?7:8);}\n"
+                "return f(0)&&f(1);\n"),
+            .exit_code = 1,
+        },
+        {
+            "brace inference: nested ternaries comma expressions and returns", __LINE__,
+            SVI("struct S {int x,y;};\n"
+                "struct S f(int n,int *count){\n"
+                " return (++*count, n==0 ? (++*count,{1,2}) : (n==1 ? {3,4} : {5,6}));}\n"
+                "int count=0; struct S a=f(0,&count),b=f(1,&count),c=f(2,&count);\n"
+                "return a.x==1&&a.y==2&&b.x==3&&b.y==4&&c.x==5&&c.y==6&&count==4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "brace inference: aggregate subobjects and scalar elements", __LINE__,
+            SVI("struct S {int x,y;}; struct O {struct S s; int n;};\n"
+                "int f(int c){struct O a={.s=c?{1,2}:{3,4},.n=c?{5}:{6}};\n"
+                "struct O b={c?{7,8}:{9,10},c?{11}:{12}};\n"
+                "struct S v[2]={c?{13,14}:{15,16},{17,18}};\n"
+                "return a.s.y==(c?2:4)&&a.n==(c?5:6)&&b.s.x==(c?7:9)\n"
+                " && b.n==(c?11:12)&&v[0].y==(c?14:16)&&v[1].x==17;}\n"
+                "return f(0)&&f(1);\n"),
+            .exit_code = 1,
+        },
+        {
+            "brace inference: generic and compile-time selected expressions", __LINE__,
+            SVI("struct S {int x;};\n"
+                "struct S a=_Generic(1,int:{3},default:{4});\n"
+                "struct S b=_Generic(1.0,int:{5},default:{6});\n"
+                "struct S c=__builtin_choose_expr(1,{7},{8});\n"
+                "struct S d=__builtin_choose_expr(0,{9},{10});\n"
+                "return a.x==3&&b.x==6&&c.x==7&&d.x==10;\n"),
+            .exit_code = 1,
+        },
+        {
+            "brace inference: constants defaults casts and scalar arithmetic", __LINE__,
+            SVI("struct S {int x;}; constexpr struct S s=1?{3}:{4};\n"
+                "_Static_assert(s.x==3);\n"
+                "int g(struct S s=(0?{5}:{6})){return s.x;}\n"
+                "int f(int c){int x={3}+1; unsigned char y=(c?{7}:{8});\n"
+                "auto z=(int)(c?{9}:{10}); return x==4&&y==(c?7:8)&&z==(c?9:10);}\n"
+                "return g()==6&&f(0)&&f(1);\n"),
+            .exit_code = 1,
+        },
         // Comma
         {
             "comma", __LINE__,

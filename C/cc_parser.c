@@ -47,20 +47,20 @@ static int cc_clone_default_arg(CcParser*, CcExpr*, SrcLoc, CcParseFlags, CcExpr
 static int cc_prepare_default_arg(CcParser*, CcExpr*, unsigned, Parray*, _Bool);
 static size_t cc_expr_nvalues(CcExpr*);
 static int cc_source_location_expr(CcParser*, CcBuiltinOp, SrcLoc, CcExpr*_Nullable*_Nonnull);
-static int cc_parse_expr(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out);
+static int cc_parse_expr(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out, CcQualType expected);
 static int cc_parse_assignment_expr(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out, CcQualType);
-static int cc_parse_ternary_expr(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out);
-static int cc_parse_comma_tail(CcParser*, CcParseFlags, CcExpr*, CcExpr* _Nullable* _Nonnull);
+static int cc_parse_ternary_expr(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out, CcQualType expected);
+static int cc_parse_comma_tail(CcParser*, CcParseFlags, CcExpr*, CcExpr* _Nullable* _Nonnull, CcQualType expected);
 static int cc_parse_assignment_tail(CcParser*, CcParseFlags, CcExpr*, CcExpr* _Nullable* _Nonnull);
-static int cc_parse_ternary_tail(CcParser*, CcParseFlags, CcExpr*, CcExpr* _Nullable* _Nonnull);
+static int cc_parse_ternary_tail(CcParser*, CcParseFlags, CcExpr*, CcExpr* _Nullable* _Nonnull, CcQualType expected);
 static int cc_parse_infix(CcParser* p, CcParseFlags, CcExpr* left, int min_prec, CcExpr* _Nullable* _Nonnull out);
-static int cc_parse_prefix(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out);
-static int cc_parse_primary(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out);
+static int cc_parse_prefix(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out, CcQualType expected);
+static int cc_parse_primary(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out, CcQualType expected);
 static int cc_parse_postfix(CcParser* p, CcParseFlags, CcExpr* operand, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_lambda(CcParser* p, CcParseFlags, SrcLoc loc, CcExpr* _Nullable* _Nonnull out);
 static int cc_parse_lambda_body(CcParser* p, CcParseFlags, SrcLoc loc, CcQualType type, CcParsedParams* param_names, CcExpr* _Nullable* _Nonnull out);
 static int cc_skip_to_next_comma_or_paren(CcParser* p, const char* context);
-static int cc_parse_Generic(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out);
+static int cc_parse_Generic(CcParser* p, CcParseFlags, CcExpr* _Nullable* _Nonnull out, CcQualType);
 static int cc_next_token(CcParser* p, CcToken* tok);
 static int cc_unget(CcParser* p, CcToken* tok);
 static int cc_peek(CcParser* p, CcToken* tok);
@@ -2223,16 +2223,19 @@ cc_assign_lookup(CcPunct punct, CcExprKind* kind){
 
 static
 int
-cc_parse_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out){
+cc_parse_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out, CcQualType expected){
+    // Expected types guide braced initializers, not conversions of ordinary
+    // expressions. Carry the hint even before discovering a comma or ternary;
+    // their operands still undergo the usual type checks.
     CcExpr* left;
-    int err = cc_parse_assignment_expr(p, flags, &left, CCQT_NONE);
+    int err = cc_parse_assignment_expr(p, flags, &left, expected);
     if(err) return err;
-    return cc_parse_comma_tail(p, flags, left, out);
+    return cc_parse_comma_tail(p, flags, left, out, expected);
 }
 
 static
 int
-cc_parse_comma_tail(CcParser* p, CcParseFlags flags, CcExpr* left, CcExpr* _Nullable* _Nonnull out){
+cc_parse_comma_tail(CcParser* p, CcParseFlags flags, CcExpr* left, CcExpr* _Nullable* _Nonnull out, CcQualType expected){
     int err;
     for(;;){
         CcToken tok;
@@ -2240,7 +2243,7 @@ cc_parse_comma_tail(CcParser* p, CcParseFlags flags, CcExpr* left, CcExpr* _Null
         if(err) return err;
         if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_comma){
             CcExpr* right;
-            err = cc_parse_assignment_expr(p, flags, &right, CCQT_NONE);
+            err = cc_parse_assignment_expr(p, flags, &right, expected);
             if(err) return err;
             err = cc_decay(p, &left);
             if(err) return err;
@@ -2266,18 +2269,9 @@ cc_parse_comma_tail(CcParser* p, CcParseFlags flags, CcExpr* left, CcExpr* _Null
 
 static
 int
-cc_parse_assignment_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out, CcQualType optional_expected){
-    if(optional_expected.bits){
-        CcToken tok;
-        int err = cc_peek(p, &tok);
-        if(err) return err;
-        if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '{'){
-            err = cc_parse_init_list(p, flags, out, optional_expected);
-            return err;
-        }
-    }
+cc_parse_assignment_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out, CcQualType expected){
     CcExpr* left;
-    int err = cc_parse_ternary_expr(p, flags, &left);
+    int err = cc_parse_ternary_expr(p, flags, &left, expected);
     if(err) return err;
     return cc_parse_assignment_tail(p, flags, left, out);
 }
@@ -2385,16 +2379,16 @@ cc_parse_assignment_tail(CcParser* p, CcParseFlags flags, CcExpr* left, CcExpr* 
 
 static
 int
-cc_parse_ternary_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out){
+cc_parse_ternary_expr(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out, CcQualType expected){
     CcExpr* cond;
-    int err = cc_parse_prefix(p, flags, &cond);
+    int err = cc_parse_prefix(p, flags, &cond, expected);
     if(err) return err;
-    return cc_parse_ternary_tail(p, flags, cond, out);
+    return cc_parse_ternary_tail(p, flags, cond, out, expected);
 }
 
 static
 int
-cc_parse_ternary_tail(CcParser* p, CcParseFlags flags, CcExpr* cond, CcExpr* _Nullable* _Nonnull out){
+cc_parse_ternary_tail(CcParser* p, CcParseFlags flags, CcExpr* cond, CcExpr* _Nullable* _Nonnull out, CcQualType expected){
     int err = cc_parse_infix(p, flags, cond, 4, &cond);
     if(err) return err;
     CcToken tok;
@@ -2404,12 +2398,12 @@ cc_parse_ternary_tail(CcParser* p, CcParseFlags flags, CcExpr* cond, CcExpr* _Nu
         err = cc_require_scalar(p, &cond, tok.loc, "'?:'");
         if(err) return err;
         CcExpr* then_expr;
-        err = cc_parse_expr(p, flags, &then_expr);
+        err = cc_parse_expr(p, flags, &then_expr, expected);
         if(err) return err;
         err = cc_expect_punct(p, CC_colon);
         if(err) return err;
         CcExpr* else_expr;
-        err = cc_parse_ternary_expr(p, flags, &else_expr);
+        err = cc_parse_ternary_expr(p, flags, &else_expr, expected);
         if(err) return err;
         CcQualType common;
         CcTypeKind tk = ccqt_kind(then_expr->type);
@@ -2554,7 +2548,7 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
             break;
         }
         CcExpr* right;
-        err = cc_parse_prefix(p, flags, &right);
+        err = cc_parse_prefix(p, flags, &right, CCQT_NONE);
         if(err) return err;
         err = cc_parse_infix(p, flags, right, prec + 1, &right);
         if(err) return err;
@@ -2859,11 +2853,11 @@ cc_parse_type_value_tail(CcParser* p, CcParseFlags flags, CcQualType type,
     value->type_value = type;
     int err = cc_parse_postfix(p, flags, value, &value);
     if(err) goto fail;
-    err = cc_parse_ternary_tail(p, flags, value, &value);
+    err = cc_parse_ternary_tail(p, flags, value, &value, CCQT_NONE);
     if(err) goto fail;
     err = cc_parse_assignment_tail(p, flags, value, &value);
     if(err) goto fail;
-    if(comma) err = cc_parse_comma_tail(p, flags, value, &value);
+    if(comma) err = cc_parse_comma_tail(p, flags, value, &value, CCQT_NONE);
     if(err) goto fail;
     *out = value;
     fail:
@@ -2890,7 +2884,7 @@ cc_parse_type_query_operand(CcParser* p, CcParseFlags flags, CcPunct terminator,
         err = cc_parse_type_value_tail(p, expression_flags, *type, loc, comma, expression);
     }
     else if(comma)
-        err = cc_parse_expr(p, expression_flags, expression);
+        err = cc_parse_expr(p, expression_flags, expression, CCQT_NONE);
     else
         err = cc_parse_assignment_expr(p, expression_flags, expression, CCQT_NONE);
     if(err) return err;
@@ -2956,14 +2950,14 @@ cc_parse_type_or_unary_operand(CcParser* p, CcParseFlags flags, SrcLoc loc,
         err = cc_unget(p, &tok);
         if(err) return err;
     }
-    err = cc_parse_prefix(p, flags, operand);
+    err = cc_parse_prefix(p, flags, operand, CCQT_NONE);
     if(!err) *type = (*operand)->type;
     return err;
 }
 
 static
 int
-cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out);
+cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out, CcQualType expected);
 
 static
 _Bool
@@ -3033,10 +3027,10 @@ cc_adapt_receiver(CcParser* p, CcFunction* function, CcExpr* operand,
 
 static
 int
-cc_parse_prefix(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out){
+cc_parse_prefix(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out, CcQualType expected){
     CcStmtSink* sink = cc_push_stmt_sink(p);
     if(!sink) return CC_OOM_ERROR;
-    int err = cc_parse_prefix_inner(p, flags, out);
+    int err = cc_parse_prefix_inner(p, flags, out, expected);
     if(err) goto done;
     while(sink->stmts.count && *out){
         // Prepend in reverse so captured initializers retain evaluation order.
@@ -3064,7 +3058,7 @@ done:
 
 static
 int
-cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out){
+cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out, CcQualType expected){
     CcToken tok;
     int err = cc_next_token(p, &tok);
     if(err) return err;
@@ -3117,7 +3111,7 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
                     return cc_parse_postfix(p, flags, type_val, out);
                 }
                 CcExpr* operand;
-                err = cc_parse_prefix(p, flags, &operand);
+                err = cc_parse_prefix(p, flags, &operand, cast_type);
                 if(err) return err;
                 err = cc_check_cast(p, operand->type, cast_type, tok.loc);
                 if(err) return err;
@@ -3190,7 +3184,7 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
             CcExpr* operand;
             CcParseFlags operand_flags = flags;
             if(kind == CC_EXPR_ADDR) operand_flags.vc = CC_RUNTIME_VALUE;
-            err = cc_parse_prefix(p, operand_flags, &operand);
+            err = cc_parse_prefix(p, operand_flags, &operand, CCQT_NONE);
             if(err) return err;
             CcQualType result_type;
             switch(kind){
@@ -3359,7 +3353,7 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
     }
     cc_unget(p, &tok);
     CcExpr* primary;
-    err = cc_parse_primary(p, flags, &primary);
+    err = cc_parse_primary(p, flags, &primary, expected);
     if(err) return err;
     return cc_parse_postfix(p, flags, primary, out);
 }
@@ -3681,7 +3675,7 @@ cc_check_va_start_context(CcParser* p, SrcLoc loc){
 
 static
 int
-cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out){
+cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull out, CcQualType expected){
     CcParseFlags runtime_flags = flags;
     runtime_flags.vc = CC_RUNTIME_VALUE;
     CcParseFlags constexpr_flags = flags;
@@ -4014,7 +4008,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     if(err) return err;
                     CcExpr* result;
                     if(b){
-                        err = cc_parse_assignment_expr(p, flags, &result, CCQT_NONE);
+                        err = cc_parse_assignment_expr(p, flags, &result, expected);
                         if(err) return err;
                         err = cc_expect_punct(p, CC_comma);
                         if(err) return err;
@@ -4026,7 +4020,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                         if(err) return err;
                         err = cc_expect_punct(p, CC_comma);
                         if(err) return err;
-                        err = cc_parse_assignment_expr(p, flags, &result, CCQT_NONE);
+                        err = cc_parse_assignment_expr(p, flags, &result, expected);
                         if(err) return err;
                     }
                     err = cc_expect_punct(p, CC_rparen);
@@ -4972,15 +4966,20 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     return 0;
                 }
                 CcExpr* inner;
-                err = cc_parse_expr(p, flags, &inner);
+                err = cc_parse_expr(p, flags, &inner, expected);
                 if(err) return err;
                 err = cc_expect_punct(p, CC_rparen);
                 if(err) return err;
                 *out = inner;
                 return 0;
             }
-            if(tok.punct.punct == CC_lbrace)
-                return cc_error(p, tok.loc, "braced initializer requires an expected type");
+            if(tok.punct.punct == CC_lbrace){
+                if(!expected.bits)
+                    return cc_error(p, tok.loc, "braced initializer requires an expected type");
+                err = cc_unget(p, &tok);
+                if(err) return err;
+                return cc_parse_init_list(p, flags, out, expected);
+            }
             return cc_error(p, tok.loc, "Unexpected punctuator in expression");
         case CC_KEYWORD:
             switch(tok.kw.kw){
@@ -5092,7 +5091,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                 return 0;
             }
             case CC__Generic:
-                return cc_parse_Generic(p, flags, out);
+                return cc_parse_Generic(p, flags, out, expected);
             case CC__Atomic:
             case CC__BitInt:
             case CC__Complex:
@@ -5249,7 +5248,7 @@ cc_skip_to_next_comma_or_paren(CcParser* p, const char* context){
 }
 static
 int
-cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out){
+cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out, CcQualType expected){
     CcParseFlags type_flags = flags;
     type_flags.vc = CC_RUNTIME_VALUE;
     type_flags.unevaluated = 1;
@@ -5323,7 +5322,7 @@ cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out)
         err = cc_expect_punct(p, ':');
         if(err) goto done;
         if(is_match && !result){
-            err = cc_parse_assignment_expr(p, flags, &result, CCQT_NONE);
+            err = cc_parse_assignment_expr(p, flags, &result, expected);
             if(err) goto done;
         }
         else if(is_default && !result){
@@ -5378,7 +5377,7 @@ cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out)
         }
         Marray(CcToken) saved_pending = p->pending;
         p->pending = default_tokens;
-        err = cc_parse_assignment_expr(p, flags, &result, CCQT_NONE);
+        err = cc_parse_assignment_expr(p, flags, &result, expected);
         if(!err){
             err = cc_next_token(p, &tok);
             if(!err && tok.type != CC_EOF)
@@ -5574,7 +5573,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                 if(err) return err;
                 CcExpr* index = NULL;
                 if(peek.type != CC_PUNCTUATOR || peek.punct.punct != ':'){
-                    err = cc_parse_expr(p, flags, &index);
+                    err = cc_parse_expr(p, flags, &index, CCQT_NONE);
                     if(err) return err;
                     err = cc_peek(p, &peek);
                     if(err) return err;
@@ -5604,7 +5603,7 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                             return cc_error(p, tok.loc, "slice of incomplete array requires upper bound");
                     }
                     else{
-                        err = cc_parse_expr(p, flags, &hi);
+                        err = cc_parse_expr(p, flags, &hi, CCQT_NONE);
                         if(err) return err;
                         err = cc_implicit_cast_to_index(p, hi, &hi);
                         if(err) return err;
@@ -7151,7 +7150,7 @@ cc_parse_static_update(CcParser* p, CcParseFlags flags, const Marray(CcToken)* t
     if(err) goto cleanup;
     flags.vc = CC_CONSTEXPR_VALUE;
     flags.static_rebind = 1;
-    err = cc_parse_expr(p, flags, &expr);
+    err = cc_parse_expr(p, flags, &expr, CCQT_NONE);
     if(err) goto cleanup;
     CcToken tok;
     err = cc_next_token(p, &tok);
@@ -7555,7 +7554,7 @@ cc_static_switch_key(CcParser* p, CcParseFlags flags, CcQualType* type, CiUint12
     CcExpr* value = NULL;
     flags.vc = CC_CONSTEXPR_VALUE;
     flags.static_header = !range;
-    int err = range ? cc_parse_expr(p, flags, &expr)
+    int err = range ? cc_parse_expr(p, flags, &expr, CCQT_NONE)
         : cc_parse_selection_header(p, flags, "static switch", &expr);
     if(err) return err;
     if(range){
@@ -7566,7 +7565,7 @@ cc_static_switch_key(CcParser* p, CcParseFlags flags, CcQualType* type, CiUint12
             CcExpr* high = NULL;
             err = cc_next_token(p, &next);
             if(err) goto range_cleanup;
-            err = cc_parse_expr(p, flags, &high);
+            err = cc_parse_expr(p, flags, &high, CCQT_NONE);
             if(err) goto range_cleanup;
             err = cc_eval_case_range(p, range->loc, *type, expr, high, key, &range->high, &range->empty);
             range_cleanup:
@@ -10609,7 +10608,7 @@ cc_parse_scalar_value(CcParser* p, CcParseFlags flags, CcQualType target, CcExpr
             *out = node;
         }
         else {
-            err = cc_parse_assignment_expr(p, flags, out, CCQT_NONE);
+            err = cc_parse_assignment_expr(p, flags, out, target);
             if(err) return err;
         }
         for(uint32_t i = 0; i < depth; i++){
@@ -10627,7 +10626,7 @@ cc_parse_scalar_value(CcParser* p, CcParseFlags flags, CcQualType target, CcExpr
         }
         return 0;
     }
-    return cc_parse_assignment_expr(p, flags, out, CCQT_NONE);
+    return cc_parse_assignment_expr(p, flags, out, target);
 }
 
 static
@@ -10728,12 +10727,6 @@ cc_parse_init_value(CcParser* p, CcParseFlags flags, CcQualType field_type, _Boo
         CcToken peek;
         err = cc_peek(p, &peek);
         if(err) return err;
-        if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lbrace){
-            CcExpr* value;
-            err = cc_parse_init_list(p, flags, &value, field_type);
-            if(err) return err;
-            return cc_push_scalar(p, value, field_type, buf, path);
-        }
         if(ftk == CC_ARRAY && peek.type == CC_STRING_LITERAL){
             CcArray* arr = ccqt_as_array(field_type);
             if(cc_string_array_element(cc_target(p), arr->element)){
@@ -10768,7 +10761,7 @@ cc_parse_init_value(CcParser* p, CcParseFlags flags, CcQualType field_type, _Boo
         }
         {
             CcExpr* v;
-            err = cc_parse_assignment_expr(p, flags, &v, CCQT_NONE);
+            err = cc_parse_assignment_expr(p, flags, &v, field_type);
             if(err) return err;
             if(positional)
                 return cc_init_apply_value(p, flags, field_type, v, loc, buf, path);
@@ -13786,14 +13779,14 @@ cc_parse_label(CcParser* p, CcParseFlags flags, CcStmtNode*_Nullable*_Nonnull ou
         return 0;
     }
     CcExpr* case_expr;
-    err = cc_parse_expr(p, flags, &case_expr);
+    err = cc_parse_expr(p, flags, &case_expr, CCQT_NONE);
     if(err) return err;
     CcToken next;
     CcExpr* high_expr = NULL;
     err = cc_peek(p, &next);
     if(!err && next.type == CC_PUNCTUATOR && next.punct.punct == CC_ellipsis){
         err = cc_next_token(p, &next);
-        if(!err) err = cc_parse_expr(p, flags, &high_expr);
+        if(!err) err = cc_parse_expr(p, flags, &high_expr, CCQT_NONE);
     }
     if(err){
         cc_release_expr(p, case_expr);
@@ -14048,7 +14041,7 @@ cc_parse_for_condition(CcParser* p, CcParseFlags flags, SrcLoc loc, CcExpr*_Null
         expr->var = last;
     }
     else {
-        err = cc_parse_expr(p, flags, &expr);
+        err = cc_parse_expr(p, flags, &expr, CCQT_NONE);
         if(err) goto cleanup;
         err = cc_expect_punct(p, ';');
         if(err) goto cleanup;
@@ -14106,7 +14099,7 @@ cc_parse_selection_header_inner(CcParser* p, CcParseFlags flags, const char* sta
                 return cc_error(p, decls.function_definition->loc, "function definition is not allowed inside '%s' parentheses", statement);
         }
         else {
-            err = cc_parse_expr(p, flags, &expr);
+            err = cc_parse_expr(p, flags, &expr, CCQT_NONE);
             if(err) return err;
             if(!expr) return cc_error(p, first.loc, "expected condition inside '%s' parentheses", statement);
         }
@@ -14480,7 +14473,7 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
                             else {
                                 // Expression init
                                 CcExpr* init_expr;
-                                err = cc_parse_expr(p, flags, &init_expr);
+                                err = cc_parse_expr(p, flags, &init_expr, CCQT_NONE);
                                 if(err) goto init_done;
                                 err = cc_implicit_cast(p, init_expr, ccqt_basic(CCBT_void), &init_expr);
                                 if(err){
@@ -14527,7 +14520,7 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
                         err = cc_peek(p, &peek);
                         if(err) goto for_end;
                         if(!(peek.type == CC_PUNCTUATOR && peek.punct.punct == ')')){
-                            err = cc_parse_expr(p, flags, &inc_expr);
+                            err = cc_parse_expr(p, flags, &inc_expr, CCQT_NONE);
                             if(err) goto for_end;
                             err = cc_implicit_cast(p, inc_expr, ccqt_basic(CCBT_void), &inc_expr);
                             if(err) goto for_end;
@@ -14574,7 +14567,7 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
                     err = cc_expect_punct(p, '(');
                     if(err) return err;
                     CcExpr* cond;
-                    err = cc_parse_expr(p, flags, &cond);
+                    err = cc_parse_expr(p, flags, &cond, CCQT_NONE);
                     if(err) return err;
                     err = cc_require_scalar(p, &cond, tok.loc, "'while' condition");
                     if(err) goto while_condition_error;
@@ -14626,7 +14619,7 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
                         return err;
                     }
                     CcExpr* cond;
-                    err = cc_parse_expr(p, flags, &cond);
+                    err = cc_parse_expr(p, flags, &cond, CCQT_NONE);
                     if(err){
                         cc_free_stmt_tree(p, body);
                         return err;
@@ -14678,7 +14671,7 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
                     }
                     if(!name && !(operand.type == CC_PUNCTUATOR && operand.punct.punct == ';')){
                         CcExpr* depth;
-                        err = cc_parse_expr(p, (CcParseFlags){.vc=CC_CONSTEXPR_VALUE, .unevaluated=1}, &depth);
+                        err = cc_parse_expr(p, (CcParseFlags){.vc=CC_CONSTEXPR_VALUE, .unevaluated=1}, &depth, CCQT_NONE);
                         if(err) return err;
                         int64_t value = 0;
                         err = ccqt_is_integer(depth->type)
@@ -14742,12 +14735,7 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
                     if(p->current_func)
                         ret_type = p->current_func->type->return_type;
                     if(!(peek.type == CC_PUNCTUATOR && peek.punct.punct == ';')){
-                        if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_lbrace){
-                            err = cc_parse_init_list(p, flags, &ret_expr, ret_type);
-                        }
-                        else {
-                            err = cc_parse_expr(p, flags, &ret_expr);
-                        }
+                        err = cc_parse_expr(p, flags, &ret_expr, ret_type);
                         if(err) return err;
                         err = cc_implicit_cast(p, ret_expr, ret_type, &ret_expr); // technically this casts to void if returning from void func, but that's an ok extension
                         if(err) return err;
@@ -14934,7 +14922,7 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
             err = cc_unget(p, &tok);
             if(err) return err;
             CcExpr* expr;
-            err = cc_parse_expr(p, flags, &expr);
+            err = cc_parse_expr(p, flags, &expr, CCQT_NONE);
             if(err) return err;
             err = cc_implicit_cast(p, expr, ccqt_basic(CCBT_void), &expr);
             if(err){

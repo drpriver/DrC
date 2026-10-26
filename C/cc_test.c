@@ -12352,6 +12352,16 @@ TestFunction(test_parse_errors){
             SVI("(test):1:11: error: shift operands require integer type. The types are 'int' and 'double'\n"),
         },
         {
+            "brace inference rejects struct ternary condition", __LINE__,
+            SVI("struct S{int x;}; struct S s={1}?{2}:{3};\n"),
+            SVI("(test):1:33: error: '?:' requires scalar type. The type is 'struct S'\n"),
+        },
+        {
+            "brace inference requires a type for ternary branches", __LINE__,
+            SVI("auto x = 1 ? {3} : {4};\n"),
+            SVI("(test):1:14: error: braced initializer requires an expected type\n"),
+        },
+        {
             "ternary struct condition", __LINE__,
             SVI("struct S{int x;}; struct S s; int x = s ? 1 : 0;\n"),
             SVI("(test):1:41: error: '?:' requires scalar type. The type is 'struct S'\n"),
