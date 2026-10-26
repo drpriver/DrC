@@ -6354,6 +6354,36 @@ TestFunction(test_interpreter){
             .exit_code = 1,
         },
         {
+            "brace inference: addresses use the expected pointee and own storage", __LINE__,
+            SVI("struct S {int x,y;}; static struct S *global=&{3,4};\n"
+                "int read(const struct S *p){return p->x+p->y;}\n"
+                "int f(int n){int count=0; struct S *p=&{++count,n};\n"
+                "struct S *q=&{7,8}; p->x+=2;\n"
+                "int (*a)[2]=&{9,10}; int *scalar=&{11};\n"
+                "return count==1&&p!=q&&p->x==3&&p->y==n&&q->x==7\n"
+                " && (*a)[1]==10&&*scalar==11&&read(&{12,13})==25;}\n"
+                "return global->x==3&&global->y==4&&f(5)&&f(6);\n"),
+            .exit_code = 1,
+        },
+        {
+            "brace inference: address arguments and conditional assignment", __LINE__,
+            SVI("struct S {int x;}; int read(struct S *p){return p->x;}\n"
+                "int f(int c){int left=0,right=0; struct S *p=0;\n"
+                "p=c ? &{++left} : &{++right};\n"
+                "return p->x==1&&left==c&&right==!c\n"
+                " && read(c ? &{3} : &{4})==(c?3:4);}\n"
+                "return f(0)&&f(1);\n"),
+            .exit_code = 1,
+        },
+        {
+            "brace inference: address defaults materialize for each call", __LINE__,
+            SVI("struct S {int x;};\n"
+                "int f(struct S *p=&{3}){return ++p->x;}\n"
+                "int g(int *p=&{5}){return ++*p;}\n"
+                "return f()==4&&f()==4&&g()==6&&g()==6;\n"),
+            .exit_code = 1,
+        },
+        {
             "brace inference: constants defaults casts and scalar arithmetic", __LINE__,
             SVI("struct S {int x;}; constexpr struct S s=1?{3}:{4};\n"
                 "_Static_assert(s.x==3);\n"

@@ -12352,6 +12352,16 @@ TestFunction(test_parse_errors){
             SVI("(test):1:11: error: shift operands require integer type. The types are 'int' and 'double'\n"),
         },
         {
+            "brace inference: address requires an expected pointee", __LINE__,
+            SVI("auto p=&{3};\n"),
+            SVI("(test):1:9: error: braced initializer requires an expected type\n"),
+        },
+        {
+            "brace inference: void pointee cannot be initialized", __LINE__,
+            SVI("void *p=&{3};\n"),
+            SVI("(test):1:10: error: initializer requires a complete object type or an array of unknown bound. The type is 'void'\n"),
+        },
+        {
             "brace inference rejects struct ternary condition", __LINE__,
             SVI("struct S{int x;}; struct S s={1}?{2}:{3};\n"),
             SVI("(test):1:33: error: '?:' requires scalar type. The type is 'struct S'\n"),

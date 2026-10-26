@@ -3184,7 +3184,10 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
             CcExpr* operand;
             CcParseFlags operand_flags = flags;
             if(kind == CC_EXPR_ADDR) operand_flags.vc = CC_RUNTIME_VALUE;
-            err = cc_parse_prefix(p, operand_flags, &operand, CCQT_NONE);
+            CcQualType operand_expected = CCQT_NONE;
+            if(kind == CC_EXPR_ADDR && expected.bits && ccqt_kind(expected) == CC_POINTER)
+                operand_expected = ccqt_as_ptr(expected)->pointee;
+            err = cc_parse_prefix(p, operand_flags, &operand, operand_expected);
             if(err) return err;
             CcQualType result_type;
             switch(kind){
@@ -3238,6 +3241,10 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
                         // eg &3. Desugar to &(int){3}.
                         err = cc_wrap_to_desugared_compound_literal(p, flags, operand, &operand);
                         if(err) return err;
+                    }
+                    if(operand->kind == CC_EXPR_INIT_LIST){
+                        operand->kind = CC_EXPR_COMPOUND_LITERAL;
+                        operand->defer_compound_storage = flags.parsing_default_arg;
                     }
                     if(operand->kind == CC_EXPR_COMPOUND_LITERAL){
                         err = cc_desugar_compound_literal(p, operand, &operand);
