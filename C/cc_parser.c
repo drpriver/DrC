@@ -4979,16 +4979,8 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                 *out = inner;
                 return 0;
             }
-            if(tok.punct.punct == CC_lbrace){
-                // Just treat similar to (), but without comma expression
-                CcExpr* inner;
-                err = cc_parse_assignment_expr(p, flags, &inner, CCQT_NONE);
-                if(err) return err;
-                err = cc_expect_punct_supp(p, CC_rbrace, " to end {}-enclosed expression without inferred type");
-                if(err) return err;
-                *out = inner;
-                return 0;
-            }
+            if(tok.punct.punct == CC_lbrace)
+                return cc_error(p, tok.loc, "braced initializer requires an expected type");
             return cc_error(p, tok.loc, "Unexpected punctuator in expression");
         case CC_KEYWORD:
             switch(tok.kw.kw){

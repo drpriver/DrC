@@ -12515,6 +12515,21 @@ TestFunction(test_parse_errors){
             SVI("(test):1:11: error: pointer arithmetic requires integer operand. The types are 'int *' and 'double'\n"),
         },
         {
+            "untyped braces cannot start arithmetic", __LINE__,
+            SVI("auto x = {3}+1;\n"),
+            SVI("(test):1:10: error: braced initializer requires an expected type\n"),
+        },
+        {
+            "untyped braces cannot be an arithmetic operand", __LINE__,
+            SVI("int x = 1+{3};\n"),
+            SVI("(test):1:11: error: braced initializer requires an expected type\n"),
+        },
+        {
+            "untyped braces cannot infer an auto type", __LINE__,
+            SVI("auto x = {3};\n"),
+            SVI("(test):1:10: error: braced initializer requires an expected type\n"),
+        },
+        {
             "bare qualifier in expression", __LINE__,
             SVI("int x = const;\n"),
             SVI("(test):1:9: error: Expected type in expression, got only qualifiers/storage class\n"),
