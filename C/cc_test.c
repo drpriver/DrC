@@ -7835,6 +7835,36 @@ TestFunction(test_parse_errors){
         StringView target_expect[CC_TARGET_COUNT];
     } cases[] = {
         {
+            "unexpected punctuator in expression", __LINE__,
+            SVI("int x = ;"),
+            SVI("(test):1:9: error: Expected an expression, got ';'\n"),
+        },
+        {
+            "unexpected multicharacter punctuator in expression", __LINE__,
+            SVI("int x = >>=;"),
+            SVI("(test):1:9: error: Expected an expression, got '>>='\n"),
+        },
+        {
+            "unexpected keyword in expression", __LINE__,
+            SVI("int x = return;"),
+            SVI("(test):1:9: error: Expected an expression, got keyword 'return'\n"),
+        },
+        {
+            "unexpected keyword in declaration", __LINE__,
+            SVI("int return;"),
+            SVI("(test):1:5: error: Unexpected keyword 'return' when parsing declaration\n"),
+        },
+        {
+            "declaration keyword where statement required", __LINE__,
+            SVI("if(1) int x;"),
+            SVI("(test):1:7: error: Expected a statement, got keyword 'int'\n"),
+        },
+        {
+            "declspec where statement required", __LINE__,
+            SVI("if(1) __declspec(noinline) int x;"),
+            SVI("(test):1:7: error: Expected a statement, got keyword '__declspec'\n"),
+        },
+        {
             "linkage: block object declaration does not leak to other functions", __LINE__,
             SVI("void declare(void){extern int x;}\n"
                 "int main(void){return x;}\n"),
@@ -7926,7 +7956,7 @@ TestFunction(test_parse_errors){
         {
             "readcyclecounter rejects arguments", __LINE__,
             SVI("__builtin_readcyclecounter(1);"),
-            SVI("(test):1:28: error: Expected ')'\n"),
+            SVI("(test):1:28: error: Expected ')', got constant 1\n"),
             .all_targets = 1,
         },
         {
@@ -8133,13 +8163,13 @@ TestFunction(test_parse_errors){
         {
             "clear cache: requires two operands", __LINE__,
             SVI("__builtin___clear_cache(nullptr);\n"),
-            SVI("(test):1:32: error: Expected ','\n"),
+            SVI("(test):1:32: error: Expected ',', got ')'\n"),
             .all_targets = 1,
         },
         {
             "clear cache: rejects extra operands", __LINE__,
             SVI("__builtin___clear_cache(nullptr, nullptr, nullptr);\n"),
-            SVI("(test):1:41: error: Expected ')'\n"),
+            SVI("(test):1:41: error: Expected ')', got ','\n"),
             .all_targets = 1,
         },
         {
@@ -9880,7 +9910,7 @@ TestFunction(test_parse_errors){
         {
             "label before declaration is not an if body", __LINE__,
             SVI("if(1) label:\nint x;"),
-            SVI("(test):2:1: error: Unexpected keyword in this position\n"),
+            SVI("(test):2:1: error: Expected a statement, got keyword 'int'\n"),
         },
         {
             "numbered continue rejects overflow", __LINE__,
@@ -10145,12 +10175,12 @@ TestFunction(test_parse_errors){
         {
             "SRCLOC builtin requires parentheses", __LINE__,
             SVI("_SrcLoc loc=__builtin_SRCLOC;"),
-            SVI("(test):1:29: error: Expected '('\n"),
+            SVI("(test):1:29: error: Expected '(', got ';'\n"),
         },
         {
             "SRCLOC builtin rejects arguments", __LINE__,
             SVI("_SrcLoc loc=__builtin_SRCLOC(1);"),
-            SVI("(test):1:30: error: Expected ')'\n"),
+            SVI("(test):1:30: error: Expected ')', got constant 1\n"),
         },
         {
             "default args reject enclosing automatic variables", __LINE__,
@@ -10626,12 +10656,12 @@ TestFunction(test_parse_errors){
         {
             "for condition declaration still requires its semicolon", __LINE__,
             SVI("for(;int x=1) {}\n"),
-            SVI("(test):1:13: error: Expected ';'\n"),
+            SVI("(test):1:13: error: Expected ';', got ')'\n"),
         },
         {
             "ordinary declaration cannot end at a closing parenthesis", __LINE__,
             SVI("int x)\n"),
-            SVI("(test):1:6: error: Expected ';'\n"),
+            SVI("(test):1:6: error: Expected ';', got ')'\n"),
         },
         {
             "selection header rejects function definitions", __LINE__,
@@ -11597,12 +11627,53 @@ TestFunction(test_parse_errors){
         {
             "vector_size not power of 2", __LINE__,
             SVI("typedef int v __attribute__((vector_size(7)));"),
-            SVI("(test):1:30: error: vector_size must be a power of 2\n"),
+            SVI("(test):1:30: error: vector_size must be a power of 2, got 7\n"),
         },
         {
             "vector_size zero", __LINE__,
             SVI("typedef int v __attribute__((vector_size(0)));"),
-            SVI("(test):1:30: error: vector_size must be a power of 2\n"),
+            SVI("(test):1:30: error: vector_size must be a power of 2, got 0\n"),
+        },
+        {
+            "vector_size exceeds storage limit", __LINE__,
+            SVI("typedef int v __attribute__((vector_size(65536)));"),
+            SVI("(test):1:30: error: vector_size 65536 exceeds maximum 65535\n"),
+        },
+        {
+            "string initializer reports capacity", __LINE__,
+            SVI("char s[2] = \"abcd\";"),
+            SVI("(test):1:13: error: initializer string has 4 elements excluding the terminator, but array has capacity 2\n"),
+        },
+        {
+            "braced string initializer reports capacity", __LINE__,
+            SVI("char s[2] = {\"abcd\"};"),
+            SVI("(test):1:14: error: initializer string has 4 elements excluding the terminator, but array has capacity 2\n"),
+        },
+        {
+            "member string initializer reports capacity", __LINE__,
+            SVI("struct S { char s[2]; } s = {\"abcd\"};"),
+            SVI("(test):1:30: error: initializer string has 4 elements excluding the terminator, but array has capacity 2\n"),
+        },
+        {
+            "expected punctuation reports end of input", __LINE__,
+            SVI("_SrcLoc loc=__builtin_SRCLOC("),
+            SVI("(test):1:30: error: Expected ')', got end of input\n"),
+        },
+        {
+            "expected punctuation reports identifier", __LINE__,
+            SVI("_SrcLoc loc=__builtin_SRCLOC(foo);"),
+            SVI("(test):1:30: error: Expected ')', got identifier 'foo'\n"),
+        },
+        {
+            "expected punctuation reports keyword", __LINE__,
+            SVI("_SrcLoc loc=__builtin_SRCLOC(int);"),
+            SVI("(test):1:30: error: Expected ')', got keyword 'int'\n"),
+        },
+        {
+            "function redefinition reports previous declaration", __LINE__,
+            SVI("void f(void) {}\nvoid f(void) {}"),
+            SVI("(test):2:14: error: Redefinition of function 'f'\n"
+                "(test):1:6: info: previous declaration of 'f' is here\n"),
         },
         {
             "vector_size smaller than element", __LINE__,
@@ -14395,22 +14466,40 @@ TestFunction(test_parse_errors){
         {
             "duplicate static cases", __LINE__,
             SVI("static switch(1){\nstatic case 1:static break;\nstatic case 1:;\n}"),
-            SVI("(test):3:8: error: duplicate static case value\n"),
+            SVI("(test):3:8: error: duplicate static case value: 1 conflicts with 1\n"
+                "(test):2:8: info: previous case is here\n"),
+        },
+        {
+            "duplicate static type cases report type", __LINE__,
+            SVI("static switch(int){\nstatic case int:;\nstatic case int:;}"),
+            SVI("(test):3:8: error: duplicate static case value: int\n"
+                "(test):2:8: info: previous case is here\n"),
+        },
+        {
+            "duplicate static cases preserve 128 bit values", __LINE__,
+            SVI("static switch((unsigned __int128)1 << 100){\n"
+                "static case (unsigned __int128)1 << 100:;\n"
+                "static case (unsigned __int128)1 << 100:;}"),
+            SVI("(test):3:8: error: duplicate static case value: 1267650600228229401496703205376 conflicts with 1267650600228229401496703205376\n"
+                "(test):2:8: info: previous case is here\n"),
         },
         {
             "static scalar overlaps range", __LINE__,
             SVI("static switch(1){static case -2 ... 2:;\nstatic case 0:;}"),
-            SVI("(test):2:8: error: overlapping static case values\n"),
+            SVI("(test):2:8: error: overlapping static case values: 0 conflicts with -2 ... 2\n"
+                "(test):1:25: info: previous case is here\n"),
         },
         {
             "static range overlaps scalar", __LINE__,
             SVI("static switch(1){static case 0:;\nstatic case -2 ... 2:;}"),
-            SVI("(test):2:8: error: overlapping static case values\n"),
+            SVI("(test):2:8: error: overlapping static case values: -2 ... 2 conflicts with 0\n"
+                "(test):1:25: info: previous case is here\n"),
         },
         {
             "static ranges overlap at endpoint", __LINE__,
             SVI("static switch(1){static case -2 ... 2:;\nstatic case 2 ... 4:;}"),
-            SVI("(test):2:8: error: overlapping static case values\n"),
+            SVI("(test):2:8: error: overlapping static case values: 2 ... 4 conflicts with -2 ... 2\n"
+                "(test):1:25: info: previous case is here\n"),
         },
         {
             "static range cannot change values on conversion", __LINE__,
@@ -14430,7 +14519,8 @@ TestFunction(test_parse_errors){
         {
             "duplicate static cases after conversion", __LINE__,
             SVI("static switch((unsigned)-1){\nstatic case -1:static break;\nstatic case ~0u:;\n}"),
-            SVI("(test):3:8: error: duplicate static case value\n"),
+            SVI("(test):3:8: error: duplicate static case value: 4294967295 conflicts with 4294967295\n"
+                "(test):2:8: info: previous case is here\n"),
         },
         {
             "duplicate static default", __LINE__,

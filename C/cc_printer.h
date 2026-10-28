@@ -12,6 +12,7 @@
 #pragma clang assume_nonnull begin
 #endif
 static void cc_print_type(MStringBuilder* sb, CcQualType t);
+static void cc_print_runtime_integer(MStringBuilder*, CiUint128, uint32_t, _Bool);
 static void cc_print_statement(MStringBuilder* sb, CcStmtNode*);
 static void cc_print_runtime_value(CcParser*, CcQualType, const void*, MStringBuilder*, int indent);
 static void cc_print_expr(MStringBuilder* sb, CcExpr* e);

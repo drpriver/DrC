@@ -19,6 +19,7 @@
 #include "cc_type_check.h"
 #include "cpp_preprocessor.h"
 #include "cc_errors.h"
+#include "cc_keywords.h"
 #include "cc_printer.h"
 
 #ifndef MARRAY_T_CCFUNCPARAM
@@ -66,6 +67,7 @@ static int cc_unget(CcParser* p, CcToken* tok);
 static int cc_peek(CcParser* p, CcToken* tok);
 static int cc_expect_punct(CcParser* p, CcPunct punct);
 static int cc_expect_punct_supp(CcParser* p, CcPunct punct, const char*);
+static int cc_token_error(CcParser* p, CcToken tok, const char* prefix, const char* suffix);
 static void _cc_release_expr(CcParser* p, CcExpr*, size_t nvalues);
 static void cc_release_expr(CcParser* p, CcExpr*);
 static CcExpr*_Nullable _cc_alloc_expr(CcParser* p, size_t nvalues);
@@ -4914,7 +4916,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                 if(err) return err;
                 return cc_parse_init_list(p, flags, out, expected);
             }
-            return cc_error(p, tok.loc, "Unexpected punctuator in expression");
+            return cc_token_error(p, tok, "Expected an expression, got ", "");
         case CC_KEYWORD:
             switch(tok.kw.kw){
             case CC_static_assert: {
@@ -5094,7 +5096,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
             case CC___forceinline:
             case CC_typedef:
             case CC_while:
-                return cc_error(p, tok.loc, "Unexpected keyword in expression");
+                return cc_token_error(p, tok, "Expected an expression, got ", "");
                 DRP_CASES_EXHAUSTED;
             }
         case CC_EMBED:
@@ -7603,10 +7605,27 @@ cc_parse_static_switch_inner(CcParser* p, CcParseFlags flags, SrcLoc loc){
                         for(size_t i = 0; i < cases.count; i++){
                             CcStaticCase prev = cases.data[i];
                             if(ci_uint128_le(low, ci_uint128_xor(prev.high, sign)) && ci_uint128_le(ci_uint128_xor(prev.value, sign), high)){
-                                err = cc_error(p, label.loc, "%s",
+                                MStringBuilder* sb = cc_start_error(p, label.loc, "%s: ",
                                     ci_uint128_eq(entry.value, entry.high) && ci_uint128_eq(prev.value, prev.high) ?
                                     "duplicate static case value" : "overlapping static case values"
                                 );
+                                if(ccqt_bt_eq(type, CCBT__Type))
+                                    cc_print_type(sb, (CcQualType){.bits = ci_uint128_lo(entry.value)});
+                                else {
+                                    cc_print_runtime_integer(sb, entry.value, 128, !uns);
+                                    if(!ci_uint128_eq(entry.value, entry.high)){
+                                        msb_write_literal(sb, " ... ");
+                                        cc_print_runtime_integer(sb, entry.high, 128, !uns);
+                                    }
+                                    msb_write_literal(sb, " conflicts with ");
+                                    cc_print_runtime_integer(sb, prev.value, 128, !uns);
+                                    if(!ci_uint128_eq(prev.value, prev.high)){
+                                        msb_write_literal(sb, " ... ");
+                                        cc_print_runtime_integer(sb, prev.high, 128, !uns);
+                                    }
+                                }
+                                err = cc_finish_error(p, label.loc);
+                                cc_info(p, prev.loc, "previous case is here");
                                 break;
                             }
                         }
@@ -8446,6 +8465,57 @@ cc_peek(CcParser* p, CcToken* tok){
 }
 
 static int cc_expect_punct(CcParser* p, CcPunct punct){ return cc_expect_punct_supp(p, punct, "");}
+
+static
+void
+cc_print_diagnostic_punct(MStringBuilder* sb, CcPunct punct){
+    uint32_t v = (uint32_t)punct;
+    msb_write_char(sb, '\'');
+    if(v > 0xFFFF) msb_write_char(sb, (char)(v >> 16));
+    if(v > 0xFF) msb_write_char(sb, (char)(v >> 8));
+    msb_write_char(sb, (char)v);
+    msb_write_char(sb, '\'');
+}
+
+static
+void
+cc_print_diagnostic_token(CcParser* p, MStringBuilder* sb, CcToken tok){
+    switch(tok.type){
+        DRP_CASES_EXHAUSTED;
+        case CC_EOF: msb_write_literal(sb, "end of input"); return;
+        case CC_IDENTIFIER: msb_sprintf(sb, "identifier '%s'", tok.ident.ident->data); return;
+        case CC_PUNCTUATOR: cc_print_diagnostic_punct(sb, tok.punct.punct); return;
+        case CC_STRING_LITERAL: msb_write_literal(sb, "string literal"); return;
+        case CC_EMBED: msb_write_literal(sb, "embedded resource"); return;
+        case CC_CONSTANT:
+            msb_write_literal(sb, "constant");
+            if(ccbt_is_integer(tok.constant.ctype)){
+                msb_write_char(sb, ' ');
+                CcBasicTypeKind kind = tok.constant.ctype;
+                _Bool wide = kind == CCBT_int128 || kind == CCBT_unsigned_int128;
+                CiUint128 bits = wide ? tok.constant.integer128_value : ci_uint128_from_uint64(tok.constant.integer_value);
+                cc_print_runtime_integer(sb, bits, wide ? 128 : 64, !ccbt_is_unsigned(kind, !cc_target(p)->char_is_signed));
+            }
+            return;
+        case CC_KEYWORD:
+            #define X(spelling, keyword) if(tok.kw.kw == CC_##keyword){ msb_write_literal(sb, "keyword '" #spelling "'"); return; }
+            CCKWS2(X) CCKWS3(X) CCKWS4(X) CCKWS5(X) CCKWS6(X)
+            CCKWS7(X) CCKWS8(X) CCKWS9(X) CCKWS10(X) CCKWS11(X)
+            CCKWS12(X) CCKWS13(X) CCKWS14(X) CCKWS17(X)
+            #undef X
+            return;
+    }
+}
+
+static
+int
+cc_token_error(CcParser* p, CcToken tok, const char* prefix, const char* suffix){
+    MStringBuilder* sb = cc_start_error(p, tok.loc, "%s", prefix);
+    cc_print_diagnostic_token(p, sb, tok);
+    msb_sprintf(sb, "%s", suffix);
+    return cc_finish_error(p, tok.loc);
+}
+
 static
 int
 cc_expect_punct_supp(CcParser* p, CcPunct punct, const char* supp){
@@ -8455,23 +8525,11 @@ cc_expect_punct_supp(CcParser* p, CcPunct punct, const char* supp){
     if(tok.type != CC_PUNCTUATOR || tok.punct.punct != punct){
         if(punct == ';' && tok.type == CC_EOF)
             return 0;
-        char buf[4];
-        int len = 0;
-        uint32_t v = (uint32_t)punct;
-        if(v > 0xFFFF){
-            buf[len++] = (char)(v >> 16);
-            buf[len++] = (char)(v >> 8);
-            buf[len++] = (char)v;
-        }
-        else if(v > 0xFF){
-            buf[len++] = (char)(v >> 8);
-            buf[len++] = (char)v;
-        }
-        else {
-            buf[len++] = (char)v;
-        }
-        buf[len] = 0;
-        return cc_error(p, tok.loc, "Expected '%s'%s", buf, supp);
+        MStringBuilder* sb = cc_start_error(p, tok.loc, "Expected ");
+        cc_print_diagnostic_punct(sb, punct);
+        msb_sprintf(sb, "%s, got ", supp);
+        cc_print_diagnostic_token(p, sb, tok);
+        return cc_finish_error(p, tok.loc);
     }
     return 0;
 }
@@ -9133,9 +9191,9 @@ cc_match_gnu_attribute(CcParser* p, CcParseFlags flags, SrcLoc loc, StringView a
             return cc_error(p, loc, "vector_size attribute requires a constant integral expression");
         uint64_t vs = (uint64_t)vs_i;
         if(vs == 0 || (vs & (vs - 1)) != 0)
-            return cc_error(p, loc, "vector_size must be a power of 2");
+            return cc_error(p, loc, "vector_size must be a power of 2, got %lld", (long long)vs_i);
         if(vs > UINT16_MAX)
-            return cc_error(p, loc, "vector_size too large");
+            return cc_error(p, loc, "vector_size %lld exceeds maximum %u", (long long)vs_i, (unsigned)UINT16_MAX);
         attrs->vector_size = (uint16_t)vs;
         err = cc_expect_punct(p, CC_rparen);
         if(err) return err;
@@ -10672,7 +10730,7 @@ cc_parse_init_value(CcParser* p, CcParseFlags flags, CcQualType field_type, _Boo
                 err = cc_check_string_array(p, field_type, v);
                 if(err) return err;
                 if(!arr->is_incomplete && arr->length < v->str.length - 1)
-                    return cc_error(p, v->loc, "initializer string too long for array");
+                    return cc_error(p, v->loc, "initializer string has %llu elements excluding the terminator, but array has capacity %llu", (unsigned long long)(v->str.length - 1), (unsigned long long)arr->length);
                 // Truncate string literal if needed.
                 if(!arr->is_incomplete && arr->length < ccqt_as_array(v->type)->length)
                     v->type = field_type;
@@ -11772,7 +11830,7 @@ cc_parse_init_list(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull 
                 if(err) return err;
             }
             else if(target->length < source->length - 1)
-                return cc_error(p, value->loc, "initializer string too long for array");
+                return cc_error(p, value->loc, "initializer string has %llu elements excluding the terminator, but array has capacity %llu", (unsigned long long)(source->length - 1), (unsigned long long)target->length);
             else if(target->length < source->length)
                 value->type = target_type;
             err = cc_peek(p, &peek);
@@ -12946,7 +13004,7 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                     case CC__Countof:
                     case CC_static_assert:
                         if(i == 0) return cc_unget(p, &tok);
-                        return cc_error(p, tok.loc, "Unexpected keyword when parsing declaration");
+                        return cc_token_error(p, tok, "Unexpected ", " when parsing declaration");
                     case CC_int:
                         if(base_type->bits)
                             return cc_error(p, tok.loc, "Second type in declaration");
@@ -14791,7 +14849,7 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
                 case CC__Any:
                 case CC__Type:
                 case CC__Self:
-                    return cc_error(p, tok.loc, "Unexpected keyword in this position");
+                    return cc_token_error(p, tok, "Expected a statement, got ", "");
                 case CC___attribute__: {
                     // __attribute__((fallthrough)); etc.
                     err = cc_unget(p, &tok);
@@ -14807,7 +14865,7 @@ cc_parse_statement_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullab
                     return 0;
                 }
                 case CC___declspec:
-                    return cc_error(p, tok.loc, "Unexpected keyword in this position");
+                    return cc_token_error(p, tok, "Expected a statement, got ", "");
             }
             break;
         case CC_PUNCTUATOR:
@@ -15968,8 +16026,11 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 }
             }
             if(func){
-                if(func->defined || func->native_func)
-                    return cc_error(p, tok.loc, "Redefinition of function '%.*s'", name->length, name->data);
+                if(func->defined || func->native_func){
+                    err = cc_error(p, tok.loc, "Redefinition of function '%.*s'", name->length, name->data);
+                    cc_info(p, func->loc, "previous declaration of '%.*s' is here", name->length, name->data);
+                    return err;
+                }
                 err = cc_check_func_compat(p, func, declbase, type, 1, tok.loc);
                 if(err) return err;
                 err = cc_check_pack_decl(p, func, &param_names, type, tok.loc);
@@ -16218,7 +16279,7 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                     if(err) return err;
                 }
                 else if(target_arr->length < init_arr->length - 1)
-                    return cc_error(p, tok.loc, "initializer string too long for array");
+                    return cc_error(p, initializer->loc, "initializer string has %llu elements excluding the terminator, but array has capacity %llu", (unsigned long long)(init_arr->length - 1), (unsigned long long)target_arr->length);
                 else if(target_arr->length < init_arr->length)
                     // Truncate string literal if needed.
                     initializer->type = type;

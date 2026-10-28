@@ -958,7 +958,7 @@ cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){
                         goto invoke_cleanup;
                     }
                     if(arg_seps->count+1 < macro->nparams){
-                        err = cpp_error(cpp, args->count ? args->data[0].loc : tok.loc, "Too few arguments to function-like macro %s()", a->data);
+                        err = cpp_error(cpp, args->count ? args->data[0].loc : tok.loc, "Too few arguments to function-like macro %s(), expected %u, got %zu", a->data, (unsigned)macro->nparams, arg_seps->count + 1);
                         goto invoke_cleanup;
                     }
                     err = cpp_expand_func_macro(cpp, macro, tok.loc, args, arg_seps, &cpp->pending);
@@ -1916,7 +1916,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 }
                 for(size_t i = 0; i < names->count; i++){
                     if(sv_equals(names->data[i].txt, tok.txt)){
-                        err = cpp_error(cpp, tok.loc, "Duplicate macro param name");
+                        err = cpp_error(cpp, tok.loc, "Duplicate macro param name '%.*s'", sv_p(tok.txt));
+                        cpp_info(cpp, names->data[i].loc, "previous parameter is here");
                         goto finish_func_macro;
                     }
                 }
@@ -2200,7 +2201,8 @@ cpp_handle_directive(CppPreprocessor* cpp){
                 }
                 for(size_t i = 0; i < names->count; i++){
                     if(sv_equals(names->data[i].txt, tok.txt)){
-                        err = cpp_error(cpp, tok.loc, "Duplicate macro param name");
+                        err = cpp_error(cpp, tok.loc, "Duplicate macro param name '%.*s'", sv_p(tok.txt));
+                        cpp_info(cpp, names->data[i].loc, "previous parameter is here");
                         goto finish_defblock;
                     }
                 }
@@ -3434,7 +3436,7 @@ cpp_expand_argument(CppPreprocessor *cpp, const CppToken*_Null_unspecified toks,
             goto finally;
         }
         if(arg_seps->count + 1 < macro->nparams){
-            err = cpp_error(cpp, tok.loc, "Too few arguments to function-like macro %s()", a->data);
+            err = cpp_error(cpp, tok.loc, "Too few arguments to function-like macro %s(), expected %u, got %zu", a->data, (unsigned)macro->nparams, arg_seps->count + 1);
             goto finally;
         }
         err = cpp_expand_func_macro(cpp, macro, tok.loc, args, arg_seps, pending);
@@ -3549,7 +3551,7 @@ cpp_resolve_va_arg(
     size_t va_count = nargs_total > macro->nparams ? nargs_total - macro->nparams : 0;
     if(index < 0 || (size_t)index >= va_count){
         SrcLoc eloc = cpp_chain_loc(cpp, loc, expansion_parent);
-        return cpp_error(cpp, eloc, "__VA_ARG__ index out of range");
+        return cpp_error(cpp, eloc, "__VA_ARG__ index %lld out of range for %zu variadic arguments", (long long)index, va_count);
     }
 
     cpp_get_argument(args, arg_seps, macro->nparams + (size_t)index, out_start, out_count);
@@ -8210,7 +8212,7 @@ cpp_eval_atom(CppPreprocessor* cpp, CppTokenStream* s, CppEvalValue* result, _Bo
                     *value = 0 - *value;
                     return 0;
                 default:
-                    return cpp_error(cpp, tok.loc, "Unexpected punctuator in #if expression");
+                    return cpp_error(cpp, tok.loc, "Expected an expression in #if, got '%.*s'", sv_p(tok.txt));
             }
         case CPP_END_OF_INPUT:
         case CPP_HEADER_NAME:

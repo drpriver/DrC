@@ -1305,8 +1305,19 @@ TestFunction(test_error_locations){
     } test_cases[] = {
         {"va_arg whitespace-only arguments", __LINE__,
             SVI("#define F(...) __VA_ARG__(0)\nF( )"),
-            SVI("(test):1:16: error: __VA_ARG__ index out of range\n"
+            SVI("(test):1:16: error: __VA_ARG__ index 0 out of range for 0 variadic arguments\n"
                "(test):2:1: ... expanded from here\n")},
+        {"va_arg negative index", __LINE__,
+            SVI("#define F(...) __VA_ARG__(-1)\nF(a,b)"),
+            SVI("(test):1:16: error: __VA_ARG__ index -1 out of range for 2 variadic arguments\n"
+                "(test):2:1: ... expanded from here\n")},
+        {"va_arg index at upper bound", __LINE__,
+            SVI("#define F(...) __VA_ARG__(2)\nF(a,b)"),
+            SVI("(test):1:16: error: __VA_ARG__ index 2 out of range for 2 variadic arguments\n"
+                "(test):2:1: ... expanded from here\n")},
+        {"direct too few args", __LINE__,
+            SVI("#define F(x,y) x y\nF(1)"),
+            SVI("(test):2:3: error: Too few arguments to function-like macro F(), expected 2, got 1\n")},
         {"indirect too many args", __LINE__,
             SVI("#define F(x) x\n"
                "#define M F(1,2)\n"
@@ -1330,7 +1341,7 @@ TestFunction(test_error_locations){
             SVI("#define F(x,y) x y\n"
                "#define M F(1)\n"
                "M"),
-            SVI("(test):2:13: error: Too few arguments to function-like macro F()\n"
+            SVI("(test):2:13: error: Too few arguments to function-like macro F(), expected 2, got 1\n"
                "(test):3:1: ... expanded from here\n")},
         {"multi-level bad paste", __LINE__,
             SVI("#define P(a,b) a##b\n"
@@ -1894,7 +1905,8 @@ TestFunction(test_erroneous_condition){
     } test_cases[] = {
         {"defblock duplicate parameters", __LINE__,
             SVI("#defblock F(x, x)\nx\n#endblock\n"),
-            SVI("(test):1:16: error: Duplicate macro param name\n")},
+            SVI("(test):1:16: error: Duplicate macro param name 'x'\n"
+                "(test):1:13: info: previous parameter is here\n")},
         {"nested va opt in unused macro", __LINE__,
             SVI("#define F(...) __VA_OPT__(__VA_OPT__(x))\n"),
             SVI("(test):1:27: error: Nested __VA_OPT__ is not allowed\n")},
@@ -1936,7 +1948,8 @@ TestFunction(test_erroneous_condition){
             SVI("(test):2:5: error: Empty header name in __has_include\n")},
         {"defblock duplicate named variadic parameter", __LINE__,
             SVI("#defblock F(x, x...)\nx\n#endblock\n"),
-            SVI("(test):1:16: error: Duplicate macro param name\n")},
+            SVI("(test):1:16: error: Duplicate macro param name 'x'\n"
+                "(test):1:13: info: previous parameter is here\n")},
         {"let duplicate parameters", __LINE__,
             SVI("__let(F(x,x), x, F(1,2))"),
             SVI("(test):1:11: error: Duplicate macro param name\n")},
@@ -2096,7 +2109,10 @@ TestFunction(test_erroneous_condition){
             SVI("(test):1:6: error: Unexpected token after #if expression\n")},
         {"short circuit still checks syntax", __LINE__,
             SVI("#if 1 || (2 + )\n#endif"),
-            SVI("(test):1:15: error: Unexpected punctuator in #if expression\n")},
+            SVI("(test):1:15: error: Expected an expression in #if, got ')'\n")},
+        {"if unexpected multicharacter punctuator", __LINE__,
+            SVI("#if >>=\n#endif"),
+            SVI("(test):1:5: error: Expected an expression in #if, got '>>='\n")},
         {"short circuit still evaluates selected operand", __LINE__,
             SVI("#if 0 || 1 / 0\n#endif"),
             SVI("(test):1:12: error: Division by zero in #if\n")},
@@ -2147,13 +2163,16 @@ TestFunction(test_erroneous_condition){
             SVI("(test):1:2: error: #error \n")},
         {"named variadic parameter duplicates fixed parameter", __LINE__,
             SVI("#define F(x, x...) x\n"),
-            SVI("(test):1:14: error: Duplicate macro param name\n")},
+            SVI("(test):1:14: error: Duplicate macro param name 'x'\n"
+                "(test):1:11: info: previous parameter is here\n")},
         {"duplicate fixed macro parameters", __LINE__,
             SVI("#define F(x, x) x\n"),
-            SVI("(test):1:14: error: Duplicate macro param name\n")},
+            SVI("(test):1:14: error: Duplicate macro param name 'x'\n"
+                "(test):1:11: info: previous parameter is here\n")},
         {"named variadic parameter duplicates later fixed parameter", __LINE__,
             SVI("#define F(a, b, b...) b\n"),
-            SVI("(test):1:17: error: Duplicate macro param name\n")},
+            SVI("(test):1:17: error: Duplicate macro param name 'b'\n"
+                "(test):1:14: info: previous parameter is here\n")},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){

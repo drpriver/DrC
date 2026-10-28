@@ -2962,7 +2962,8 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
     return err;
 }
 
-static int
+static
+int
 ci_call_argv(CiInterpreter* ci, CiInterpFrame* _Nullable caller, CcFunc* func, void* _Nonnull* _Nonnull argv, uint32_t nargs, void* result, size_t size, SrcLoc loc){
     NcCallPlan* plan = func->interp_ops->abi;
     if(plan->result.size > size) return CI_RESULT_TOO_SMALL(ci, loc, plan->result.size, size);
@@ -2985,7 +2986,8 @@ ci_call_argv(CiInterpreter* ci, CiInterpFrame* _Nullable caller, CcFunc* func, v
     return err;
 }
 
-static int
+static
+int
 ci_call_abi(CiInterpreter* ci, CiInterpFrame* _Nullable caller, CcFunc* func, NcCallState* state, SrcLoc loc){
     CcFunc* target = ci_hotswap_target(func);
     if(!target) return ci_error(ci, loc, "hotswap cycle detected");
@@ -3028,16 +3030,14 @@ ci_call_by_name(CiInterpreter* ci, StringView name, const CiArg* _Nullable args,
         CcQualType argument = cc_parameter_value_type(args[i].type);
         CcQualType parameter = cc_parameter_value_type(ftype->params[i]);
         if(!cc_types_same(argument, parameter))
-            return ci_error(ci, func->loc, "ci_call_by_name '%.*s': arg %u type mismatch",
-                (int)name.length, name.text, i);
+            return ci_error(ci, func->loc, "ci_call_by_name '%.*s': arg %u type mismatch", (int)name.length, name.text, i);
     }
     for(uint32_t i = 0; i < nargs; i++){
         uint32_t param_sz;
         int err = cc_sizeof_as_uint(&ci->parser, ftype->params[i], func->loc, &param_sz);
         if(err) return err;
         if(args[i].size < param_sz)
-            return ci_error(ci, func->loc, "ci_call_by_name '%.*s': arg %u buffer too small",
-                (int)name.length, name.text, i);
+            return ci_error(ci, func->loc, "ci_call_by_name '%.*s': arg %u buffer too small", (int)name.length, name.text, i);
     }
     size_t argv_count = nargs ? nargs : 1;
     void** argv = Allocator_alloc(ci_allocator(ci), argv_count, sizeof *argv, _Alignof(void*));
