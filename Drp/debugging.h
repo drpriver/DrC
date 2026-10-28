@@ -77,7 +77,7 @@ free_bt(BacktraceArray* a){
     if(a) free(a);
 }
 
-#if defined __DRC__
+#if defined __DRC__ && !defined __DRC_JIT__
 #include <stdlib.h>
 #include <stdio.h>
 static

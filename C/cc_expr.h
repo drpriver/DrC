@@ -5,6 +5,7 @@
 //
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 #include "../Drp/ByteBuffer.h"
 #include "../Drp/typed_enum.h"
 #include "../Drp/Allocators/allocator.h"
@@ -25,6 +26,16 @@
 #endif
 #ifndef _Null_unspecified
 #define _Null_unspecified
+#endif
+#endif
+
+#ifndef force_inline
+#if defined __GNUC__ || defined __clang__ || defined __DRC__
+#define force_inline static inline __attribute__((always_inline))
+#elif defined _MSC_VER
+#define force_inline static inline __forceinline
+#else
+#define force_inline static inline
 #endif
 #endif
 
@@ -508,34 +519,75 @@ struct CcExpr {
         CcQualType type_value; // for expressions of type type
         CcStmtNode* stmt_body; // CC_EXPR_STATEMENT_EXPRESSION: a CC_STMT_COMPOUND;
                                // value/type = trailing CC_STMT_EXPR's expr
-        CiFloat80 x87;
-        CiFloat128 quad;
-        CiUint128 uinteger128;
-        CiInt128 integer128;
         SrcLoc loc_value;
+        // Wide numbers use byte storage to avoid imposing 16-byte alignment
+        // on every expression. Access them through the helpers below.
         unsigned char data[16];
     };
     CcExpr*_Nonnull values[];
 };
-static inline
+
+force_inline
+CiUint128
+cc_expr_uinteger128(const CcExpr* e){
+    CiUint128 value;
+    memcpy(&value, e->data, sizeof value);
+    return value;
+}
+
+force_inline
+void
+cc_expr_set_uinteger128(CcExpr* e, CiUint128 value){
+    memcpy(e->data, &value, sizeof value);
+}
+
+force_inline
+CiFloat80
+cc_expr_x87(const CcExpr* e){
+    CiFloat80 value;
+    memcpy(&value, e->data, sizeof value);
+    return value;
+}
+
+force_inline
+void
+cc_expr_set_x87(CcExpr* e, CiFloat80 value){
+    memcpy(e->data, &value, sizeof value);
+}
+
+force_inline
+CiFloat128
+cc_expr_quad(const CcExpr* e){
+    CiFloat128 value;
+    memcpy(&value, e->data, sizeof value);
+    return value;
+}
+
+force_inline
+void
+cc_expr_set_quad(CcExpr* e, CiFloat128 value){
+    memcpy(e->data, &value, sizeof value);
+}
+
+force_inline
 const unsigned char*
 cc_expr_array_data(const CcExpr* e){
     return e->kind == CC_EXPR_BLOB ? e->blob.buff : (const unsigned char*)e->text;
 }
 
-static inline
+force_inline
 size_t
 cc_expr_array_count(const CcExpr* e){
     return e->kind == CC_EXPR_BLOB ? e->blob_info.count : e->str.length;
 }
 
-static inline
+force_inline
 CcQualType
 cc_expr_array_element(const CcExpr* e){
     return e->kind == CC_EXPR_BLOB ? e->type : ccqt_array_element(e->type);
 }
 
-static inline
+force_inline
 CcQualType
 cc_expr_field_owner(const CcExpr* e){
     CcQualType type = e->values[0]->type;
@@ -568,6 +620,9 @@ cc_expr_has_runtime_check(const CcExpr* e){
 static inline const char* cc_expr_kind_to_operator(CcExprKind kind);
 
 _Static_assert(offsetof(CcExpr, loc) ==8, "");
+_Static_assert(_Alignof(CcExpr) == 8, "expression nodes need only pointer alignment");
+_Static_assert(offsetof(CcExpr, lhs) == 24, "expression payload must follow the header without padding");
+_Static_assert(offsetof(CcExpr, values) == sizeof(CcExpr), "expression operands must follow the payload");
 
 #ifdef __clang__
 #pragma clang assume_nonnull end

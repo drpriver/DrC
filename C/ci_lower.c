@@ -8604,7 +8604,7 @@ ci_static_numeric_cast(CiInterpreter* ci, CcExpr* e, CiFoldValue* out){
     CcExpr converted = {.kind=CC_EXPR_VALUE, .type=e->type, .loc=e->loc};
     if(ccqt_is_integer(from.type)){
         CiUint128 n = ci_fold_integer(&ctx, &from);
-        if(from.sz > 8) source.uinteger128 = n;
+        if(from.sz > 8) cc_expr_set_uinteger128(&source, n);
         else source.uinteger = ci_uint128_lo(n);
     }
     else {
