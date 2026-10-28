@@ -20,13 +20,13 @@
 #include "Drp/file_util.h"
 #include "Drp/get_input.h"
 #include "Drp/dre.h"
+#include "Drp/drp_profile.h"
 #include "C/cpp_tok.h"
 #include "C/cpp_preprocessor.h"
 #include "C/cc_tok.h"
 #include "C/cc_errors.h"
 #include "C/cc_parser.h"
 #include "C/ci_interp.h"
-#include "Drp/drp_profile.h"
 #include "cpp_args.h"
 #include "cc_repl_completion.h"
 #include "C/ci_op_printer.h"
@@ -945,7 +945,7 @@ repl_builtin_command(CcParser* parser, StringView input){
                     log_sprintf(l, "  enum %.*s (incomplete)\n", (int)a->length, a->data);
                     continue;
                 }
-                log_sprintf(l, "  enum %.*s (%zu enumerators)\n", (int)a->length, a->data, e->enumerator_count);
+                log_sprintf(l, "  enum %.*s (%u enumerators)\n", (int)a->length, a->data, e->enumerator_count);
                 if(detailed){
                     for(uint32_t j = 0; j < e->enumerator_count; j++)
                         log_sprintf(l, "    %.*s = %"PRIu64"\n", (int)e->enumerators[j]->name->length, e->enumerators[j]->name->data, ci_uint128_lo(e->enumerators[j]->value));

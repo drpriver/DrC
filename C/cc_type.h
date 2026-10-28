@@ -13,6 +13,8 @@
 #include "../Drp/switch_macros.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
+#pragma clang diagnostic push
+#pragma clang diagnostic error "-Wpadded"
 #endif
 
 #ifdef _MSC_VER
@@ -134,6 +136,7 @@ struct CC_ALIGN(8) CcPointer {
             uint32_t _padding:  27;
         };
     };
+    uint32_t _pad; // free real estate
     CcQualType pointee;
 };
 _Static_assert(_Alignof(CcPointer)==8, "");
@@ -148,6 +151,7 @@ struct CC_ALIGN(8) CcSlice {
             uint32_t _padding:  27;
         };
     };
+    uint32_t _pad; // free real estate
     CcQualType pointee;
 };
 _Static_assert(_Alignof(CcSlice)==8, "");
@@ -166,6 +170,7 @@ struct CC_ALIGN(8) CcArray {
                      _padding:        23; // free real estate
         };
     };
+    uint32_t _pad; // free real estate
     CcQualType element;
     size_t length;
     SrcLoc declarator_loc; // parsed arrays only; preserved when an outer layer becomes a VLA
@@ -212,8 +217,8 @@ struct CC_ALIGN(8) CcFunction {
                     fixed_param_count: 16; // params before the variadic boundary
         };
     };
-    CcQualType return_type;
     uint32_t param_count;
+    CcQualType return_type;
     CcQualType params[];
 };
 _Static_assert(_Alignof(CcFunction)==8, "");
@@ -343,9 +348,9 @@ struct CC_ALIGN(8) CcStruct {
         CcField* _Null_unspecified data;
     } methods;
     union {
-        CcSysvAggregate sysv;
-        CcArm64Aggregate arm64;
-        CcWindowsAggregate win64;
+        struct { CcSysvAggregate sysv;     unsigned char _sysv_pad[8];};
+        struct { CcArm64Aggregate arm64;   unsigned char _arm64_pad[4];};
+        struct { CcWindowsAggregate win64; unsigned char _win64_pad[15];};
     };
 };
 _Static_assert(_Alignof(CcStruct)==8, "");
@@ -375,9 +380,9 @@ struct CC_ALIGN(8) CcUnion {
         CcField* _Null_unspecified data;
     } methods;
     union {
-        CcSysvAggregate sysv;
-        CcArm64Aggregate arm64;
-        CcWindowsAggregate win64;
+        struct { CcSysvAggregate sysv;     unsigned char _sysv_pad[8];};
+        struct { CcArm64Aggregate arm64;   unsigned char _arm64_pad[4];};
+        struct { CcWindowsAggregate win64; unsigned char _win64_pad[15];};
     };
 };
 _Static_assert(_Alignof(CcUnion)==8, "");
@@ -389,9 +394,10 @@ _Static_assert(offsetof(CcUnion, sysv) == offsetof(CcStruct, sysv), "record ABI 
 typedef struct CcEnumerator CcEnumerator;
 struct CcEnumerator {
     Atom name;
-    CiUint128 value;
     CcQualType type;
+    CiUint128 value;
     SrcLoc loc;
+    uint64_t _pad; // free real estate
 };
 
 typedef struct CcEnum CcEnum;
@@ -408,10 +414,10 @@ struct CC_ALIGN(8) CcEnum {
                      _padding:             23;
         };
     };
+    uint32_t enumerator_count;
     Atom name;
     SrcLoc loc;
     CcQualType underlying;
-    size_t enumerator_count;
     CcEnumerator*_Nonnull* _Nullable enumerators;
 };
 _Static_assert(_Alignof(CcEnum)==8, "");
@@ -891,6 +897,7 @@ ccqt_is_integer(CcQualType t){
 #undef CC_ALIGN
 
 #ifdef __clang__
+#pragma clang diagnostic pop
 #pragma clang assume_nonnull end
 #endif
 #endif

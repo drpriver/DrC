@@ -210,11 +210,12 @@ struct TuiStyle {
 };
 typedef struct TuiPaintState TuiPaintState;
 struct TuiPaintState {
-    TuiStyle style;
     TuiColor color;
     TuiColor bg_color;
+    TuiStyle style;
     uint8_t bg_alpha; // 255 = opaque, 0 = transparent
     _Bool scissor_enabled;
+    uint8_t _pad; // free real estate
     struct {
         int x, y;
         uint32_t w, h;

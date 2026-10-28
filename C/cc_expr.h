@@ -20,6 +20,8 @@
 #include "cc_errors.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
+#pragma clang diagnostic push
+#pragma clang diagnostic error "-Wpadded"
 #else
 #ifndef _Nonnull
 #define _Nonnull
@@ -502,27 +504,29 @@ struct CcExpr {
     // For unary ops/casts: lhs is the operand.
     // For CC_EXPR_VALUE: reinterpret based on type (uinteger, float_, etc).
     union {
-        CcExpr* lhs;
+        unsigned char data[16];
         struct { CcExpr* lhs; CcQualType type; } compound; // arithmetic type before storing
         struct { CcExpr* lhs; struct CcModule* module; } compile;
-        _Bool boolean;
-        uint64_t uinteger;
-        int64_t integer;
-        float float_;
-        double double_;
-        const char* text;
         ByteView blob;
-        CcVariable* var;
-        CcFunc* func;
-        CcInitList* init_list;
-        CcFieldPath field_path; // CC_EXPR_DOT, CC_EXPR_ARROW: member path from values[0]
-        CcQualType type_value; // for expressions of type type
-        CcStmtNode* stmt_body; // CC_EXPR_STATEMENT_EXPRESSION: a CC_STMT_COMPOUND;
-                               // value/type = trailing CC_STMT_EXPR's expr
-        SrcLoc loc_value;
-        // Wide numbers use byte storage to avoid imposing 16-byte alignment
-        // on every expression. Access them through the helpers below.
-        unsigned char data[16];
+        struct {
+            union {
+                CcExpr* lhs;
+                uint64_t uinteger;
+                int64_t integer;
+                struct {float float_; unsigned char _float_pad[4];};
+                double double_;
+                const char* text;
+                CcVariable* var;
+                CcFunc* func;
+                CcInitList* init_list;
+                CcFieldPath field_path; // CC_EXPR_DOT, CC_EXPR_ARROW: member path from values[0]
+                CcQualType type_value; // for expressions of type type
+                CcStmtNode* stmt_body; // CC_EXPR_STATEMENT_EXPRESSION: a CC_STMT_COMPOUND;
+                                       // value/type = trailing CC_STMT_EXPR's expr
+                SrcLoc loc_value;
+            };
+            uint64_t _8_pad;
+        };
     };
     CcExpr*_Nonnull values[];
 };
@@ -625,6 +629,7 @@ _Static_assert(offsetof(CcExpr, lhs) == 24, "expression payload must follow the 
 _Static_assert(offsetof(CcExpr, values) == sizeof(CcExpr), "expression operands must follow the payload");
 
 #ifdef __clang__
+#pragma clang diagnostic pop
 #pragma clang assume_nonnull end
 #endif
 #endif

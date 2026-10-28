@@ -6,13 +6,16 @@
 #include "../Drp/atom.h"
 #include "../Drp/atom_map.h"
 #include "../Drp/atom_map16.h"
-#include "cc_anon_atom_map.h"
+#include "../Drp/typed_enum.h"
 #include "../Drp/parray.h"
 #include "../Drp/Allocators/allocator.h"
 #include "cc_type.h"
+#include "cc_anon_atom_map.h"
 #include "srcloc.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
+#pragma clang diagnostic push
+#pragma clang diagnostic error "-Wpadded"
 #endif
 typedef struct CcScope CcScope;
 typedef struct CcVariable CcVariable;
@@ -34,8 +37,10 @@ _Static_assert(sizeof(SrcLoc) == sizeof(uint64_t), "");
 _Static_assert(sizeof(CcTypedef) == 2*sizeof(uint64_t), "");
 struct CcScope {
     CcScope* parent;
-    _Bool static_for_bindings; // participates in lookup, not body declarations
-    _Bool retained; // referenced by a function's lexical scope
+    uint32_t static_for_bindings: 1, // participates in lookup, not body declarations
+             retained: 1, // referenced by a function's lexical scope
+             _bit_padding: 30; // free real estate
+    uint32_t _pad; // free real estate
     AtomMap16(CcTypedef) typedefs;
     CcAnonAtomMap(CcVariable) variables;
     AtomMap(CcFunc) functions;
@@ -56,16 +61,18 @@ enum {
     CC_SCOPE_WALK_CHAIN,
 };
 
-enum CcSymbolKind {
+enum CcSymbolKind TYPED_ENUM(uint32_t) {
     CC_SYM_VAR,
     CC_SYM_FUNC,
     CC_SYM_TYPEDEF,
     CC_SYM_ENUMERATOR,
 };
+TYPEDEF_ENUM(CcSymbolKind, uint32_t);
 
 typedef struct CcSymbol CcSymbol;
 struct CcSymbol {
-    enum CcSymbolKind kind;
+    CcSymbolKind kind;
+    uint32_t _pad; // free real estate
     union {
         CcVariable* var;
         CcFunc* func;
@@ -138,6 +145,7 @@ int
 cc_scope_insert_enumerator(Allocator, CcScope*, Atom, CcEnumerator*);
 
 #ifdef __clang__
+#pragma clang diagnostic pop
 #pragma clang assume_nonnull end
 #endif
 #endif

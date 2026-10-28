@@ -42,6 +42,8 @@ struct CcLabelRef {
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
+#pragma clang diagnostic push
+#pragma clang diagnostic error "-Wpadded"
 #else
 #ifndef _Nullable
 #define _Nullable
@@ -56,8 +58,9 @@ typedef struct CcFuncParam CcFuncParam;
 struct CcFuncParam {
     Atom name;
     CcVariable*_Nullable decl;
-    _Bool typed_pack;
     uint32_t sz, offset; // set by lowering
+    uint32_t typed_pack: 1,
+             _padding:   31; // free real estate
     uint32_t native_index; // set by lowering; UINT32_MAX for an ignored ABI argument
     CcExpr*_Nullable default_value;
 };
@@ -145,6 +148,7 @@ struct CcFunc {
 };
 
 #ifdef __clang__
+#pragma clang diagnostic pop
 #pragma clang assume_nonnull end
 #endif
 #endif

@@ -161,7 +161,7 @@ static CcToken cc_int_tok(uint64_t v, CcBasicTypeKind ctype){ return (CcToken){.
 static CcToken cc_float_tok(float v){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=CCBT_float, .float_value=v}}; }
 static CcToken cc_double_tok(double v){ return (CcToken){.constant={.type=CC_CONSTANT, .ctype=CCBT_double, .double_value=v}}; }
 // IEEE 754 binary128 words, least significant word first.
-static CcToken cc_long_double_tok(uint64_t val[2]){ CcToken tok = {.constant={.type=CC_CONSTANT, .ctype=CCBT_long_double}}; memcpy(&tok.constant.quad_value, val, 16); return tok;}
+static CcToken cc_long_double_tok(uint64_t val[2]){ CcToken tok = {.constant={.type=CC_CONSTANT, .ctype=CCBT_long_double}}; memcpy(tok.constant.data, val, 16); return tok;}
 static CcToken cc_kw_tok(CcKeyword kw){ return (CcToken){.kw={.type=CC_KEYWORD, .kw=kw}}; }
 static CcToken cc_punct_tok(CcPunct p){ return (CcToken){.punct={.type=CC_PUNCTUATOR, .punct=p}}; }
 // Abuse: stash a const char* in the Atom field. cc_tok_matches knows to
@@ -216,7 +216,7 @@ cc_tok_matches(CcToken got, CcToken exp){
                 case CCBT_double:
                     return got.constant.double_value == exp.constant.double_value;
                 case CCBT_long_double:
-                    return memcmp(&got.constant.quad_value, &exp.constant.quad_value, sizeof got.constant.quad_value) == 0;
+                    return memcmp(got.constant.data, exp.constant.data, sizeof got.constant.data) == 0;
                 case CCBT_int128:
                 case CCBT_unsigned_int128:
                     return ci_uint128_eq(got.constant.integer128_value, exp.constant.integer128_value);
@@ -1188,12 +1188,12 @@ TestFunction(test_long_double_targets){
             TestExpectEquals(int, out.constant.ctype, CCBT_long_double);
             uint64_t words[2] = {0};
             if(formats[f] == CC_LONG_DOUBLE_BINARY128){
-                memcpy(words, &out.constant.quad_value, 16);
+                memcpy(words, out.constant.data, 16);
                 TestExpectEquals(uint64_t, words[0], cases[i].quad[0]);
                 TestExpectEquals(uint64_t, words[1], cases[i].quad[1]);
             }
             else if(formats[f] == CC_LONG_DOUBLE_X87){
-                memcpy(words, &out.constant.x87_value, 10);
+                memcpy(words, out.constant.data, 10);
                 TestExpectEquals(uint64_t, words[0], cases[i].x87[0]);
                 TestExpectEquals(uint64_t, words[1], cases[i].x87[1]);
             }
@@ -1261,9 +1261,9 @@ TestFunction(test_long_double_macros){
             TestExpectEquals(int, tok.constant.ctype, CCBT_long_double);
             uint64_t bits[2] = {0};
             switch(format){
-                case CC_LONG_DOUBLE_BINARY64: memcpy(bits, &tok.constant.double_value, 8); break;
-                case CC_LONG_DOUBLE_X87: memcpy(bits, &tok.constant.x87_value, 10); break;
-                case CC_LONG_DOUBLE_BINARY128: memcpy(bits, &tok.constant.quad_value, 16); break;
+                case CC_LONG_DOUBLE_BINARY64: memcpy(bits, tok.constant.data, 8); break;
+                case CC_LONG_DOUBLE_X87: memcpy(bits, tok.constant.data, 10); break;
+                case CC_LONG_DOUBLE_BINARY128: memcpy(bits, tok.constant.data, 16); break;
             }
             TestExpectEquals(uint64_t, bits[0], expected[format].bits[i][0]);
             TestExpectEquals(uint64_t, bits[1], expected[format].bits[i][1]);

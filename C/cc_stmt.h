@@ -13,6 +13,8 @@ typedef struct CcExpr CcExpr;
 typedef struct CcVariable CcVariable;
 #ifdef __clang__
 #pragma clang assume_nonnull begin
+#pragma clang diagnostic push
+#pragma clang diagnostic error "-Wpadded"
 #endif
 enum CcStmtKind TYPED_ENUM(uint32_t){
     CC_STMT_NULL,
@@ -42,6 +44,7 @@ struct CcDefer {
     CcStmtNode* _Nullable body; // borrowed from CC_STMT_DEFER
     CcVariable* _Nullable stack_mark; // hidden saved mark. NULL for a VM-only marker
     _Bool vm_scope;
+    unsigned char _pad[7]; // free real estate
 };
 typedef struct CcDeferContext CcDeferContext;
 struct CcDeferContext {
@@ -83,13 +86,11 @@ struct CcStmtNode {
     // CC_STMT_LABEL:    label, stmts[0] = stmt
     // CC_STMT_DEFER:    stmts[0] = deferred body (owned, emitted via cleanup)
     union {
-        CcExpr* expr; // CC_STMT_EXPR
         struct { // CC_STMT_VLA
             CcVariable* object;
             CcVariable* mark;
         } vla;
         CcExpr* _Null_unspecified exprs[2];
-        Atom label;          // CC_STMT_GOTO, CC_STMT_LABEL
         struct {
             uint64_t low, high;
         } case_;
@@ -102,6 +103,13 @@ struct CcStmtNode {
             Atom label;
             CcCleanupRange* _Nullable cleanup;
         } goto_;
+        struct {
+            union {
+                CcExpr* expr; // CC_STMT_EXPR
+                Atom label;          // CC_STMT_GOTO, CC_STMT_LABEL
+            };
+            uint64_t _8_pad;
+        };
     };
     CcStmtNode* _Null_unspecified stmts[];
 };
@@ -111,9 +119,11 @@ typedef struct CcSwitchEntry CcSwitchEntry;
 struct CcSwitchEntry {
     uint64_t low, high; // inclusive range
     uint32_t target;
+    uint32_t _pad; // free real estate
 };
 
 #ifdef __clang__
+#pragma clang diagnostic pop
 #pragma clang assume_nonnull end
 #endif
 #endif

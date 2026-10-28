@@ -8441,50 +8441,21 @@ uint32_t
 cpp_lex_str_to_keyword(StringView txt){
 #define X(spelling, kw) if(sv_equals(txt, SV(#spelling))) return CC_##kw;
     switch(txt.length){
-        case 2:
-            CCKWS2(X);
-            return (uint32_t)-1;
-        case 3:
-            CCKWS3(X);
-            return (uint32_t)-1;
-        case 4:
-            CCKWS4(X);
-            return (uint32_t)-1;
-        case 5:
-            CCKWS5(X);
-            return (uint32_t)-1;
-        case 6:
-            CCKWS6(X);
-            return (uint32_t)-1;
-        case 7:
-            CCKWS7(X);
-            return (uint32_t)-1;
-        case 8:
-            CCKWS8(X);
-            return (uint32_t)-1;
-        case 9:
-            CCKWS9(X);
-            return (uint32_t)-1;
-        case 10:
-            CCKWS10(X);
-            return (uint32_t)-1;
-        case 11:
-            CCKWS11(X);
-            return (uint32_t)-1;
-        case 12:
-            CCKWS12(X);
-            return (uint32_t)-1;
-        case 13:
-            CCKWS13(X)
-            return (uint32_t)-1;
-        case 14:
-            CCKWS14(X)
-            return (uint32_t)-1;
-        case 17:
-            CCKWS17(X)
-            return (uint32_t)-1;
-        default:
-            return (uint32_t)-1;
+        case 2:   CCKWS2(X); return (uint32_t)-1;
+        case 3:   CCKWS3(X); return (uint32_t)-1;
+        case 4:   CCKWS4(X); return (uint32_t)-1;
+        case 5:   CCKWS5(X); return (uint32_t)-1;
+        case 6:   CCKWS6(X); return (uint32_t)-1;
+        case 7:   CCKWS7(X); return (uint32_t)-1;
+        case 8:   CCKWS8(X); return (uint32_t)-1;
+        case 9:   CCKWS9(X); return (uint32_t)-1;
+        case 10: CCKWS10(X); return (uint32_t)-1;
+        case 11: CCKWS11(X); return (uint32_t)-1;
+        case 12: CCKWS12(X); return (uint32_t)-1;
+        case 13: CCKWS13(X); return (uint32_t)-1;
+        case 14: CCKWS14(X); return (uint32_t)-1;
+        case 17: CCKWS17(X); return (uint32_t)-1;
+        default: return (uint32_t)-1;
     }
 #undef X
 }
@@ -8504,8 +8475,7 @@ cpp_ident_to_cc_tok(CppPreprocessor* cpp, CppToken* cpptok, CcToken* cctok){
 
 static
 int
-cpp_long_double_to_cc_tok(CppPreprocessor* cpp, CppToken* tok,
-        const char* s, size_t len, CcToken* out){
+cpp_long_double_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, const char* s, size_t len, CcToken* out){
     uint64_t words[2];
     _Bool x87 = cpp->target->long_double_format == CC_LONG_DOUBLE_X87;
     fast_float_from_chars_result result = x87
@@ -8514,8 +8484,7 @@ cpp_long_double_to_cc_tok(CppPreprocessor* cpp, CppToken* tok,
     if(result.error || result.ptr != s+len)
         return cpp_error(cpp, tok->loc, "Invalid floating-point literal");
     *out = (CcToken){.constant={.type=CC_CONSTANT, .ctype=CCBT_long_double, .loc=tok->loc}};
-    if(x87) out->constant.x87_value = ci_float80_read(words);
-    else memcpy(&out->constant.quad_value, words, 16);
+    memcpy(out->constant.data, words, x87?10:16);
     return 0;
 }
 
@@ -8636,11 +8605,11 @@ cpp_hex_float_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, CcToken* out){
     *out = (CcToken){.constant={.type=CC_CONSTANT, .ctype=(uint32_t)type, .loc=tok->loc}};
     if(quad){
         uint64_t words[2] = {lo, (hi & UINT64_C(0x0000ffffffffffff)) | ((uint64_t)encoded_exponent << 48)};
-        memcpy(&out->constant.quad_value, words, 16);
+        memcpy(out->constant.data, words, 16);
     }
     else if(x87){
         uint64_t words[2] = {lo | (encoded_exponent ? (uint64_t)1 << 63 : 0), (uint64_t)encoded_exponent};
-        out->constant.x87_value = ci_float80_read(words);
+        memcpy(out->constant.data, words, 10);
     }
     else if(type == CCBT_bfloat16){
         out->constant.integer_value = (lo & 0x7f) | ((uint64_t)encoded_exponent << 7);
@@ -8650,11 +8619,11 @@ cpp_hex_float_to_cc_tok(CppPreprocessor* cpp, CppToken* tok, CcToken* out){
     }
     else if(type == CCBT_float){
         uint32_t word = ((uint32_t)lo & 0x7fffff) | ((uint32_t)encoded_exponent << 23);
-        memcpy(&out->constant.float_value, &word, sizeof word);
+        memcpy(out->constant.data, &word, sizeof word);
     }
     else {
         uint64_t word = (lo & UINT64_C(0x000fffffffffffff)) | ((uint64_t)encoded_exponent << 52);
-        memcpy(&out->constant.double_value, &word, sizeof word);
+        memcpy(out->constant.data, &word, sizeof word);
     }
     return 0;
 invalid:

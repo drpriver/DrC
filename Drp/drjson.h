@@ -173,7 +173,11 @@ struct DrJsonValue {
                               // object lifetimes if you dynamically link.
 
         // DRJSON_BOOL
-        _Bool boolean;
+        struct {
+            _Bool boolean;
+            _Static_assert(sizeof(_Bool) == 1, "");
+            unsigned char _bool_pad[7];
+        };
 
         // DRJSON_ARRAY
         // DRJSON_ARRAY_VIEW

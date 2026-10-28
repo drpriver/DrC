@@ -3696,7 +3696,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
         case CC_CONSTANT: {
             CcExpr* node = cc_make_expr(p, CC_EXPR_VALUE, tok.loc, ccqt_basic(tok.constant.ctype), 0);
             if(!node) return CC_OOM_ERROR;
-            memcpy(node->data, &tok.constant.integer128_value, sizeof node->data);
+            memcpy(node->data, tok.constant.data, sizeof node->data);
             if(tok.constant.is_imaginary){
                 CcBasicTypeKind scalar = ccqt_basic_kind(node->type);
                 if(ccbt_complex_kind(scalar) == CCBT_INVALID){

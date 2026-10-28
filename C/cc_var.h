@@ -11,6 +11,8 @@
 #include "cc_expr.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
+#pragma clang diagnostic push
+#pragma clang diagnostic error "-Wpadded"
 #endif
 
 typedef struct CcVariable CcVariable;
@@ -33,6 +35,7 @@ struct CcVariable {
              has_linkage: 1,
              _padding: 4, // free real estate
              alignment: 16; // 0 means default alignment
+    uint32_t _pad; // free real estate
     size_t tls_slot; // interpreter TLS slot + 1; zero until prepared
     uint32_t tls_size, tls_alignment;
     CcExpr* _Null_unspecified initializer;
@@ -43,6 +46,7 @@ struct CcVariable {
 };
 
 #ifdef __clang__
+#pragma clang diagnostic pop
 #pragma clang assume_nonnull end
 #endif
 #endif

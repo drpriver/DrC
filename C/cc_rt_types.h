@@ -10,6 +10,10 @@
 #if !defined __clang__ && !defined _Null_unspecified
 #define _Null_unspecified
 #endif
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic error "-Wpadded"
+#endif
 
 // Type definitions that are the same in the target and the host.
 // This makes it easier to manipulate.
@@ -53,6 +57,7 @@ struct CiRtEnumerator {
     CiRtSlice name;
     CiUint128 value;
     CcQualType type;
+    uint64_t _pad; // free real estate
 };
 
 typedef struct CiRtAny CiRtAny;
@@ -63,4 +68,7 @@ struct CiRtAny {
 _Static_assert(sizeof(CiRtAny) == 16, "");
 _Static_assert(offsetof(CiRtAny, type) == 0, "");
 _Static_assert(offsetof(CiRtAny, payload) == 8, "");
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 #endif
