@@ -3738,7 +3738,7 @@ ci_register_pragmas(CiInterpreter*ci){
     if(err) return err;
     err = cpp_register_pragma(&ci->parser.cpp, SV("pkg_config"), ci_pragma_pkg_config, ci);
     if(err) return err;
-    if(ci->procedural_macros){
+    if(ci->procedural_macros && !ci->nofun){
         err = cpp_register_pragma(&ci->parser.cpp, SV("procmacro"), ci_pragma_procmacro, ci);
         if(err) return err;
     }
@@ -3749,10 +3749,12 @@ static
 int
 ci_register_macros(CiInterpreter* ci){
     int err = 0;
-    err = cpp_define_builtin_func_macro(&ci->parser.cpp, SV("__shell"), ci_shell, ci, 1, 1, 0);
-    if(err) return err;
-    err = cpp_define_builtin_func_macro(&ci->parser.cpp, SV("__SHELL__"), ci_shell, ci, 1, 1, 0);
-    if(err) return err;
+    if(!ci->nofun){
+        err = cpp_define_builtin_func_macro(&ci->parser.cpp, SV("__shell"), ci_shell, ci, 1, 1, 0);
+        if(err) return err;
+        err = cpp_define_builtin_func_macro(&ci->parser.cpp, SV("__SHELL__"), ci_shell, ci, 1, 1, 0);
+        if(err) return err;
+    }
     return err;
 }
 

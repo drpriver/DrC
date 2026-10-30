@@ -86,10 +86,11 @@ cc_run_toplevel(CiInterpreter* ci){
 
 int main(int argc, char** argv, char** envp){
     drp_profile_start();
-    _Bool eager = 0,
-          syntax_only = 0,
+    _Bool eager              = 0,
+          syntax_only        = 0,
           poison_frame_slots = 0,
-          opt_noinline = 0;
+          opt_noinline       = 0,
+          no_fun             = 0;
     uint32_t inline_budget = 12,
              inline_hint_budget = 40;
     Logger* logger = std_logger();
@@ -260,6 +261,12 @@ int main(int argc, char** argv, char** envp){
             .help = "Maximum bytecode instructions for functions declared inline",
             .show_default = 1,
         },
+        {
+            .name = SV("-fno-fun"),
+            .altname1 = SV("--no-fun"),
+            .help = "Disable fun",
+            .dest = ARGDEST(&no_fun),
+        },
     };
     enum {HELP, HIDDEN_HELP, FISH};
     ArgToParse early_args[] = {
@@ -327,6 +334,7 @@ int main(int argc, char** argv, char** envp){
     cc_interp.opt_noinline = opt_noinline;
     cc_interp.inline_budget = inline_budget;
     cc_interp.inline_hint_budget = inline_hint_budget;
+    cc_interp.nofun = no_fun;
     err = cpp_define_builtin_macros(&cc_interp.parser.cpp);
     if(err) goto stringify_error;
     // _Argc, _Argv and args to main

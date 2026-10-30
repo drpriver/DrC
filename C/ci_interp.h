@@ -83,7 +83,8 @@ struct CiInterpreter {
                      procedural_macros:  1,
                      poison_frame_slots: 1, // debug fill for uninitialized automatic storage
                      opt_noinline:       1,
-                    _padding:            28;
+                     nofun:              1, // disable fun
+                    _padding:            27;
         };
     };
     uint32_t inline_budget, 

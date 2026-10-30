@@ -306,15 +306,15 @@ struct CcSpecifier {
     union {
         uint32_t bits;
         struct {
-            uint32_t sp_typebits: 9,
+            uint32_t sp_typebits:    9,
                      sp_storagebits: 6,
-                     _sp_typedef: 1,
-                     sp_funcbits: 2,
-                     sp_qualbits: 4,
+                     _sp_typedef:    1,
+                     sp_funcbits:    2,
+                     sp_qualbits:    4,
 
-                     _sp_infer: 1,
-                     sp_complex: 1,
-                     _padding1: 32-24;
+                     _sp_infer:      1,
+                     sp_complex:     1,
+                     _padding1:      32-24;
         };
         struct {
             uint32_t
@@ -343,7 +343,7 @@ struct CcSpecifier {
                      sp_atomic:       1,
                      sp_restrict:     1,
 
-                     sp_infer_type:    1,
+                     sp_infer_type:   1,
                      _sp_complex:     1,
                      _padding2:       32-24;
         };
@@ -10832,7 +10832,7 @@ cc_parse_designated_init(CcParser *p, CcParseFlags flags, CcQualType target, siz
     if(err) return err;
     if(kind == CC_UNION) return 0;
     for(; ++index < count;){
-        if(fields && !fields[index].name && fields[index].is_bitfield) 
+        if(fields && !fields[index].name && fields[index].is_bitfield)
             continue;
         _Bool stop;
         err = cc_is_parent_token(p, &stop);
