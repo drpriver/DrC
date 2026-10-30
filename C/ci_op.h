@@ -21,43 +21,6 @@
 #define _Nonnull
 #endif
 
-enum CiAluOp TYPED_ENUM(uint32_t){
-    CI_ALU_ADD,
-    CI_ALU_SUB,
-    CI_ALU_MUL,
-    CI_ALU_DIV,
-    CI_ALU_MOD,
-    CI_ALU_AND,
-    CI_ALU_OR,
-    CI_ALU_XOR,
-    CI_ALU_SHL,
-    CI_ALU_SHR,
-    // unary
-    CI_ALU_NEG,
-    CI_ALU_NOT,
-};
-TYPEDEF_ENUM(CiAluOp, uint32_t);
-
-enum CiCmpOp TYPED_ENUM(uint32_t){
-    CI_CMP_EQ,
-    CI_CMP_NE,
-    CI_CMP_LT,
-    CI_CMP_GT,
-    CI_CMP_LE,
-    CI_CMP_GE,
-};
-TYPEDEF_ENUM(CiCmpOp, uint32_t);
-
-enum CiFaluOp TYPED_ENUM(uint32_t){
-    CI_FALU_ADD,
-    CI_FALU_SUB,
-    CI_FALU_MUL,
-    CI_FALU_DIV,
-    // unary
-    CI_FALU_NEG,
-};
-TYPEDEF_ENUM(CiFaluOp, uint32_t);
-
 enum CiAtomicRmwOp TYPED_ENUM(uint32_t){
     CI_ARMW_XCHG,
     CI_ARMW_ADD,
@@ -89,34 +52,88 @@ enum CiRuntimeOp TYPED_ENUM(uint32_t){
 };
 TYPEDEF_ENUM(CiRuntimeOp, uint32_t);
 
+#define CI_ALU_BINARY_OPS(X, suffix) \
+    X(ADD, suffix) \
+    X(SUB, suffix) \
+    X(MUL, suffix) \
+    X(SDIV, suffix) \
+    X(UDIV, suffix) \
+    X(SMOD, suffix) \
+    X(UMOD, suffix) \
+    X(AND, suffix) \
+    X(OR, suffix) \
+    X(XOR, suffix) \
+    X(SHL, suffix) \
+    X(ASR, suffix) \
+    X(LSR, suffix)
+
+#define CI_ALU_UNARY_OPS(X, suffix) \
+    X(NEG, suffix) \
+    X(NOT, suffix)
+
+#define CI_CMP_OPS(X, suffix) \
+    X(EQ, suffix) \
+    X(NE, suffix) \
+    X(SLT, suffix) \
+    X(ULT, suffix) \
+    X(SGT, suffix) \
+    X(UGT, suffix) \
+    X(SLE, suffix) \
+    X(ULE, suffix) \
+    X(SGE, suffix) \
+    X(UGE, suffix)
+
+#define CI_FALU_OPS(X, suffix) \
+    X(FADD, suffix) \
+    X(FSUB, suffix) \
+    X(FMUL, suffix) \
+    X(FDIV, suffix) \
+    X(FNEG, suffix)
+
+#define CI_FCMP_OPS(X, suffix) \
+    X(FEQ, suffix) \
+    X(FNE, suffix) \
+    X(FLT, suffix) \
+    X(FGT, suffix) \
+    X(FLE, suffix) \
+    X(FGE, suffix)
+
+#define CI_OPCODE_ENUM(name, suffix) CI_OP_##name##suffix,
+#define CI_OPCODE_CASE(name, suffix) case CI_OP_##name##suffix:
+
 enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_ABI_MOVE,
     CI_OP_ABI_TRANSFER,
     CI_OP_CONST,
     CI_OP_COPY,
-    CI_OP_ALU_IMM32,
-    CI_OP_ALU_IMM64,
+    CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, _IMM32)
+    CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, _IMM64)
     CI_OP_INDEX,
-    CI_OP_ALU8,
-    CI_OP_ALU16,
-    CI_OP_ALU32,
-    CI_OP_ALU64,
-    CI_OP_ALU128,
-    CI_OP_CMP32,
-    CI_OP_CMP64,
-    CI_OP_CMP128,
-    CI_OP_CMP_JUMP32,
-    CI_OP_CMP_JUMP64,
-    CI_OP_FALU16,
-    CI_OP_FALU32,
-    CI_OP_FALU64,
-    CI_OP_FALU80,
-    CI_OP_FALU128,
-    CI_OP_FCMP16,
-    CI_OP_FCMP32,
-    CI_OP_FCMP64,
-    CI_OP_FCMP80,
-    CI_OP_FCMP128,
+    CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, 8)
+    CI_ALU_UNARY_OPS(CI_OPCODE_ENUM, 8)
+    CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, 16)
+    CI_ALU_UNARY_OPS(CI_OPCODE_ENUM, 16)
+    CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, 32)
+    CI_ALU_UNARY_OPS(CI_OPCODE_ENUM, 32)
+    CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, 64)
+    CI_ALU_UNARY_OPS(CI_OPCODE_ENUM, 64)
+    CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, 128)
+    CI_ALU_UNARY_OPS(CI_OPCODE_ENUM, 128)
+    CI_CMP_OPS(CI_OPCODE_ENUM, 32)
+    CI_CMP_OPS(CI_OPCODE_ENUM, 64)
+    CI_CMP_OPS(CI_OPCODE_ENUM, 128)
+    CI_CMP_OPS(CI_OPCODE_ENUM, _JUMP32)
+    CI_CMP_OPS(CI_OPCODE_ENUM, _JUMP64)
+    CI_FALU_OPS(CI_OPCODE_ENUM, 16)
+    CI_FALU_OPS(CI_OPCODE_ENUM, 32)
+    CI_FALU_OPS(CI_OPCODE_ENUM, 64)
+    CI_FALU_OPS(CI_OPCODE_ENUM, 80)
+    CI_FALU_OPS(CI_OPCODE_ENUM, 128)
+    CI_FCMP_OPS(CI_OPCODE_ENUM, 16)
+    CI_FCMP_OPS(CI_OPCODE_ENUM, 32)
+    CI_FCMP_OPS(CI_OPCODE_ENUM, 64)
+    CI_FCMP_OPS(CI_OPCODE_ENUM, 80)
+    CI_FCMP_OPS(CI_OPCODE_ENUM, 128)
     CI_OP_CHECKED,
     CI_OP_CHECK,
     CI_OP_BIT_BUILTIN,
@@ -162,6 +179,8 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_RT_CALL,
 };
 TYPEDEF_ENUM(CiOpKind, uint32_t);
+#undef CI_OPCODE_ENUM
+_Static_assert(CI_OP_RT_CALL < 256, "CiOpKind must fit in its 8-bit field");
 
 typedef struct CiCallDescriptor CiCallDescriptor;
 struct CiCallDescriptor {
@@ -299,9 +318,8 @@ struct CiOp {
             SrcLoc loc;
         } copy;
         struct {
-            CiOpKind kind: 8; // CI_OP_ALU_IMM32, CI_OP_ALU_IMM64
-            CiAluOp op: 8;
-            uint32_t is_unsigned: 1, _bitpad: 15;
+            CiOpKind kind: 8; // Immediate integer arithmetic
+            uint32_t _bitpad: 24;
             uint32_t slot, src, _pad;
             uint64_t immediate;
             SrcLoc loc;
@@ -313,10 +331,8 @@ struct CiOp {
             SrcLoc loc;
         } index;
         struct {
-            CiOpKind kind: 8; // CI_OP_ALU8, CI_OP_ALU16, CI_OP_ALU32, CI_OP_ALU64, CI_OP_ALU128
-            CiAluOp op: 8;
-            uint32_t is_unsigned: 1,
-                     _bitpad: 15;
+            CiOpKind kind: 8; // Integer arithmetic
+            uint32_t _bitpad: 24;
             uint32_t slot,
                      src,
                      src2;
@@ -324,10 +340,8 @@ struct CiOp {
             SrcLoc loc;
         } alu;
         struct {
-            CiOpKind kind: 8; // CI_OP_CMP32, CI_OP_CMP64, CI_OP_CMP128
-            CiCmpOp op: 8;
-            uint32_t is_unsigned: 1,
-                     _bitpad: 15;
+            CiOpKind kind: 8; // Integer comparisons
+            uint32_t _bitpad: 24;
             uint32_t slot,
                      slot_size,
                      src,
@@ -336,16 +350,14 @@ struct CiOp {
             SrcLoc loc;
         } cmp;
         struct {
-            CiOpKind kind: 8; // CI_OP_CMP_JUMP32, CI_OP_CMP_JUMP64
-            CiCmpOp op: 8;
-            uint32_t is_unsigned: 1, when_true: 1, _bitpad: 14;
+            CiOpKind kind: 8; // Fused integer comparison and branch
+            uint32_t when_true: 1, _bitpad: 23;
             uint32_t jump, _pad, src, src2, _pad2;
             SrcLoc loc;
         } cmp_jump;
         struct {
-            CiOpKind kind: 8; // CI_OP_FALU16, CI_OP_FALU32, CI_OP_FALU64
-            CiFaluOp op: 8;
-            uint32_t is_brian_float: 1, _bitpad: 15;
+            CiOpKind kind: 8; // Floating-point arithmetic
+            uint32_t is_brian_float: 1, _bitpad: 23;
             uint32_t slot,
                      slot_size,
                      src,
@@ -354,9 +366,8 @@ struct CiOp {
             SrcLoc loc;
         } falu32, falu64;
         struct {
-            CiOpKind kind: 8; // CI_OP_FCMP16, CI_OP_FCMP32, CI_OP_FCMP64
-            CiCmpOp op: 8;
-            uint32_t is_brian_float: 1, _bitpad: 15;
+            CiOpKind kind: 8; // Floating-point comparisons
+            uint32_t is_brian_float: 1, _bitpad: 23;
             uint32_t slot,
                      slot_size,
                      src,

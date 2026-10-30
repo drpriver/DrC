@@ -58,6 +58,44 @@ TestFunction(test_interpreter){
         const CcTargetConfig*_Nullable target;
     } testcases[] = {
         {
+            "integer arithmetic preserves signedness in register and immediate forms", __LINE__,
+            SVI(
+                "#define CHECK(T, U) do { \\\n"
+                "volatile T a = -19, b = 3; volatile U u = (U)-19, v = 3; \\\n"
+                "if(a / b != -6 || a % b != -1 || a / 3 != -6 || a % 3 != -1) return 1; \\\n"
+                "if(u / v != (U)-19 / 3 || u % v != (U)-19 % 3) return 2; \\\n"
+                "if(u / 3 != (U)-19 / 3 || u % 3 != (U)-19 % 3) return 3; \\\n"
+                "if((a >> b) != -3 || (a >> 3) != -3) return 4; \\\n"
+                "if((u >> v) != ((U)-19 >> 3) || (u >> 3) != ((U)-19 >> 3)) return 5; \\\n"
+                "if(a + b != -16 || a - b != -22 || a * b != -57 || -a != 19) return 6; \\\n"
+                "if((u & v) != 1 || (u | v) != (U)-17 || (u ^ v) != (U)-18 || ~u != 18) return 7; \\\n"
+                "a /= 3; a %= 4; a >>= 1; if(a != -1) return 8; \\\n"
+                "u /= 3; u %= 7; u >>= 1; if(u != (((U)-19 / 3) % 7 >> 1)) return 9; \\\n"
+                "} while(0)\n"
+                "CHECK(int, unsigned int); CHECK(long long, unsigned long long);\n"
+                "CHECK(__int128, unsigned __int128); return 0;"
+            ),
+        },
+        {
+            "integer comparisons preserve signedness in values and fused branches", __LINE__,
+            SVI(
+                "#define CHECK(T, U) do { \\\n"
+                "volatile T a = -1, b = 1; volatile U u = (U)-1, v = 1; \\\n"
+                "int r[] = {a < b, a <= b, a > b, a >= b, a == b, a != b, \\\n"
+                "u < v, u <= v, u > v, u >= v, u == v, u != v}; \\\n"
+                "int expected[] = {1, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1}; \\\n"
+                "for(int i = 0; i < 12; i++) if(r[i] != expected[i]) return i + 1; \\\n"
+                "int n = 0; if(a < b) n++; if(a <= b) n++; if(a > b) n += 20; \\\n"
+                "if(a >= b) n += 20; if(a == b) n += 20; if(a != b) n++; \\\n"
+                "if(u < v) n += 20; if(u <= v) n += 20; if(u > v) n++; \\\n"
+                "if(u >= v) n++; if(u == v) n += 20; if(u != v) n++; \\\n"
+                "if(n != 6) return 20; \\\n"
+                "} while(0)\n"
+                "CHECK(int, unsigned int); CHECK(long long, unsigned long long);\n"
+                "CHECK(__int128, unsigned __int128); return 0;"
+            ),
+        },
+        {
             "packed signed character constants widen like scalar initializers", __LINE__,
             SVI("long long scalar = '\\xff\\xff\\xff\\xff';"
                 "long long a[] = {'\\xff\\xff\\xff\\xff', '\\xff\\xff\\xff\\xff',"

@@ -24,9 +24,6 @@
 static void ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt);
 static void ci_op_print_range(MStringBuilder* out, uint32_t slot, uint32_t size);
 static void ci_op_print_deref(MStringBuilder* out, uint32_t slot, uint32_t offset);
-static const char* ci_op_alu_sym(CiAluOp op);
-static const char* ci_op_cmp_sym(CiCmpOp op);
-static const char* ci_op_falu_sym(CiFaluOp op);
 static const char* ci_op_float_suffix(uint32_t float_width);
 
 static
@@ -45,50 +42,280 @@ ci_op_print_deref(MStringBuilder* out, uint32_t slot, uint32_t offset){
 }
 
 static
-const char*
-ci_op_alu_sym(CiAluOp op){
-    switch(op){
-        case CI_ALU_ADD: return "+";
-        case CI_ALU_SUB: return "-";
-        case CI_ALU_MUL: return "*";
-        case CI_ALU_DIV: return "/";
-        case CI_ALU_MOD: return "%";
-        case CI_ALU_AND: return "&";
-        case CI_ALU_OR:  return "|";
-        case CI_ALU_XOR: return "^";
-        case CI_ALU_SHL: return "<<";
-        case CI_ALU_SHR: return ">>";
-        case CI_ALU_NEG: return "-";
-        case CI_ALU_NOT: return "~";
+uint32_t
+ci_op_print_family(CiOpKind kind){
+    switch(kind){
+        CI_ALU_BINARY_OPS(CI_OPCODE_CASE, 8)
+        CI_ALU_UNARY_OPS(CI_OPCODE_CASE, 8)
+            return CI_OP_ADD8;
+        CI_ALU_BINARY_OPS(CI_OPCODE_CASE, 16)
+        CI_ALU_UNARY_OPS(CI_OPCODE_CASE, 16)
+            return CI_OP_ADD16;
+        CI_ALU_BINARY_OPS(CI_OPCODE_CASE, 32)
+        CI_ALU_UNARY_OPS(CI_OPCODE_CASE, 32)
+            return CI_OP_ADD32;
+        CI_ALU_BINARY_OPS(CI_OPCODE_CASE, 64)
+        CI_ALU_UNARY_OPS(CI_OPCODE_CASE, 64)
+            return CI_OP_ADD64;
+        CI_ALU_BINARY_OPS(CI_OPCODE_CASE, 128)
+        CI_ALU_UNARY_OPS(CI_OPCODE_CASE, 128)
+            return CI_OP_ADD128;
+        CI_ALU_BINARY_OPS(CI_OPCODE_CASE, _IMM32)
+            return CI_OP_ADD_IMM32;
+        CI_ALU_BINARY_OPS(CI_OPCODE_CASE, _IMM64)
+            return CI_OP_ADD_IMM64;
+        CI_CMP_OPS(CI_OPCODE_CASE, 32)
+            return CI_OP_EQ32;
+        CI_CMP_OPS(CI_OPCODE_CASE, 64)
+            return CI_OP_EQ64;
+        CI_CMP_OPS(CI_OPCODE_CASE, 128)
+            return CI_OP_EQ128;
+        CI_CMP_OPS(CI_OPCODE_CASE, _JUMP32)
+            return CI_OP_EQ_JUMP32;
+        CI_CMP_OPS(CI_OPCODE_CASE, _JUMP64)
+            return CI_OP_EQ_JUMP64;
+        CI_FALU_OPS(CI_OPCODE_CASE, 16)
+            return CI_OP_FADD16;
+        CI_FCMP_OPS(CI_OPCODE_CASE, 16)
+            return CI_OP_FEQ16;
+        CI_FALU_OPS(CI_OPCODE_CASE, 32)
+            return CI_OP_FADD32;
+        CI_FCMP_OPS(CI_OPCODE_CASE, 32)
+            return CI_OP_FEQ32;
+        CI_FALU_OPS(CI_OPCODE_CASE, 64)
+            return CI_OP_FADD64;
+        CI_FCMP_OPS(CI_OPCODE_CASE, 64)
+            return CI_OP_FEQ64;
+        CI_FALU_OPS(CI_OPCODE_CASE, 80)
+            return CI_OP_FADD80;
+        CI_FCMP_OPS(CI_OPCODE_CASE, 80)
+            return CI_OP_FEQ80;
+        CI_FALU_OPS(CI_OPCODE_CASE, 128)
+            return CI_OP_FADD128;
+        CI_FCMP_OPS(CI_OPCODE_CASE, 128)
+            return CI_OP_FEQ128;
+        default: return kind;
     }
-    return "?";
 }
 
 static
 const char*
-ci_op_cmp_sym(CiCmpOp op){
-    switch(op){
-        case CI_CMP_EQ: return "==";
-        case CI_CMP_NE: return "!=";
-        case CI_CMP_LT: return "<";
-        case CI_CMP_GT: return ">";
-        case CI_CMP_LE: return "<=";
-        case CI_CMP_GE: return ">=";
+ci_op_numeric_sym(CiOpKind kind){
+    switch(kind){
+        case CI_OP_ADD8:
+        case CI_OP_ADD16:
+        case CI_OP_ADD32:
+        case CI_OP_ADD64:
+        case CI_OP_ADD128:
+        case CI_OP_ADD_IMM32:
+        case CI_OP_ADD_IMM64:
+        case CI_OP_FADD16:
+        case CI_OP_FADD32:
+        case CI_OP_FADD64:
+        case CI_OP_FADD80:
+        case CI_OP_FADD128:
+            return "+";
+        case CI_OP_SUB8: case CI_OP_NEG8:
+        case CI_OP_SUB16: case CI_OP_NEG16:
+        case CI_OP_SUB32: case CI_OP_NEG32:
+        case CI_OP_SUB64: case CI_OP_NEG64:
+        case CI_OP_SUB128: case CI_OP_NEG128:
+        case CI_OP_SUB_IMM32:
+        case CI_OP_SUB_IMM64:
+        case CI_OP_FSUB16: case CI_OP_FNEG16:
+        case CI_OP_FSUB32: case CI_OP_FNEG32:
+        case CI_OP_FSUB64: case CI_OP_FNEG64:
+        case CI_OP_FSUB80: case CI_OP_FNEG80:
+        case CI_OP_FSUB128: case CI_OP_FNEG128:
+            return "-";
+        case CI_OP_MUL8:
+        case CI_OP_MUL16:
+        case CI_OP_MUL32:
+        case CI_OP_MUL64:
+        case CI_OP_MUL128:
+        case CI_OP_MUL_IMM32:
+        case CI_OP_MUL_IMM64:
+        case CI_OP_FMUL16:
+        case CI_OP_FMUL32:
+        case CI_OP_FMUL64:
+        case CI_OP_FMUL80:
+        case CI_OP_FMUL128:
+            return "*";
+        case CI_OP_SDIV8: case CI_OP_UDIV8:
+        case CI_OP_SDIV16: case CI_OP_UDIV16:
+        case CI_OP_SDIV32: case CI_OP_UDIV32:
+        case CI_OP_SDIV64: case CI_OP_UDIV64:
+        case CI_OP_SDIV128: case CI_OP_UDIV128:
+        case CI_OP_SDIV_IMM32: case CI_OP_UDIV_IMM32:
+        case CI_OP_SDIV_IMM64: case CI_OP_UDIV_IMM64:
+        case CI_OP_FDIV16:
+        case CI_OP_FDIV32:
+        case CI_OP_FDIV64:
+        case CI_OP_FDIV80:
+        case CI_OP_FDIV128:
+            return "/";
+        case CI_OP_SMOD8: case CI_OP_UMOD8:
+        case CI_OP_SMOD16: case CI_OP_UMOD16:
+        case CI_OP_SMOD32: case CI_OP_UMOD32:
+        case CI_OP_SMOD64: case CI_OP_UMOD64:
+        case CI_OP_SMOD128: case CI_OP_UMOD128:
+        case CI_OP_SMOD_IMM32: case CI_OP_UMOD_IMM32:
+        case CI_OP_SMOD_IMM64: case CI_OP_UMOD_IMM64:
+            return "%";
+        case CI_OP_AND8:
+        case CI_OP_AND16:
+        case CI_OP_AND32:
+        case CI_OP_AND64:
+        case CI_OP_AND128:
+        case CI_OP_AND_IMM32:
+        case CI_OP_AND_IMM64:
+            return "&";
+        case CI_OP_OR8:
+        case CI_OP_OR16:
+        case CI_OP_OR32:
+        case CI_OP_OR64:
+        case CI_OP_OR128:
+        case CI_OP_OR_IMM32:
+        case CI_OP_OR_IMM64:
+            return "|";
+        case CI_OP_XOR8:
+        case CI_OP_XOR16:
+        case CI_OP_XOR32:
+        case CI_OP_XOR64:
+        case CI_OP_XOR128:
+        case CI_OP_XOR_IMM32:
+        case CI_OP_XOR_IMM64:
+            return "^";
+        case CI_OP_SHL8:
+        case CI_OP_SHL16:
+        case CI_OP_SHL32:
+        case CI_OP_SHL64:
+        case CI_OP_SHL128:
+        case CI_OP_SHL_IMM32:
+        case CI_OP_SHL_IMM64:
+            return "<<";
+        case CI_OP_ASR8: case CI_OP_LSR8:
+        case CI_OP_ASR16: case CI_OP_LSR16:
+        case CI_OP_ASR32: case CI_OP_LSR32:
+        case CI_OP_ASR64: case CI_OP_LSR64:
+        case CI_OP_ASR128: case CI_OP_LSR128:
+        case CI_OP_ASR_IMM32: case CI_OP_LSR_IMM32:
+        case CI_OP_ASR_IMM64: case CI_OP_LSR_IMM64:
+            return ">>";
+        case CI_OP_NOT8:
+        case CI_OP_NOT16:
+        case CI_OP_NOT32:
+        case CI_OP_NOT64:
+        case CI_OP_NOT128:
+            return "~";
+        case CI_OP_EQ32:
+        case CI_OP_EQ64:
+        case CI_OP_EQ128:
+        case CI_OP_EQ_JUMP32:
+        case CI_OP_EQ_JUMP64:
+        case CI_OP_FEQ16:
+        case CI_OP_FEQ32:
+        case CI_OP_FEQ64:
+        case CI_OP_FEQ80:
+        case CI_OP_FEQ128:
+            return "==";
+        case CI_OP_NE32:
+        case CI_OP_NE64:
+        case CI_OP_NE128:
+        case CI_OP_NE_JUMP32:
+        case CI_OP_NE_JUMP64:
+        case CI_OP_FNE16:
+        case CI_OP_FNE32:
+        case CI_OP_FNE64:
+        case CI_OP_FNE80:
+        case CI_OP_FNE128:
+            return "!=";
+        case CI_OP_SLT32: case CI_OP_ULT32:
+        case CI_OP_SLT64: case CI_OP_ULT64:
+        case CI_OP_SLT128: case CI_OP_ULT128:
+        case CI_OP_SLT_JUMP32: case CI_OP_ULT_JUMP32:
+        case CI_OP_SLT_JUMP64: case CI_OP_ULT_JUMP64:
+        case CI_OP_FLT16:
+        case CI_OP_FLT32:
+        case CI_OP_FLT64:
+        case CI_OP_FLT80:
+        case CI_OP_FLT128:
+            return "<";
+        case CI_OP_SGT32: case CI_OP_UGT32:
+        case CI_OP_SGT64: case CI_OP_UGT64:
+        case CI_OP_SGT128: case CI_OP_UGT128:
+        case CI_OP_SGT_JUMP32: case CI_OP_UGT_JUMP32:
+        case CI_OP_SGT_JUMP64: case CI_OP_UGT_JUMP64:
+        case CI_OP_FGT16:
+        case CI_OP_FGT32:
+        case CI_OP_FGT64:
+        case CI_OP_FGT80:
+        case CI_OP_FGT128:
+            return ">";
+        case CI_OP_SLE32: case CI_OP_ULE32:
+        case CI_OP_SLE64: case CI_OP_ULE64:
+        case CI_OP_SLE128: case CI_OP_ULE128:
+        case CI_OP_SLE_JUMP32: case CI_OP_ULE_JUMP32:
+        case CI_OP_SLE_JUMP64: case CI_OP_ULE_JUMP64:
+        case CI_OP_FLE16:
+        case CI_OP_FLE32:
+        case CI_OP_FLE64:
+        case CI_OP_FLE80:
+        case CI_OP_FLE128:
+            return "<=";
+        case CI_OP_SGE32: case CI_OP_UGE32:
+        case CI_OP_SGE64: case CI_OP_UGE64:
+        case CI_OP_SGE128: case CI_OP_UGE128:
+        case CI_OP_SGE_JUMP32: case CI_OP_UGE_JUMP32:
+        case CI_OP_SGE_JUMP64: case CI_OP_UGE_JUMP64:
+        case CI_OP_FGE16:
+        case CI_OP_FGE32:
+        case CI_OP_FGE64:
+        case CI_OP_FGE80:
+        case CI_OP_FGE128:
+            return ">=";
+        default: return "?";
     }
-    return "?";
 }
 
 static
-const char*
-ci_op_falu_sym(CiFaluOp op){
-    switch(op){
-        case CI_FALU_ADD: return "+";
-        case CI_FALU_SUB: return "-";
-        case CI_FALU_MUL: return "*";
-        case CI_FALU_DIV: return "/";
-        case CI_FALU_NEG: return "-";
+_Bool
+ci_op_numeric_unsigned(CiOpKind kind){
+    switch(kind){
+        case CI_OP_UDIV8: case CI_OP_UMOD8: case CI_OP_LSR8:
+        case CI_OP_UDIV16: case CI_OP_UMOD16: case CI_OP_LSR16:
+        case CI_OP_UDIV32: case CI_OP_UMOD32: case CI_OP_LSR32:
+        case CI_OP_UDIV64: case CI_OP_UMOD64: case CI_OP_LSR64:
+        case CI_OP_UDIV128: case CI_OP_UMOD128: case CI_OP_LSR128:
+        case CI_OP_UDIV_IMM32: case CI_OP_UMOD_IMM32: case CI_OP_LSR_IMM32:
+        case CI_OP_UDIV_IMM64: case CI_OP_UMOD_IMM64: case CI_OP_LSR_IMM64:
+        case CI_OP_ULT32: case CI_OP_UGT32: case CI_OP_ULE32: case CI_OP_UGE32:
+        case CI_OP_ULT64: case CI_OP_UGT64: case CI_OP_ULE64: case CI_OP_UGE64:
+        case CI_OP_ULT128: case CI_OP_UGT128: case CI_OP_ULE128: case CI_OP_UGE128:
+        case CI_OP_ULT_JUMP32: case CI_OP_UGT_JUMP32: case CI_OP_ULE_JUMP32: case CI_OP_UGE_JUMP32:
+        case CI_OP_ULT_JUMP64: case CI_OP_UGT_JUMP64: case CI_OP_ULE_JUMP64: case CI_OP_UGE_JUMP64:
+            return 1;
+        default: return 0;
     }
-    return "?";
+}
+
+static
+_Bool
+ci_op_numeric_unary(CiOpKind kind){
+    switch(kind){
+        case CI_OP_NEG8: case CI_OP_NOT8:
+        case CI_OP_NEG16: case CI_OP_NOT16:
+        case CI_OP_NEG32: case CI_OP_NOT32:
+        case CI_OP_NEG64: case CI_OP_NOT64:
+        case CI_OP_NEG128: case CI_OP_NOT128:
+        case CI_OP_FNEG16:
+        case CI_OP_FNEG32:
+        case CI_OP_FNEG64:
+        case CI_OP_FNEG80:
+        case CI_OP_FNEG128:
+            return 1;
+        default: return 0;
+    }
 }
 
 static
@@ -188,7 +415,8 @@ ci_op_print_abi_address(MStringBuilder* out, CiAbiAddress mode, uint32_t pointer
 static
 void
 ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
-    switch(op->kind){
+    uint32_t family = ci_op_print_family(op->kind);
+    switch(family){
         case CI_OP_ABI_TRANSFER: {
             static const char* const actions[]={
                 "copy",
@@ -414,44 +642,44 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             msb_write_literal(out, " = ");
             ci_op_print_range(out, op->copy.src, op->copy.src_size);
             break;
-        case CI_OP_ALU8:{
+        case CI_OP_ADD8:{
             uint32_t sz;
             sz = 1;
             goto op_alu;
-        case CI_OP_ALU16:
+        case CI_OP_ADD16:
             sz = 2;
             goto op_alu;
-        case CI_OP_ALU32:
+        case CI_OP_ADD32:
             sz = 4;
             goto op_alu;
-        case CI_OP_ALU64:
+        case CI_OP_ADD64:
             sz=8;
             goto op_alu;
-        case CI_OP_ALU128:
+        case CI_OP_ADD128:
             sz=16;
             goto op_alu;
             op_alu:;
             ci_op_print_range(out, op->alu.slot, sz);
             msb_write_literal(out, " = ");
-            if(op->alu.op >= CI_ALU_NEG){
-                msb_sprintf(out, "%s%s", ci_op_alu_sym(op->alu.op), op->alu.is_unsigned?"u":"");
+            if(ci_op_numeric_unary(op->kind)){
+                msb_sprintf(out, "%s%s", ci_op_numeric_sym(op->kind), ci_op_numeric_unsigned(op->kind)?"u":"");
                 ci_op_print_range(out, op->alu.src, sz);
             }
             else {
                 ci_op_print_range(out, op->alu.src, sz);
-                msb_sprintf(out, " %s%s ", ci_op_alu_sym(op->alu.op), op->alu.is_unsigned?"u":"");
+                msb_sprintf(out, " %s%s ", ci_op_numeric_sym(op->kind), ci_op_numeric_unsigned(op->kind)?"u":"");
                 ci_op_print_range(out, op->alu.src2, sz);
             }
             break;
         }
-        case CI_OP_ALU_IMM32:
-        case CI_OP_ALU_IMM64:{
-            uint32_t sz = op->kind == CI_OP_ALU_IMM32 ? 4 : 8;
+        case CI_OP_ADD_IMM32:
+        case CI_OP_ADD_IMM64:{
+            uint32_t sz = family == CI_OP_ADD_IMM32 ? 4 : 8;
             ci_op_print_range(out, op->alu_imm.slot, sz);
             msb_write_literal(out, " = ");
             ci_op_print_range(out, op->alu_imm.src, sz);
-            msb_sprintf(out, " %s%s %llu", ci_op_alu_sym(op->alu_imm.op),
-                        op->alu_imm.is_unsigned ? "u" : "",
+            msb_sprintf(out, " %s%s %llu", ci_op_numeric_sym(op->kind),
+                        ci_op_numeric_unsigned(op->kind) ? "u" : "",
                         (unsigned long long)(sz == 4 ? (uint32_t)op->alu_imm.immediate : op->alu_imm.immediate));
             break;
         }
@@ -463,64 +691,64 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_range(out, op->index.index, op->index.index_size);
             msb_sprintf(out, " * %u", op->index.scale);
             break;
-        case CI_OP_CMP_JUMP32:
-        case CI_OP_CMP_JUMP64:{
-            uint32_t sz = op->kind == CI_OP_CMP_JUMP32 ? 4 : 8;
+        case CI_OP_EQ_JUMP32:
+        case CI_OP_EQ_JUMP64:{
+            uint32_t sz = family == CI_OP_EQ_JUMP32 ? 4 : 8;
             msb_sprintf(out, "if %s(", op->cmp_jump.when_true ? "" : "!");
             ci_op_print_range(out, op->cmp_jump.src, sz);
-            msb_sprintf(out, " %s%s ", ci_op_cmp_sym(op->cmp_jump.op), op->cmp_jump.is_unsigned ? "u" : "");
+            msb_sprintf(out, " %s%s ", ci_op_numeric_sym(op->kind), ci_op_numeric_unsigned(op->kind) ? "u" : "");
             ci_op_print_range(out, op->cmp_jump.src2, sz);
             msb_sprintf(out, ") jump 0x%x", op->cmp_jump.jump);
             break;
         }
-        case CI_OP_CMP32:{
+        case CI_OP_EQ32:{
             uint32_t sz;
             sz = 4;
             goto op_cmp;
-        case CI_OP_CMP64:
+        case CI_OP_EQ64:
             sz = 8;
             goto op_cmp;
-        case CI_OP_CMP128:
+        case CI_OP_EQ128:
             sz = 16;
             goto op_cmp;
             op_cmp:;
             ci_op_print_range(out, op->cmp.slot, op->cmp.slot_size);
             msb_write_literal(out, " = ");
             ci_op_print_range(out, op->cmp.src, sz);
-            msb_sprintf(out, " %s%s ", ci_op_cmp_sym(op->cmp.op), op->cmp.is_unsigned?"u":"");
+            msb_sprintf(out, " %s%s ", ci_op_numeric_sym(op->kind), ci_op_numeric_unsigned(op->kind)?"u":"");
             ci_op_print_range(out, op->cmp.src2, sz);
             break;
         }
-        case CI_OP_FALU16:
-        case CI_OP_FALU32:
-        case CI_OP_FALU64:
-        case CI_OP_FALU80:
-        case CI_OP_FALU128:{
-            uint32_t width = op->kind == CI_OP_FALU16? 2 : op->kind == CI_OP_FALU32? 4 : op->kind == CI_OP_FALU64? 8 : 16;
-            const char* suffix = op->kind == CI_OP_FALU16? (op->falu32.is_brian_float ? "bf16" : "f16") : op->kind == CI_OP_FALU32? "f32" : op->kind == CI_OP_FALU64? "f64" : op->kind == CI_OP_FALU80? "f80" : "f128";
+        case CI_OP_FADD16:
+        case CI_OP_FADD32:
+        case CI_OP_FADD64:
+        case CI_OP_FADD80:
+        case CI_OP_FADD128:{
+            uint32_t width = family == CI_OP_FADD16? 2 : family == CI_OP_FADD32? 4 : family == CI_OP_FADD64? 8 : 16;
+            const char* suffix = family == CI_OP_FADD16? (op->falu32.is_brian_float ? "bf16" : "f16") : family == CI_OP_FADD32? "f32" : family == CI_OP_FADD64? "f64" : family == CI_OP_FADD80? "f80" : "f128";
             ci_op_print_range(out, op->falu32.slot, op->falu32.slot_size);
             msb_write_literal(out, " = ");
-            if(op->falu32.op == CI_FALU_NEG){
-                msb_sprintf(out, "%s%s", ci_op_falu_sym(op->falu32.op), suffix);
+            if(ci_op_numeric_unary(op->kind)){
+                msb_sprintf(out, "%s%s", ci_op_numeric_sym(op->kind), suffix);
                 ci_op_print_range(out, op->falu32.src, width);
             }
             else {
                 ci_op_print_range(out, op->falu32.src, width);
-                msb_sprintf(out, " %s%s ", ci_op_falu_sym(op->falu32.op), suffix);
+                msb_sprintf(out, " %s%s ", ci_op_numeric_sym(op->kind), suffix);
                 ci_op_print_range(out, op->falu32.src2, width);
             }
         } break;
-        case CI_OP_FCMP16:
-        case CI_OP_FCMP32:
-        case CI_OP_FCMP64:
-        case CI_OP_FCMP80:
-        case CI_OP_FCMP128:{
-            uint32_t width = op->kind == CI_OP_FCMP16? 2 : op->kind == CI_OP_FCMP32? 4 : op->kind == CI_OP_FCMP64? 8 : 16;
-            const char* suffix = op->kind == CI_OP_FCMP16? (op->fcmp32.is_brian_float ? "bf16" : "f16") : op->kind == CI_OP_FCMP32? "f32" : op->kind == CI_OP_FCMP64? "f64" : op->kind == CI_OP_FCMP80? "f80" : "f128";
+        case CI_OP_FEQ16:
+        case CI_OP_FEQ32:
+        case CI_OP_FEQ64:
+        case CI_OP_FEQ80:
+        case CI_OP_FEQ128:{
+            uint32_t width = family == CI_OP_FEQ16? 2 : family == CI_OP_FEQ32? 4 : family == CI_OP_FEQ64? 8 : 16;
+            const char* suffix = family == CI_OP_FEQ16? (op->fcmp32.is_brian_float ? "bf16" : "f16") : family == CI_OP_FEQ32? "f32" : family == CI_OP_FEQ64? "f64" : family == CI_OP_FEQ80? "f80" : "f128";
             ci_op_print_range(out, op->fcmp32.slot, op->fcmp32.slot_size);
             msb_write_literal(out, " = ");
             ci_op_print_range(out, op->fcmp32.src, width);
-            msb_sprintf(out, " %s%s ", ci_op_cmp_sym(op->fcmp32.op), suffix);
+            msb_sprintf(out, " %s%s ", ci_op_numeric_sym(op->kind), suffix);
             ci_op_print_range(out, op->fcmp32.src2, width);
         } break;
         case CI_OP_CHECKED:{

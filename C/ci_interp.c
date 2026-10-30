@@ -1320,501 +1320,293 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             frame->pc++;
             return 0;
         }
-        case CI_OP_CMP_JUMP32:
-        case CI_OP_CMP32: {
-            const void* s1 = (char*)frame->slots + op->cmp.src;
-            const void* s2 = (char*)frame->slots + op->cmp.src2;
-            _Bool is_unsigned = op->cmp.is_unsigned;
-            uint32_t lu, ru;
-            if(is_unsigned){
-                lu = (uint32_t)ci_read_uint(s1, 4);
-                ru = (uint32_t)ci_read_uint(s2, 4);
-            }
-            else {
-                lu = (uint32_t)ci_read_int(s1, 4);
-                ru = (uint32_t)ci_read_int(s2, 4);
-            }
-            uint64_t res;
-            switch((CiCmpOp)(op->cmp.op)){
-                case CI_CMP_EQ: res = lu == ru; break;
-                case CI_CMP_NE: res = lu != ru; break;
-                case CI_CMP_LT: res = is_unsigned ? (lu < ru) : ((int32_t)lu < (int32_t)ru); break;
-                case CI_CMP_GT: res = is_unsigned ? (lu > ru) : ((int32_t)lu > (int32_t)ru); break;
-                case CI_CMP_LE: res = is_unsigned ? (lu <= ru) : ((int32_t)lu <= (int32_t)ru); break;
-                case CI_CMP_GE: res = is_unsigned ? (lu >= ru) : ((int32_t)lu >= (int32_t)ru); break;
-                DRP_CASES_EXHAUSTED;
-            }
-            if(op->kind == CI_OP_CMP_JUMP32){
-                frame->pc = ((res != 0) == op->cmp_jump.when_true) ? op->cmp_jump.jump : frame->pc + 1;
-            }
-            else {
-                ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, res);
-                frame->pc++;
-            }
-            return 0;
+#define CI_INTEGER(name, suffix, bits, type, rhs, expression) \
+        case CI_OP_##name##suffix: { \
+            type a = (type)ci_read_uint((char*)frame->slots + op->alu.src, bits / 8); \
+            type b = (type)(rhs); \
+            (void)b; \
+            uint64_t result = (expression); \
+            ci_write_uint((char*)frame->slots + op->alu.slot, bits / 8, result); \
+            frame->pc++; \
+            return 0; \
         }
-        case CI_OP_CMP_JUMP64:
-        case CI_OP_CMP64: {
-            const void* s1 = (char*)frame->slots + op->cmp.src;
-            const void* s2 = (char*)frame->slots + op->cmp.src2;
-            _Bool is_unsigned = op->cmp.is_unsigned;
-            uint64_t lu, ru;
-            if(is_unsigned){
-                lu = ci_read_uint(s1, 8);
-                ru = ci_read_uint(s2, 8);
-            }
-            else {
-                lu = (uint64_t)ci_read_int(s1, 8);
-                ru = (uint64_t)ci_read_int(s2, 8);
-            }
-            uint64_t res;
-            switch(op->cmp.op){
-                case CI_CMP_EQ: res = lu == ru; break;
-                case CI_CMP_NE: res = lu != ru; break;
-                case CI_CMP_LT: res = is_unsigned ? (lu < ru) : ((int64_t)lu < (int64_t)ru); break;
-                case CI_CMP_GT: res = is_unsigned ? (lu > ru) : ((int64_t)lu > (int64_t)ru); break;
-                case CI_CMP_LE: res = is_unsigned ? (lu <= ru) : ((int64_t)lu <= (int64_t)ru); break;
-                case CI_CMP_GE: res = is_unsigned ? (lu >= ru) : ((int64_t)lu >= (int64_t)ru); break;
-                DRP_CASES_EXHAUSTED;
-            }
-            if(op->kind == CI_OP_CMP_JUMP64){
-                frame->pc = ((res != 0) == op->cmp_jump.when_true) ? op->cmp_jump.jump : frame->pc + 1;
-            }
-            else {
-                ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, res);
-                frame->pc++;
-            }
-            return 0;
+#define CI_INTEGER_BINARY(suffix, bits, type, rhs) \
+        CI_INTEGER(ADD, suffix, bits, type, rhs, a + b) \
+        CI_INTEGER(SUB, suffix, bits, type, rhs, a - b) \
+        CI_INTEGER(MUL, suffix, bits, type, rhs, a * b) \
+        CI_INTEGER(SDIV, suffix, bits, type, rhs, ci_int64_divrem((int##bits##_t)a, (int##bits##_t)b, 0)) \
+        CI_INTEGER(UDIV, suffix, bits, type, rhs, b ? a / b : 0) \
+        CI_INTEGER(SMOD, suffix, bits, type, rhs, ci_int64_divrem((int##bits##_t)a, (int##bits##_t)b, 1)) \
+        CI_INTEGER(UMOD, suffix, bits, type, rhs, b ? a % b : 0) \
+        CI_INTEGER(AND, suffix, bits, type, rhs, a & b) \
+        CI_INTEGER(OR, suffix, bits, type, rhs, a | b) \
+        CI_INTEGER(XOR, suffix, bits, type, rhs, a ^ b) \
+        CI_INTEGER(SHL, suffix, bits, type, rhs, ci_lsl64(a, b)) \
+        CI_INTEGER(ASR, suffix, bits, type, rhs, ci_asr64((int##bits##_t)a, b)) \
+        CI_INTEGER(LSR, suffix, bits, type, rhs, ci_lsr64(a, b))
+        CI_INTEGER_BINARY(8, 8, uint32_t, ci_read_uint((char*)frame->slots + op->alu.src2, 1))
+        CI_INTEGER(NEG, 8, 8, uint32_t, 0, (uint32_t)0 - a)
+        CI_INTEGER(NOT, 8, 8, uint32_t, 0, ~a)
+        CI_INTEGER_BINARY(16, 16, uint32_t, ci_read_uint((char*)frame->slots + op->alu.src2, 2))
+        CI_INTEGER(NEG, 16, 16, uint32_t, 0, (uint32_t)0 - a)
+        CI_INTEGER(NOT, 16, 16, uint32_t, 0, ~a)
+        CI_INTEGER_BINARY(32, 32, uint32_t, ci_read_uint((char*)frame->slots + op->alu.src2, 4))
+        CI_INTEGER(NEG, 32, 32, uint32_t, 0, (uint32_t)0 - a)
+        CI_INTEGER(NOT, 32, 32, uint32_t, 0, ~a)
+        CI_INTEGER_BINARY(64, 64, uint64_t, ci_read_uint((char*)frame->slots + op->alu.src2, 8))
+        CI_INTEGER(NEG, 64, 64, uint64_t, 0, (uint64_t)0 - a)
+        CI_INTEGER(NOT, 64, 64, uint64_t, 0, ~a)
+        CI_INTEGER_BINARY(_IMM32, 32, uint32_t, op->alu_imm.immediate)
+        CI_INTEGER_BINARY(_IMM64, 64, uint64_t, op->alu_imm.immediate)
+#undef CI_INTEGER_BINARY
+#undef CI_INTEGER
+#define CI_INTEGER128(name, expression) \
+        case CI_OP_##name##128: { \
+            CiUint128 a, b; \
+            ci_uint128_read(&a, (char*)frame->slots + op->alu.src, 16); \
+            ci_uint128_read(&b, (char*)frame->slots + op->alu.src2, 16); \
+            CiUint128 result = (expression); \
+            ci_uint128_write((char*)frame->slots + op->alu.slot, 16, result); \
+            frame->pc++; \
+            return 0; \
         }
-        case CI_OP_CMP128: {
-            const void* s1 = (char*)frame->slots + op->cmp.src;
-            const void* s2 = (char*)frame->slots + op->cmp.src2;
-            _Bool is_unsigned = op->cmp.is_unsigned;
-            CiUint128 lu, ru;
-            ci_uint128_read(&lu, s1, 16);
-            ci_uint128_read(&ru, s2, 16);
-            uint64_t res;
-            switch((CiCmpOp)(op->cmp.op)){
-                case CI_CMP_EQ: res = ci_uint128_eq(lu, ru); break;
-                case CI_CMP_NE: res = ci_uint128_ne(lu, ru); break;
-                case CI_CMP_LT:
-                    res = is_unsigned ? ci_uint128_lt(lu, ru) : ci_int128_lt(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru));
-                    break;
-                case CI_CMP_GT:
-                    res = is_unsigned ? ci_uint128_gt(lu, ru) : ci_int128_gt(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru));
-                    break;
-                case CI_CMP_LE:
-                    res = is_unsigned ? ci_uint128_le(lu, ru) : ci_int128_le(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru));
-                    break;
-                case CI_CMP_GE:
-                    res = is_unsigned ? ci_uint128_ge(lu, ru) : ci_int128_ge(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru));
-                    break;
-                DRP_CASES_EXHAUSTED;
-            }
-            ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, res);
-            frame->pc++;
-            return 0;
+        CI_INTEGER128(ADD, ci_uint128_add(a, b))
+        CI_INTEGER128(SUB, ci_uint128_sub(a, b))
+        CI_INTEGER128(MUL, ci_uint128_mul(a, b))
+        CI_INTEGER128(SDIV, ci_uint128_from_int128(ci_int128_div(ci_int128_from_uint128(a), ci_int128_from_uint128(b))))
+        CI_INTEGER128(UDIV, ci_uint128_div(a, b))
+        CI_INTEGER128(SMOD, ci_uint128_from_int128(ci_int128_mod(ci_int128_from_uint128(a), ci_int128_from_uint128(b))))
+        CI_INTEGER128(UMOD, ci_uint128_mod(a, b))
+        CI_INTEGER128(AND, ci_uint128_and(a, b))
+        CI_INTEGER128(OR, ci_uint128_or(a, b))
+        CI_INTEGER128(XOR, ci_uint128_xor(a, b))
+        CI_INTEGER128(SHL, ci_uint128_shl(a, ci_uint128_hi(b) ? UINT64_MAX : ci_uint128_lo(b)))
+        CI_INTEGER128(ASR, ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(a), ci_uint128_hi(b) ? UINT64_MAX : ci_uint128_lo(b))))
+        CI_INTEGER128(LSR, ci_uint128_shr(a, ci_uint128_hi(b) ? UINT64_MAX : ci_uint128_lo(b)))
+        CI_INTEGER128(NEG, ci_uint128_sub(ci_uint128_from_uint64(0), a))
+        CI_INTEGER128(NOT, ci_uint128_xor(a, ci_uint128_from_int64(-1)))
+#undef CI_INTEGER128
+#define CI_COMPARE(name, suffix, bits, expression, branch) \
+        case CI_OP_##name##suffix: { \
+            uint##bits##_t a, b; \
+            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->cmp.src, sizeof a); \
+            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->cmp.src2, sizeof b); \
+            _Bool result = (expression); \
+            if(branch){ \
+                frame->pc = result == op->cmp_jump.when_true ? op->cmp_jump.jump : frame->pc + 1; \
+            } \
+            else { \
+                ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, result); \
+                frame->pc++; \
+            } \
+            return 0; \
         }
-        case CI_OP_ALU8: {
-            const void* s1 = (char*)frame->slots + op->alu.src;
-            const void* s2 = (char*)frame->slots + op->alu.src2;
-            _Bool is_unsigned = op->alu.is_unsigned;
-            uint32_t lu, ru;
-            if(is_unsigned){
-                lu = (uint32_t)ci_read_uint(s1, 1);
-                ru = (uint32_t)ci_read_uint(s2, 1);
-            }
-            else {
-                lu = (uint32_t)ci_read_int(s1, 1);
-                ru = (uint32_t)ci_read_int(s2, 1);
-            }
-            uint64_t res;
-            switch((CiAluOp)(op->alu.op)){
-                case CI_ALU_ADD: res = lu + ru; break;
-                case CI_ALU_SUB: res = lu - ru; break;
-                case CI_ALU_MUL: res = lu * ru; break;
-                case CI_ALU_DIV:
-                    if(is_unsigned)
-                        res = ru ? lu / ru : 0;
-                    else
-                        res = ci_int64_divrem((int8_t)lu, (int8_t)ru, 0);
-                    break;
-                case CI_ALU_MOD:
-                    if(is_unsigned)
-                        res = ru ? lu % ru : 0;
-                    else
-                        res = ci_int64_divrem((int8_t)lu, (int8_t)ru, 1);
-                    break;
-                case CI_ALU_AND: res = lu & ru; break;
-                case CI_ALU_OR:  res = lu | ru; break;
-                case CI_ALU_XOR: res = lu ^ ru; break;
-                case CI_ALU_SHL: res = ci_lsl64(lu, ru); break;
-                case CI_ALU_SHR:
-                    if(is_unsigned)
-                        res = ci_lsr64(lu, ru);
-                    else
-                        res = (uint8_t)ci_asr64((int8_t)lu, ru);
-                    break;
-                case CI_ALU_NEG: res = 0u - lu; break;
-                case CI_ALU_NOT: res = (uint8_t)~lu; break;
-                DRP_CASES_EXHAUSTED;
-            }
-            ci_write_uint((char*)frame->slots + op->alu.slot, 1, res);
-            frame->pc++;
-            return 0;
+#define CI_COMPARE_WIDTH(suffix, bits, branch) \
+        CI_COMPARE(EQ, suffix, bits, a == b, branch) \
+        CI_COMPARE(NE, suffix, bits, a != b, branch) \
+        CI_COMPARE(SLT, suffix, bits, (int##bits##_t)a < (int##bits##_t)b, branch) \
+        CI_COMPARE(ULT, suffix, bits, a < b, branch) \
+        CI_COMPARE(SGT, suffix, bits, (int##bits##_t)a > (int##bits##_t)b, branch) \
+        CI_COMPARE(UGT, suffix, bits, a > b, branch) \
+        CI_COMPARE(SLE, suffix, bits, (int##bits##_t)a <= (int##bits##_t)b, branch) \
+        CI_COMPARE(ULE, suffix, bits, a <= b, branch) \
+        CI_COMPARE(SGE, suffix, bits, (int##bits##_t)a >= (int##bits##_t)b, branch) \
+        CI_COMPARE(UGE, suffix, bits, a >= b, branch)
+        CI_COMPARE_WIDTH(32, 32, 0)
+        CI_COMPARE_WIDTH(_JUMP32, 32, 1)
+        CI_COMPARE_WIDTH(64, 64, 0)
+        CI_COMPARE_WIDTH(_JUMP64, 64, 1)
+#undef CI_COMPARE_WIDTH
+#undef CI_COMPARE
+#define CI_COMPARE128(name, expression) \
+        case CI_OP_##name##128: { \
+            CiUint128 a, b; \
+            ci_uint128_read(&a, (char*)frame->slots + op->cmp.src, 16); \
+            ci_uint128_read(&b, (char*)frame->slots + op->cmp.src2, 16); \
+            _Bool result = (expression); \
+            ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, result); \
+            frame->pc++; \
+            return 0; \
         }
-        case CI_OP_ALU16: {
-            const void* s1 = (char*)frame->slots + op->alu.src;
-            const void* s2 = (char*)frame->slots + op->alu.src2;
-            _Bool is_unsigned = op->alu.is_unsigned;
-            uint32_t lu, ru;
-            if(is_unsigned){
-                lu = (uint32_t)ci_read_uint(s1, 2);
-                ru = (uint32_t)ci_read_uint(s2, 2);
-            }
-            else {
-                lu = (uint32_t)ci_read_int(s1, 2);
-                ru = (uint32_t)ci_read_int(s2, 2);
-            }
-            uint64_t res;
-            switch((CiAluOp)(op->alu.op)){
-                case CI_ALU_ADD: res = lu + ru; break;
-                case CI_ALU_SUB: res = lu - ru; break;
-                case CI_ALU_MUL: res = lu * ru; break;
-                case CI_ALU_DIV:
-                    if(is_unsigned)
-                        res = ru ? lu / ru : 0;
-                    else
-                        res = ci_int64_divrem((int16_t)lu, (int16_t)ru, 0);
-                    break;
-                case CI_ALU_MOD:
-                    if(is_unsigned)
-                        res = ru ? lu % ru : 0;
-                    else
-                        res = ci_int64_divrem((int16_t)lu, (int16_t)ru, 1);
-                    break;
-                case CI_ALU_AND: res = lu & ru; break;
-                case CI_ALU_OR:  res = lu | ru; break;
-                case CI_ALU_XOR: res = lu ^ ru; break;
-                case CI_ALU_SHL: res = ci_lsl64(lu, ru); break;
-                case CI_ALU_SHR:
-                    if(is_unsigned)
-                        res = ci_lsr64(lu, ru);
-                    else
-                        res = (uint16_t)ci_asr64((int16_t)lu, ru);
-                    break;
-                case CI_ALU_NEG: res = 0u - lu; break;
-                case CI_ALU_NOT: res = (uint16_t)~lu; break;
-                DRP_CASES_EXHAUSTED;
-            }
-            ci_write_uint((char*)frame->slots + op->alu.slot, 2, res);
-            frame->pc++;
-            return 0;
+        CI_COMPARE128(EQ, ci_uint128_eq(a, b))
+        CI_COMPARE128(NE, ci_uint128_ne(a, b))
+        CI_COMPARE128(SLT, ci_int128_lt(ci_int128_from_uint128(a), ci_int128_from_uint128(b)))
+        CI_COMPARE128(ULT, ci_uint128_lt(a, b))
+        CI_COMPARE128(SGT, ci_int128_gt(ci_int128_from_uint128(a), ci_int128_from_uint128(b)))
+        CI_COMPARE128(UGT, ci_uint128_gt(a, b))
+        CI_COMPARE128(SLE, ci_int128_le(ci_int128_from_uint128(a), ci_int128_from_uint128(b)))
+        CI_COMPARE128(ULE, ci_uint128_le(a, b))
+        CI_COMPARE128(SGE, ci_int128_ge(ci_int128_from_uint128(a), ci_int128_from_uint128(b)))
+        CI_COMPARE128(UGE, ci_uint128_ge(a, b))
+#undef CI_COMPARE128
+#define CI_FALU16_CASE(name, expression) \
+        case CI_OP_##name##16: { \
+            uint16_t a = (uint16_t)ci_read_uint((char*)frame->slots + op->falu32.src, 2); \
+            uint16_t b = (uint16_t)ci_read_uint((char*)frame->slots + op->falu32.src2, 2); \
+            (void)b; \
+            uint16_t r; \
+            r = (expression); \
+            ci_write_uint((char*)frame->slots + op->falu32.slot, 2, r); \
+            frame->pc++; \
+            return 0; \
         }
-        case CI_OP_ALU32: {
-            _Bool is_unsigned;
-            uint32_t lu, ru;
-            is_unsigned = op->alu.is_unsigned;
-            lu = (uint32_t)ci_read_uint((char*)frame->slots + op->alu.src, 4);
-            ru = (uint32_t)ci_read_uint((char*)frame->slots + op->alu.src2, 4);
-            goto alu32;
-        case CI_OP_ALU_IMM32:
-            is_unsigned = op->alu_imm.is_unsigned;
-            lu = (uint32_t)ci_read_uint((char*)frame->slots + op->alu_imm.src, 4);
-            ru = (uint32_t)op->alu_imm.immediate;
-            alu32:;
-            uint64_t res;
-            switch((CiAluOp)(op->alu.op)){
-                case CI_ALU_ADD: res = lu + ru; break;
-                case CI_ALU_SUB: res = lu - ru; break;
-                case CI_ALU_MUL: res = lu * ru; break;
-                case CI_ALU_DIV:
-                    if(is_unsigned)
-                        res = ru ? lu / ru : 0;
-                    else
-                        res = ci_int64_divrem((int32_t)lu, (int32_t)ru, 0);
-                    break;
-                case CI_ALU_MOD:
-                    if(is_unsigned)
-                        res = ru ? lu % ru : 0;
-                    else
-                        res = ci_int64_divrem((int32_t)lu, (int32_t)ru, 1);
-                    break;
-                case CI_ALU_AND: res = lu & ru; break;
-                case CI_ALU_OR:  res = lu | ru; break;
-                case CI_ALU_XOR: res = lu ^ ru; break;
-                case CI_ALU_SHL: res = ci_lsl64(lu, ru); break;
-                case CI_ALU_SHR:
-                    if(is_unsigned)
-                        res = ci_lsr64(lu, ru);
-                    else
-                        res = (uint32_t)ci_asr64((int32_t)lu, ru);
-                    break;
-                case CI_ALU_NEG: res = 0u - lu; break;
-                case CI_ALU_NOT: res = ~lu; break;
-                DRP_CASES_EXHAUSTED;
-            }
-            ci_write_uint((char*)frame->slots + op->alu.slot, 4, res);
-            frame->pc++;
-            return 0;
+        CI_FALU16_CASE(FADD, ci_float16_add(a, b, op->falu32.is_brian_float))
+        CI_FALU16_CASE(FSUB, ci_float16_sub(a, b, op->falu32.is_brian_float))
+        CI_FALU16_CASE(FMUL, ci_float16_mul(a, b, op->falu32.is_brian_float))
+        CI_FALU16_CASE(FDIV, ci_float16_div(a, b, op->falu32.is_brian_float))
+        CI_FALU16_CASE(FNEG, ci_float16_neg(a))
+#undef CI_FALU16_CASE
+#define CI_FALU32_CASE(name, expression) \
+        case CI_OP_##name##32: { \
+            float a, b; \
+            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->falu32.src, sizeof a); \
+            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->falu32.src2, sizeof b); \
+            void* dest = (char*)frame->slots + op->falu32.slot; \
+            float res; \
+            res = (expression); \
+            CI_INLINE_MEMCPY(dest, &res, sizeof res); \
+            frame->pc++; \
+            return 0; \
         }
-        case CI_OP_ALU64: {
-            _Bool is_unsigned;
-            uint64_t lu, ru;
-            is_unsigned = op->alu.is_unsigned;
-            lu = ci_read_uint((char*)frame->slots + op->alu.src, 8);
-            ru = ci_read_uint((char*)frame->slots + op->alu.src2, 8);
-            goto alu64;
-        case CI_OP_ALU_IMM64:
-            is_unsigned = op->alu_imm.is_unsigned;
-            lu = ci_read_uint((char*)frame->slots + op->alu_imm.src, 8);
-            ru = op->alu_imm.immediate;
-            alu64:;
-            uint64_t res;
-            switch((CiAluOp)(op->alu.op)){
-                case CI_ALU_ADD: res = lu + ru; break;
-                case CI_ALU_SUB: res = lu - ru; break;
-                case CI_ALU_MUL: res = lu * ru; break;
-                case CI_ALU_DIV:
-                    if(is_unsigned)
-                        res = ru ? lu / ru : 0;
-                    else
-                        res = ci_int64_divrem((int64_t)lu, (int64_t)ru, 0);
-                    break;
-                case CI_ALU_MOD:
-                    if(is_unsigned)
-                        res = ru ? lu % ru : 0;
-                    else
-                        res = ci_int64_divrem((int64_t)lu, (int64_t)ru, 1);
-                    break;
-                case CI_ALU_AND: res = lu & ru; break;
-                case CI_ALU_OR:  res = lu | ru; break;
-                case CI_ALU_XOR: res = lu ^ ru; break;
-                case CI_ALU_SHL: res = ci_lsl64(lu, ru); break;
-                case CI_ALU_SHR:
-                    if(is_unsigned)
-                        res = ci_lsr64(lu, ru);
-                    else
-                        res = (uint64_t)ci_asr64((int64_t)lu, ru);
-                    break;
-                case CI_ALU_NEG: res = (uint64_t)0 - lu; break;
-                case CI_ALU_NOT: res = ~lu; break;
-                DRP_CASES_EXHAUSTED;
-            }
-            ci_write_uint((char*)frame->slots + op->alu.slot, 8, res);
-            frame->pc++;
-            return 0;
+        CI_FALU32_CASE(FADD, a + b)
+        CI_FALU32_CASE(FSUB, a - b)
+        CI_FALU32_CASE(FMUL, a * b)
+        CI_FALU32_CASE(FDIV, a / b)
+        CI_FALU32_CASE(FNEG, -a)
+#undef CI_FALU32_CASE
+#define CI_FALU64_CASE(name, expression) \
+        case CI_OP_##name##64: { \
+            double a, b; \
+            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->falu64.src, sizeof a); \
+            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->falu64.src2, sizeof b); \
+            void* dest = (char*)frame->slots + op->falu64.slot; \
+            double res; \
+            res = (expression); \
+            CI_INLINE_MEMCPY(dest, &res, sizeof res); \
+            frame->pc++; \
+            return 0; \
         }
-        case CI_OP_ALU128: {
-            const void* s1 = (char*)frame->slots + op->alu.src;
-            const void* s2 = (char*)frame->slots + op->alu.src2;
-            _Bool is_unsigned = op->alu.is_unsigned;
-            CiUint128 lu, ru;
-            ci_uint128_read(&lu, s1, 16);
-            ci_uint128_read(&ru, s2, 16);
-            CiUint128 res;
-            switch((CiAluOp)(op->alu.op)){
-                case CI_ALU_ADD: res = ci_uint128_add(lu, ru); break;
-                case CI_ALU_SUB: res = ci_uint128_sub(lu, ru); break;
-                case CI_ALU_MUL: res = ci_uint128_mul(lu, ru); break;
-                case CI_ALU_DIV:
-                    if(is_unsigned)
-                        res = ci_uint128_div(lu, ru);
-                    else
-                        res = ci_uint128_from_int128(ci_int128_div(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
-                    break;
-                case CI_ALU_MOD:
-                    if(is_unsigned)
-                        res = ci_uint128_mod(lu, ru);
-                    else
-                        res = ci_uint128_from_int128(ci_int128_mod(ci_int128_from_uint128(lu), ci_int128_from_uint128(ru)));
-                    break;
-                case CI_ALU_AND: res = ci_uint128_and(lu, ru); break;
-                case CI_ALU_OR:  res = ci_uint128_or(lu, ru); break;
-                case CI_ALU_XOR: res = ci_uint128_xor(lu, ru); break;
-                case CI_ALU_SHL: case CI_ALU_SHR: {
-                    uint64_t count = ci_uint128_hi(ru) ? UINT64_MAX : ci_uint128_lo(ru);
-                    if(op->alu.op == CI_ALU_SHL)
-                        res = ci_uint128_shl(lu, count);
-                    else if(is_unsigned)
-                        res = ci_uint128_shr(lu, count);
-                    else
-                        res = ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(lu), count));
-                    break;
-                }
-                case CI_ALU_NEG: res = ci_uint128_sub(ci_uint128_from_uint64(0), lu); break;
-                case CI_ALU_NOT: res = ci_uint128_xor(lu, ci_uint128_from_int64(-1)); break;
-                DRP_CASES_EXHAUSTED;
-            }
-            ci_uint128_write((char*)frame->slots + op->alu.slot, 16, res);
-            frame->pc++;
-            return 0;
+        CI_FALU64_CASE(FADD, a + b)
+        CI_FALU64_CASE(FSUB, a - b)
+        CI_FALU64_CASE(FMUL, a * b)
+        CI_FALU64_CASE(FDIV, a / b)
+        CI_FALU64_CASE(FNEG, -a)
+#undef CI_FALU64_CASE
+#define CI_FALU80_CASE(name, expression) \
+        case CI_OP_##name##80: { \
+            CiFloat80 a = ci_float80_read((char*)frame->slots + op->falu32.src); \
+            CiFloat80 b = ci_float80_read((char*)frame->slots + op->falu32.src2), r; \
+            (void)b; \
+            r = (expression); \
+            ci_float80_write((char*)frame->slots + op->falu32.slot, op->falu32.slot_size, r); \
+            frame->pc++; return 0; \
         }
-        case CI_OP_FALU16: {
-            uint16_t a = (uint16_t)ci_read_uint((char*)frame->slots + op->falu32.src, 2);
-            uint16_t b = (uint16_t)ci_read_uint((char*)frame->slots + op->falu32.src2, 2);
-            uint16_t r;
-            switch(op->falu32.op){
-                case CI_FALU_ADD: r = ci_float16_add(a, b, op->falu32.is_brian_float); break;
-                case CI_FALU_SUB: r = ci_float16_sub(a, b, op->falu32.is_brian_float); break;
-                case CI_FALU_MUL: r = ci_float16_mul(a, b, op->falu32.is_brian_float); break;
-                case CI_FALU_DIV: r = ci_float16_div(a, b, op->falu32.is_brian_float); break;
-                case CI_FALU_NEG: r = ci_float16_neg(a); break;
-                DRP_CASES_EXHAUSTED;
-            }
-            ci_write_uint((char*)frame->slots + op->falu32.slot, 2, r);
-            frame->pc++;
-            return 0;
+        CI_FALU80_CASE(FADD, ci_float80_add(a, b))
+        CI_FALU80_CASE(FSUB, ci_float80_sub(a, b))
+        CI_FALU80_CASE(FMUL, ci_float80_mul(a, b))
+        CI_FALU80_CASE(FDIV, ci_float80_div(a, b))
+        CI_FALU80_CASE(FNEG, ci_float80_neg(a))
+#undef CI_FALU80_CASE
+#define CI_FALU128_CASE(name, expression) \
+        case CI_OP_##name##128: { \
+            CiFloat128 a = ci_float128_read((char*)frame->slots + op->falu32.src); \
+            CiFloat128 b = ci_float128_read((char*)frame->slots + op->falu32.src2), r; \
+            (void)b; \
+            r = (expression); \
+            ci_float128_write((char*)frame->slots + op->falu32.slot, op->falu32.slot_size, r); \
+            frame->pc++; return 0; \
         }
-        case CI_OP_FCMP16: {
-            uint16_t a = (uint16_t)ci_read_uint((char*)frame->slots + op->fcmp32.src, 2);
-            uint16_t b = (uint16_t)ci_read_uint((char*)frame->slots + op->fcmp32.src2, 2);
-            _Bool r;
-            switch(op->fcmp32.op){
-                case CI_CMP_EQ: r =  ci_float16_eq(a, b, op->fcmp32.is_brian_float); break;
-                case CI_CMP_NE: r = !ci_float16_eq(a, b, op->fcmp32.is_brian_float); break;
-                case CI_CMP_LT: r =  ci_float16_lt(a, b, op->fcmp32.is_brian_float); break;
-                case CI_CMP_GT: r =  ci_float16_lt(b, a, op->fcmp32.is_brian_float); break;
-                case CI_CMP_LE: r =  ci_float16_le(a, b, op->fcmp32.is_brian_float); break;
-                case CI_CMP_GE: r =  ci_float16_le(b, a, op->fcmp32.is_brian_float); break;
-                DRP_CASES_EXHAUSTED;
-            }
-            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, r);
-            frame->pc++;
-            return 0;
+        CI_FALU128_CASE(FADD, ci_float128_add(a, b))
+        CI_FALU128_CASE(FSUB, ci_float128_sub(a, b))
+        CI_FALU128_CASE(FMUL, ci_float128_mul(a, b))
+        CI_FALU128_CASE(FDIV, ci_float128_div(a, b))
+        CI_FALU128_CASE(FNEG, ci_float128_neg(a))
+#undef CI_FALU128_CASE
+#define CI_FCMP16_CASE(name, expression) \
+        case CI_OP_##name##16: { \
+            uint16_t a = (uint16_t)ci_read_uint((char*)frame->slots + op->fcmp32.src, 2); \
+            uint16_t b = (uint16_t)ci_read_uint((char*)frame->slots + op->fcmp32.src2, 2); \
+            _Bool r; \
+            r = (expression); \
+            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, r); \
+            frame->pc++; \
+            return 0; \
         }
-        case CI_OP_FALU80: {
-            CiFloat80 a = ci_float80_read((char*)frame->slots + op->falu32.src);
-            CiFloat80 b = ci_float80_read((char*)frame->slots + op->falu32.src2), r;
-            switch(op->falu32.op){
-                case CI_FALU_ADD: r = ci_float80_add(a, b); break;
-                case CI_FALU_SUB: r = ci_float80_sub(a, b); break;
-                case CI_FALU_MUL: r = ci_float80_mul(a, b); break;
-                case CI_FALU_DIV: r = ci_float80_div(a, b); break;
-                case CI_FALU_NEG: r = ci_float80_neg(a); break;
-                DRP_CASES_EXHAUSTED;
-            }
-            ci_float80_write((char*)frame->slots + op->falu32.slot, op->falu32.slot_size, r);
-            frame->pc++; return 0;
+        CI_FCMP16_CASE(FEQ,  ci_float16_eq(a, b, op->fcmp32.is_brian_float))
+        CI_FCMP16_CASE(FNE, !ci_float16_eq(a, b, op->fcmp32.is_brian_float))
+        CI_FCMP16_CASE(FLT,  ci_float16_lt(a, b, op->fcmp32.is_brian_float))
+        CI_FCMP16_CASE(FGT,  ci_float16_lt(b, a, op->fcmp32.is_brian_float))
+        CI_FCMP16_CASE(FLE,  ci_float16_le(a, b, op->fcmp32.is_brian_float))
+        CI_FCMP16_CASE(FGE,  ci_float16_le(b, a, op->fcmp32.is_brian_float))
+#undef CI_FCMP16_CASE
+#define CI_FCMP32_CASE(name, expression) \
+        case CI_OP_##name##32: { \
+            float a, b; \
+            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->fcmp32.src, sizeof a); \
+            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->fcmp32.src2, sizeof b); \
+            uint64_t res; \
+            res = (expression); \
+            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, res); \
+            frame->pc++; \
+            return 0; \
         }
-        case CI_OP_FCMP80: {
-            CiFloat80 a = ci_float80_read((char*)frame->slots + op->fcmp32.src);
-            CiFloat80 b = ci_float80_read((char*)frame->slots + op->fcmp32.src2);
-            _Bool r;
-            switch(op->fcmp32.op){
-                case CI_CMP_EQ: r = ci_float80_eq(a, b); break;
-                case CI_CMP_NE: r = !ci_float80_eq(a, b); break;
-                case CI_CMP_LT: r = ci_float80_lt(a, b); break;
-                case CI_CMP_LE: r = ci_float80_le(a, b); break;
-                case CI_CMP_GT: r = ci_float80_lt(b, a); break;
-                case CI_CMP_GE: r = ci_float80_le(b, a); break;
-                DRP_CASES_EXHAUSTED;
-            }
-            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, r);
-            frame->pc++; return 0;
+        CI_FCMP32_CASE(FEQ, a == b)
+        CI_FCMP32_CASE(FNE, a != b)
+        CI_FCMP32_CASE(FLT, a <  b)
+        CI_FCMP32_CASE(FGT, a >  b)
+        CI_FCMP32_CASE(FLE, a <= b)
+        CI_FCMP32_CASE(FGE, a >= b)
+#undef CI_FCMP32_CASE
+#define CI_FCMP64_CASE(name, expression) \
+        case CI_OP_##name##64: { \
+            double a, b; \
+            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->fcmp64.src, sizeof a); \
+            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->fcmp64.src2, sizeof b); \
+            uint64_t res; \
+            res = (expression); \
+            ci_write_uint((char*)frame->slots + op->fcmp64.slot, op->fcmp64.slot_size, res); \
+            frame->pc++; \
+            return 0; \
         }
-        case CI_OP_FALU128: {
-            CiFloat128 a = ci_float128_read((char*)frame->slots + op->falu32.src);
-            CiFloat128 b = ci_float128_read((char*)frame->slots + op->falu32.src2), r;
-            switch(op->falu32.op){
-                case CI_FALU_ADD: r = ci_float128_add(a, b); break;
-                case CI_FALU_SUB: r = ci_float128_sub(a, b); break;
-                case CI_FALU_MUL: r = ci_float128_mul(a, b); break;
-                case CI_FALU_DIV: r = ci_float128_div(a, b); break;
-                case CI_FALU_NEG: r = ci_float128_neg(a); break;
-                DRP_CASES_EXHAUSTED;
-            }
-            ci_float128_write((char*)frame->slots + op->falu32.slot, op->falu32.slot_size, r);
-            frame->pc++; return 0;
+        CI_FCMP64_CASE(FEQ, a == b)
+        CI_FCMP64_CASE(FNE, a != b)
+        CI_FCMP64_CASE(FLT, a <  b)
+        CI_FCMP64_CASE(FGT, a >  b)
+        CI_FCMP64_CASE(FLE, a <= b)
+        CI_FCMP64_CASE(FGE, a >= b)
+#undef CI_FCMP64_CASE
+#define CI_FCMP80_CASE(name, expression) \
+        case CI_OP_##name##80: { \
+            CiFloat80 a = ci_float80_read((char*)frame->slots + op->fcmp32.src); \
+            CiFloat80 b = ci_float80_read((char*)frame->slots + op->fcmp32.src2); \
+            _Bool r; \
+            r = (expression); \
+            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, r); \
+            frame->pc++; return 0; \
         }
-        case CI_OP_FCMP128: {
-            CiFloat128 a = ci_float128_read((char*)frame->slots + op->fcmp32.src);
-            CiFloat128 b = ci_float128_read((char*)frame->slots + op->fcmp32.src2);
-            _Bool r;
-            switch(op->fcmp32.op){
-                case CI_CMP_EQ: r = ci_float128_eq(a, b); break;
-                case CI_CMP_NE: r = !ci_float128_eq(a, b); break;
-                case CI_CMP_LT: r = ci_float128_lt(a, b); break;
-                case CI_CMP_LE: r = ci_float128_le(a, b); break;
-                case CI_CMP_GT: r = ci_float128_lt(b, a); break;
-                case CI_CMP_GE: r = ci_float128_le(b, a); break;
-                DRP_CASES_EXHAUSTED;
-            }
-            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, r);
-            frame->pc++; return 0;
+        CI_FCMP80_CASE(FEQ, ci_float80_eq(a, b))
+        CI_FCMP80_CASE(FNE, !ci_float80_eq(a, b))
+        CI_FCMP80_CASE(FLT, ci_float80_lt(a, b))
+        CI_FCMP80_CASE(FLE, ci_float80_le(a, b))
+        CI_FCMP80_CASE(FGT, ci_float80_lt(b, a))
+        CI_FCMP80_CASE(FGE, ci_float80_le(b, a))
+#undef CI_FCMP80_CASE
+#define CI_FCMP128_CASE(name, expression) \
+        case CI_OP_##name##128: { \
+            CiFloat128 a = ci_float128_read((char*)frame->slots + op->fcmp32.src); \
+            CiFloat128 b = ci_float128_read((char*)frame->slots + op->fcmp32.src2); \
+            _Bool r; \
+            r = (expression); \
+            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, r); \
+            frame->pc++; return 0; \
         }
-        case CI_OP_FALU32: {
-            float a, b;
-            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->falu32.src, sizeof a);
-            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->falu32.src2, sizeof b);
-            void* dest = (char*)frame->slots + op->falu32.slot;
-            float res;
-            switch(op->falu32.op){
-                case CI_FALU_ADD: res = a + b; break;
-                case CI_FALU_SUB: res = a - b; break;
-                case CI_FALU_MUL: res = a * b; break;
-                case CI_FALU_DIV: res = a / b; break;
-                case CI_FALU_NEG: res = -a; break;
-                DRP_CASES_EXHAUSTED;
-            }
-            CI_INLINE_MEMCPY(dest, &res, sizeof res);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_FALU64: {
-            double a, b;
-            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->falu64.src, sizeof a);
-            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->falu64.src2, sizeof b);
-            void* dest = (char*)frame->slots + op->falu64.slot;
-            double res;
-            switch(op->falu64.op){
-                case CI_FALU_ADD: res = a + b; break;
-                case CI_FALU_SUB: res = a - b; break;
-                case CI_FALU_MUL: res = a * b; break;
-                case CI_FALU_DIV: res = a / b; break;
-                case CI_FALU_NEG: res = -a; break;
-                DRP_CASES_EXHAUSTED;
-            }
-            CI_INLINE_MEMCPY(dest, &res, sizeof res);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_FCMP32: {
-            float a, b;
-            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->fcmp32.src, sizeof a);
-            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->fcmp32.src2, sizeof b);
-            uint64_t res;
-            switch(op->fcmp32.op){
-                case CI_CMP_EQ: res = a == b; break;
-                case CI_CMP_NE: res = a != b; break;
-                case CI_CMP_LT: res = a <  b; break;
-                case CI_CMP_GT: res = a >  b; break;
-                case CI_CMP_LE: res = a <= b; break;
-                case CI_CMP_GE: res = a >= b; break;
-                DRP_CASES_EXHAUSTED;
-            }
-            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, res);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_FCMP64: {
-            double a, b;
-            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->fcmp64.src, sizeof a);
-            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->fcmp64.src2, sizeof b);
-            uint64_t res;
-            switch(op->fcmp64.op){
-                case CI_CMP_EQ: res = a == b; break;
-                case CI_CMP_NE: res = a != b; break;
-                case CI_CMP_LT: res = a <  b; break;
-                case CI_CMP_GT: res = a >  b; break;
-                case CI_CMP_LE: res = a <= b; break;
-                case CI_CMP_GE: res = a >= b; break;
-                DRP_CASES_EXHAUSTED;
-            }
-            ci_write_uint((char*)frame->slots + op->fcmp64.slot, op->fcmp64.slot_size, res);
-            frame->pc++;
-            return 0;
-        }
+        CI_FCMP128_CASE(FEQ, ci_float128_eq(a, b))
+        CI_FCMP128_CASE(FNE, !ci_float128_eq(a, b))
+        CI_FCMP128_CASE(FLT, ci_float128_lt(a, b))
+        CI_FCMP128_CASE(FLE, ci_float128_le(a, b))
+        CI_FCMP128_CASE(FGT, ci_float128_lt(b, a))
+        CI_FCMP128_CASE(FGE, ci_float128_le(b, a))
+#undef CI_FCMP128_CASE
         case CI_OP_CHECKED: {
             // __builtin_{add,sub,mul}_overflow: compute in exact 128-bit
             // precision (operands are <= 64-bit), truncate to the destination
