@@ -26,6 +26,7 @@
 #include "cc_parser.h"
 #include "cc_target.h"
 #include "ci_interp.h"
+#include "ci_rt.h"
 #include <fenv.h>
 #include <stdarg.h>
 
@@ -1885,6 +1886,13 @@ TestFunction(test_interop){
                 "return initial==6 && m && m.run()==6;"),
             {{SV("native_add"),(void*)test_add}, {SV("native_value"),&linkage_native_value}}, .exit_code=1,
         },
+        {
+            "runtime helpers and module calls use the native call ABI", __LINE__,
+            SVI("_Module m=__compile(\"int n; void *entries[8]; n++; if(n==1)return __builtin_capture_backtrace(entries,8);\",\"\");"
+                "if(!m)return 1; auto s=__builtin_intern(\"hello\");"
+                "__builtin_intern(\"discarded\");"
+                "return s.count!=5 || s[0]!='h' || m.run()!=2 || m.run()!=0 || *m.symbol(\"n\",int)!=2;"),
+        },
     };
     int err;
     static int idx = 0;
@@ -1930,6 +1938,7 @@ TestFunction(test_interop){
         LOCK_T_init(&interp.error_lock);
         LOCK_T_init(&interp.atom_lock);
         LOCK_T_init(&interp.resolve_lock);
+        LOCK_T_init(&interp.closure_map_lock);
         fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
@@ -1942,6 +1951,8 @@ TestFunction(test_interop){
         err = ci_register_pragmas(&interp);
         if(err){TestReport("setup failure"); goto finally;}
         err = ci_register_macros(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_init_runtime_calls(&interp);
         if(err){TestReport("setup failure"); goto finally;}
 
         for(size_t s = 0; s < sizeof tc->symbols / sizeof tc->symbols[0]; s++){
@@ -2182,6 +2193,7 @@ TestFunction(test_interp){
         LOCK_T_init(&interp.error_lock);
         LOCK_T_init(&interp.atom_lock);
         LOCK_T_init(&interp.resolve_lock);
+        LOCK_T_init(&interp.closure_map_lock);
         fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
@@ -2194,6 +2206,8 @@ TestFunction(test_interp){
         err = ci_register_pragmas(&interp);
         if(err){TestReport("setup failure"); goto finally;}
         err = ci_register_macros(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_init_runtime_calls(&interp);
         if(err){TestReport("setup failure"); goto finally;}
 
         for(size_t s = 0; s < sizeof tc->symbols / sizeof tc->symbols[0]; s++){
@@ -2332,6 +2346,7 @@ TestFunction(test_interp_fail){
         LOCK_T_init(&interp.error_lock);
         LOCK_T_init(&interp.atom_lock);
         LOCK_T_init(&interp.resolve_lock);
+        LOCK_T_init(&interp.closure_map_lock);
         fc_write_path(fc, "(test)", sizeof "(test)" - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
@@ -2344,6 +2359,8 @@ TestFunction(test_interp_fail){
         err = ci_register_pragmas(&interp);
         if(err){TestReport("setup failure"); goto finally;}
         err = ci_register_macros(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_init_runtime_calls(&interp);
         if(err){TestReport("setup failure"); goto finally;}
 
         err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV("(test)"));

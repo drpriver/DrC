@@ -27,6 +27,7 @@
 #include "C/cc_errors.h"
 #include "C/cc_parser.h"
 #include "C/ci_interp.h"
+#include "C/ci_rt.h"
 #include "cpp_args.h"
 #include "cc_repl_completion.h"
 #include "C/ci_op_printer.h"
@@ -327,6 +328,7 @@ int main(int argc, char** argv, char** envp){
     LOCK_T_init(&cc_interp.error_lock);
     LOCK_T_init(&cc_interp.atom_lock);
     LOCK_T_init(&cc_interp.resolve_lock);
+    LOCK_T_init(&cc_interp.closure_map_lock);
     cc_interp.parser.cpp.fc = fc;
     cc_interp.parser.cpp.logger = logger;
     cc_interp.parser.cpp.target = cc_targets[cc_target_arg];
@@ -426,6 +428,8 @@ int main(int argc, char** argv, char** envp){
     err = ci_preload_system_libs(&cc_interp);
     if(err) goto stringify_error;
     err = ci_register_macros(&cc_interp);
+    if(err) goto stringify_error;
+    err = ci_init_runtime_calls(&cc_interp);
     if(err) goto stringify_error;
     err = cpp_setup_builtin_headers(&cc_interp.parser.cpp);
     if(err) goto stringify_error;
@@ -1009,7 +1013,7 @@ repl_builtin_command(CcParser* parser, StringView input){
                 continue;
             CcFunc* fn = mi.data[i].p;
             log_sprintf(l, "  %.*s(", (int)a->length, a->data);
-            CcFunction* ft = fn->type;
+            const CcFunction* ft = fn->type;
             for(uint32_t j = 0; j < ft->param_count; j++){
                 if(j) log_sprintf(l, ", ");
                 cc_print_type(&l->buff, ft->params[j]);
@@ -1049,7 +1053,7 @@ static
 void
 cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb, _Bool ast){
     msb_sprintf(sb, "%s(", func->name->data);
-    CcFunction* ft = func->type;
+    const CcFunction* ft = func->type;
     for(uint32_t j = 0; j < ft->param_count; j++){
         if(j) msb_sprintf(sb, ", ");
         cc_print_type(sb, ft->params[j]);

@@ -20,6 +20,7 @@
 #include "cc_parser.h"
 #include "cc_target.h"
 #include "ci_interp.h"
+#include "ci_rt.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -395,6 +396,7 @@ TestFunction(test_concurrent_callbacks){
         LOCK_T_init(&interp.error_lock);
         LOCK_T_init(&interp.atom_lock);
         LOCK_T_init(&interp.resolve_lock);
+        LOCK_T_init(&interp.closure_map_lock);
         fc_write_path(fc, "(test)", sizeof "(test)" - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){ TestReport("setup failure"); goto finally; }
@@ -409,6 +411,8 @@ TestFunction(test_concurrent_callbacks){
         err = ci_register_pragmas(&interp);
         if(err){ TestReport("setup failure"); goto finally; }
         err = ci_register_macros(&interp);
+        if(err){ TestReport("setup failure"); goto finally; }
+        err = ci_init_runtime_calls(&interp);
         if(err){ TestReport("setup failure"); goto finally; }
         err = ci_register_sym(&interp, SV("builtins"), SV("run_atomic_threads"), (void*)test_run_atomic_threads);
         if(err){ TestReport("register sym failure"); goto finally; }

@@ -38,20 +38,6 @@ enum CiCheckedOp TYPED_ENUM(uint32_t){
 };
 TYPEDEF_ENUM(CiCheckedOp, uint32_t);
 
-enum CiRuntimeOp TYPED_ENUM(uint32_t){
-    CI_RT_INTERN,
-    CI_RT_CAPTURE_BACKTRACE,
-    CI_RT_SYMBOLICATE,
-    CI_RT_HOTSWAP,
-    CI_RT_SRCLOC_REFLECT,
-    CI_RT_COMPILE,
-    CI_RT_TYPE_REFLECT,
-    CI_RT_MODULE_REFLECT,
-    CI_RT_TYPE_VALIDATE,
-    CI_RT_MODULE_VALIDATE,
-};
-TYPEDEF_ENUM(CiRuntimeOp, uint32_t);
-
 #define CI_ALU_BINARY_OPS(X, suffix) \
     X(ADD, suffix) \
     X(SUB, suffix) \
@@ -136,6 +122,7 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_FCMP_OPS(CI_OPCODE_ENUM, 128)
     CI_OP_CHECKED,
     CI_OP_CHECK,
+    CI_OP_PROPAGATE_ERROR,
     CI_OP_BIT_BUILTIN,
     CI_OP_CONVERT,
     CI_OP_ITOF,
@@ -176,17 +163,22 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_OP_BSWAP,
     CI_OP_BUILTIN,
     CI_OP_VA_ARG,
-    CI_OP_RT_CALL,
+    CI_OP_CAPTURE_BACKTRACE,
 };
 TYPEDEF_ENUM(CiOpKind, uint32_t);
 #undef CI_OPCODE_ENUM
-_Static_assert(CI_OP_RT_CALL < 256, "CiOpKind must fit in its 8-bit field");
+_Static_assert(CI_OP_CAPTURE_BACKTRACE < 256, "CiOpKind must fit in its 8-bit field");
+
+// Indirect calls store the callee pointer immediately before argument storage.
+enum { CI_INDIRECT_CALL_PREFIX_SIZE = 8 };
 
 typedef struct CiCallDescriptor CiCallDescriptor;
+typedef int CiCallInvoker(const NcCallPlan* _Nonnull, void (*_Nonnull)(void), NcCallState* _Nonnull);
 struct CiCallDescriptor {
     NcCallPlan* _Nonnull abi;
-    CcFunc* _Nonnull func;
-    CcFunction*_Nonnull call_type; // effective signature, including promoted variadic arguments
+    CiCallInvoker* _Nonnull invoke;
+    const CcFunc* _Nonnull func;
+    const CcFunction*_Nonnull call_type; // effective signature, including promoted variadic arguments
     uint32_t nargs;
 };
 
@@ -290,15 +282,12 @@ struct CiOp {
             SrcLoc loc;
         };
         struct {
-            CiOpKind kind: 8; // CI_OP_RT_CALL
-            CiRuntimeOp op: 8;
-            uint32_t nargs: 7;
-            uint32_t member_by_name: 1;
-            uint32_t reflect_op: 8; // CcTypeIntrospectionOp, CcModuleOp, or CcSrcLocOp
-            uint32_t slot, slot_size;
-            uint32_t args[3]; // reflection: receiver, optional index/name, symbol expected type
+            CiOpKind kind: 8; // CI_OP_CAPTURE_BACKTRACE
+            uint32_t _pad: 24;
+            uint32_t slot, slot_size, buffer, capacity;
+            uint32_t _padding;
             SrcLoc loc;
-        } rt_call;
+        } capture_backtrace;
         struct {
             CiOpKind kind: 8; // CI_OP_CONST
             uint32_t bt_kind: 7; // for pretty printing
@@ -399,6 +388,13 @@ struct CiOp {
             uint64_t pad;
             SrcLoc loc;
         } check;
+        struct {
+            CiOpKind kind: 8; // CI_OP_PROPAGATE_ERROR: return a nonzero int error.
+            uint32_t _bitpad: 24;
+            uint32_t src;
+            uint64_t pad[2];
+            SrcLoc loc;
+        } propagate_error;
         struct {
             CiOpKind kind: 8;
             CcBitBuiltinOp op: 8;
@@ -725,7 +721,7 @@ typedef struct CiFuncOps CiFuncOps;
 struct CiFuncOps {
     NcCallPlan* _Nonnull abi;
     Marray(CiOp) code;
-    CcFunction* _Nonnull native_type; // embedding API signature, excluding ignored arguments
+    const CcFunction* _Nonnull native_type; // embedding API signature, excluding ignored arguments
     uint32_t frame_alignment;
 };
 

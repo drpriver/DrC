@@ -26,6 +26,7 @@
 #include "cc_target.h"
 #include "cc_errors.h"
 #include "ci_interp.h"
+#include "ci_rt.h"
 // Do not include ci_op.h in this file, this file tests the runtime execution
 // of the interpreter and its observable effects, not its internal bytecode.
 
@@ -1369,6 +1370,19 @@ TestFunction(test_interpreter){
             "runtime type reflection accepts a packed destination", __LINE__,
             SVI("int f(_Type t){struct __attribute__((packed)) S{char c;_Type t;}s;"
                 "s.t=t.pointee;return s.t==int;}return f(int*);"),
+            .exit_code=1,
+        },
+        {
+            "runtime source location reflection accepts packed destinations", __LINE__,
+            SVI("int f(_SrcLoc loc){struct __attribute__((packed)) S{char c;size_t line;const char file[:];}s;"
+                "s.line=loc.line;s.file=loc.file;return s.line==loc.line&&s.file.count==loc.file.count&&s.file.count>0;}"
+                "return f(__builtin_SRCLOC());"),
+            .exit_code=1,
+        },
+        {
+            "runtime module reflection accepts a packed destination", __LINE__,
+            SVI("int f(_Module m){struct __attribute__((packed)) S{char c;_Type t;}s;"
+                "s.t=m.parse_type(\"int\");return s.t==int;}return f(__root_module());"),
             .exit_code=1,
         },
         {
@@ -9638,6 +9652,42 @@ TestFunction(test_interpreter){
             .exit_code = 0,
         },
         {
+            "module calls export explicit and fallthrough returns", __LINE__,
+            SVI("_Module m=__compile(\"int n; n++; if(n==1)return -17;\",\"\");"
+                "if(!m)return 1; int a=m.run(),b=m.run(),c=m.run();"
+                "return a!=-17 || b!=0 || c!=0 || *m.symbol(\"n\",int)!=3;"),
+        },
+        {
+            "module calls preserve switch targets and nested helper results", __LINE__,
+            SVI("_Module m=__compile(\"int n; switch(++n){case 1:return 21; case 2:return 42; default:return 63;}\",\"\");"
+                "if(!m)return 1; int a=m.run(); __builtin_intern(\"discarded\");"
+                "int b=m.run(); return a!=21 || b!=42 || m.run()!=63;"),
+        },
+        {
+            "module entry refreshes when root parsing completes", __LINE__,
+            SVI("int running;\n"
+                "int probe(void){return __root_module().run();}\n"
+                "#pragma procmacro PROBE probe\n"
+                "static_assert(PROBE()==0);\n"
+                "if(running)return 17;\n"
+                "running=1;\n"
+                "return __root_module().run()==17;\n"),
+            .exit_code = 1, .procedural_macros = 1,
+        },
+        {
+            "module calls expose only module and caller backtrace frames", __LINE__,
+            SVI("_Module m=__compile(\"void *entries[8]; return __builtin_capture_backtrace(entries,8);\",\"\");"
+                "return !m || m.run()!=2 || m.run()!=2;"),
+            .call_boundaries = 1,
+        },
+        {
+            "__compile preserves source before evaluating path", __LINE__,
+            SVI("__attribute__((noinline)) int probe(const char source[:]){"
+                "_Module m=__compile(source,(source=\"return 9;\"[:9],\"\"[:0]));"
+                "return m ? m.run() : -1;}return probe(\"return 7;\"[:9]);"),
+            .exit_code = 7,
+        },
+        {
             "__compile owns source", __LINE__,
             SVI("char src[] = \"const char* f(void){ return \\\"ok\\\"; }\";\n"
                "_Module m = __compile(src[:sizeof(src)-1], \"\");\n"
@@ -9831,6 +9881,14 @@ TestFunction(test_interpreter){
                "get().file;\n"
                "return calls == 2 && line == expected_line ? 7 : 91;\n"),
             .exit_code = 7,
+        },
+        {
+            "__hotswap preserves original before evaluating replacement", __LINE__,
+            SVI("[[drc::hotswappable]] int f(void){return 1;}int g(void){return 2;}"
+                "__attribute__((noinline)) int probe(int(*original)(void)){"
+                "return __hotswap(original,(original=g,g));}"
+                "return probe(f)==0&&f()==2;"),
+            .exit_code = 1,
         },
         {
             "__hotswap rejects unmarked originals including self swaps", __LINE__,
@@ -12470,6 +12528,23 @@ TestFunction(test_interpreter){
             SVI("void *entries[8];\n"
                 "__attribute__((noinline,always_inline)) int probe(void){return __builtin_capture_backtrace(entries,8);}\n"
                 "return probe()==2;\n"),
+            .exit_code = 1,
+        },
+        {
+            "symbolicate preserves entry before evaluating output pointer", __LINE__,
+            SVI("__attribute__((noinline)) int probe(void* entry){_SrcLoc expected,actual;"
+                "__builtin_symbolicate(entry,&expected);"
+                "__builtin_symbolicate(entry,(entry=nullptr,&actual));"
+                "return actual==expected&&actual!=nullptr&&entry==nullptr;}"
+                "void* entries[1];__builtin_capture_backtrace(entries,1);return probe(entries[0]);"),
+            .exit_code = 1,
+        },
+        {
+            "capture backtrace preserves buffer before evaluating capacity", __LINE__,
+            SVI("__attribute__((noinline)) int probe(void** buffer,void** other){"
+                "return __builtin_capture_backtrace(buffer,(buffer=other,1));}"
+                "void* first[1]={nullptr};void* second[1]={nullptr};"
+                "return probe(first,second)==1&&first[0]!=nullptr&&second[0]==nullptr;"),
             .exit_code = 1,
         },
         {
@@ -19754,6 +19829,7 @@ TestFunction(test_interpreter){
         LOCK_T_init(&interp.error_lock);
         LOCK_T_init(&interp.atom_lock);
         LOCK_T_init(&interp.resolve_lock);
+        LOCK_T_init(&interp.closure_map_lock);
         fc_write_path(fc, __FILE__, sizeof __FILE__ - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
@@ -19780,6 +19856,8 @@ TestFunction(test_interpreter){
         err = ci_register_pragmas(&interp);
         if(err){TestReport("setup failure"); goto finally;}
         err = ci_register_macros(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_init_runtime_calls(&interp);
         if(err){TestReport("setup failure"); goto finally;}
 
         err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV(__FILE__));
@@ -20125,12 +20203,6 @@ TestFunction(test_interpreter_diagnostics){
                 "}\n"
                 "return fail(100);\n"),
             SVI("(test):5:4: error: _Type.field: not a struct or union type: int\n"),
-        },
-        {
-            "reflection: module validation before name", __LINE__,
-            SVI("_Module m = __root_module(); *(unsigned long long*)&m = 1;\n"
-                "return m.symbol((__builtin_trap(), \"x\"[:]), int) != 0;\n"),
-            SVI("(test):2:9: error: _Module is not valid\n"),
         },
         {
             "reflection: null symbol name", __LINE__,
@@ -20484,6 +20556,7 @@ TestFunction(test_interpreter_diagnostics){
         LOCK_T_init(&interp.error_lock);
         LOCK_T_init(&interp.atom_lock);
         LOCK_T_init(&interp.resolve_lock);
+        LOCK_T_init(&interp.closure_map_lock);
         fc_write_path(fc, "(test)", 6);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
@@ -20496,6 +20569,8 @@ TestFunction(test_interpreter_diagnostics){
         err = ci_register_pragmas(&interp);
         if(err){TestReport("setup failure"); goto finally;}
         err = ci_register_macros(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_init_runtime_calls(&interp);
         if(err){TestReport("setup failure"); goto finally;}
         err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV("(test)"));
         if(err) {TestReport("failed to include"); goto finally;}
@@ -20672,6 +20747,7 @@ TestFunction(test_ci_call_main){
         LOCK_T_init(&interp.error_lock);
         LOCK_T_init(&interp.atom_lock);
         LOCK_T_init(&interp.resolve_lock);
+        LOCK_T_init(&interp.closure_map_lock);
         fc_write_path(fc, "(test)", sizeof "(test)" - 1);
         interp.parser.eager_parsing = eager;
         err = fc_cache_file(fc, tc->program);
@@ -20685,6 +20761,8 @@ TestFunction(test_ci_call_main){
         err = ci_register_pragmas(&interp);
         if(err){TestReport("setup failure"); goto finally;}
         err = ci_register_macros(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_init_runtime_calls(&interp);
         if(err){TestReport("setup failure"); goto finally;}
 
         err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV("(test)"));
@@ -20961,6 +21039,7 @@ TestFunction(test_ci_call_by_name){
         LOCK_T_init(&interp.error_lock);
         LOCK_T_init(&interp.atom_lock);
         LOCK_T_init(&interp.resolve_lock);
+        LOCK_T_init(&interp.closure_map_lock);
         fc_write_path(fc, "(test)", sizeof "(test)" - 1);
         err = fc_cache_file(fc, tc->program);
         if(err){TestReport("setup failure"); goto finally;}
@@ -20973,6 +21052,8 @@ TestFunction(test_ci_call_by_name){
         err = ci_register_pragmas(&interp);
         if(err){TestReport("setup failure"); goto finally;}
         err = ci_register_macros(&interp);
+        if(err){TestReport("setup failure"); goto finally;}
+        err = ci_init_runtime_calls(&interp);
         if(err){TestReport("setup failure"); goto finally;}
 
         err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV("(test)"));

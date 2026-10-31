@@ -1026,9 +1026,15 @@ static int ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, C
 static int ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_lower_slice(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
-static int ci_lower_rt_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiRuntimeOp rt_op, uint32_t dest, CiLowerVal*_Nullable out);
+static int ci_lower_intern(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
+static int ci_lower_symbolicate(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e);
+static int ci_lower_hotswap(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
+static int ci_lower_compile(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
+static int ci_lower_capture_backtrace(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_lower_clear_cache(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e);
-static int ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
+static int ci_lower_srcloc(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out);
+static int ci_lower_type_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
+static int ci_lower_module_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out);
 static int ci_alloc_slot(CiLowerCtx*, uint32_t sz, uint32_t align, uint32_t* slot);
 static void ci_backpatch_break_continue(CiLowerCtx*, size_t start, uint32_t break_target, uint32_t continue_target);
 static int ci_lower_resolve_gotos(CiInterpreter*, CiLowerCtx*);
@@ -3823,8 +3829,10 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             }
             if(e->builtin.op == CC_BUILTIN_CLEAR_CACHE)
                 return ci_lower_clear_cache(ci, ctx, e);
-            if(e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE || e->builtin.op == CC_BUILTIN_SYMBOLICATE)
-                return ci_lower_rt_call(ci, ctx, e, e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE ? CI_RT_CAPTURE_BACKTRACE : CI_RT_SYMBOLICATE, dest, out);
+            if(e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE)
+                return ci_lower_capture_backtrace(ci, ctx, e, dest, out);
+            if(e->builtin.op == CC_BUILTIN_SYMBOLICATE)
+                return ci_lower_symbolicate(ci, ctx, e);
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
@@ -3844,16 +3852,17 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
         case CC_EXPR_SLICE_HI:
             return ci_lower_slice(ci, ctx, e, dest, out);
         case CC_EXPR_INTERN:
-            return ci_lower_rt_call(ci, ctx, e, CI_RT_INTERN, dest, out);
+            return ci_lower_intern(ci, ctx, e, dest, out);
         case CC_EXPR_HOTSWAP:
-            return ci_lower_rt_call(ci, ctx, e, CI_RT_HOTSWAP, dest, out);
+            return ci_lower_hotswap(ci, ctx, e, dest, out);
         case CC_EXPR_SRCLOC_REFLECT:
-            return ci_lower_reflect(ci, ctx, e, dest, out);
+            return ci_lower_srcloc(ci, ctx, e, dest, out);
         case CC_EXPR_COMPILE:
-            return ci_lower_rt_call(ci, ctx, e, CI_RT_COMPILE, dest, out);
+            return ci_lower_compile(ci, ctx, e, dest, out);
         case CC_EXPR_MODULE_REFLECT:
+            return ci_lower_module_reflect(ci, ctx, e, dest, out);
         case CC_EXPR_TYPE_INTROSPECTION:
-            return ci_lower_reflect(ci, ctx, e, dest, out);
+            return ci_lower_type_reflect(ci, ctx, e, dest, out);
         case CC_EXPR_UMUL128:
             return ci_lower_umul128(ci, ctx, e, dest, out);
         DRP_CASES_EXHAUSTED;
@@ -3899,51 +3908,186 @@ ci_lower_cast_operand(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
 
 static
 int
-ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
-    // Metadata aggregates may need runtime storage (for example when passed
-    // by value), but their construction still need not call the runtime.
-    if(e->kind == CC_EXPR_TYPE_INTROSPECTION || e->kind == CC_EXPR_SRCLOC_REFLECT){
-        int err = ci_fold_read_inputs(ci, ctx, e, 0);
-        if(err == CI_OOM_ERROR) return err;
-        if(!err){
-            CcExpr* value = NULL;
-            err = cc_eval_linktime_expr(&ci->parser, e, &value);
-            if(!err){
-                // The evaluator owns this temporary tree and may reuse its addresses.
-                CiFoldCache* cache = ctx->fold_cache;
-                ctx->fold_cache = NULL;
-                if(out) err = ci_lower_expr(ci, ctx, value, dest, (CiLowerVal*)out);
-                ctx->fold_cache = cache;
-                cc_release_expr(&ci->parser, value);
-                return err;
-            }
-            if(err == CI_OOM_ERROR) return err;
-        }
-    }
-    _Bool module = e->kind == CC_EXPR_MODULE_REFLECT;
-    _Bool srcloc = e->kind == CC_EXPR_SRCLOC_REFLECT;
-    uint32_t subop = srcloc ? (uint32_t)e->srcloc.op : module ? (uint32_t)e->module.op : (uint32_t)e->type_introspection.op;
-    if(module && !out && subop != CC_MODULE_RUN) return 0;
-    int nargs = 1;
-    if(!srcloc && (module ?
-        (  subop == CC_MODULE_FUNC
-        || subop == CC_MODULE_FUNC_INFO
-        || subop == CC_MODULE_VAR
-        || subop == CC_MODULE_TYPE
-        || subop == CC_MODULE_SYMBOL
-        || subop == CC_MODULE_PARSE_TYPE)
-        : (subop == CC_TYPE_IS_CALLABLE_WITH
-        || subop == CC_TYPE_IS_CALLABLE_THROUGH
-        || subop == CC_TYPE_CASTABLE_TO
-        || subop == CC_TYPE_FIELD
-        || subop == CC_TYPE_METHOD
-        || subop == CC_TYPE_HAS_FIELD
-        || subop == CC_TYPE_HAS_METHOD
-        || subop == CC_TYPE_ENUMERATOR
-        || subop == CC_TYPE_PARAM_TYPE
-        || subop == CC_TYPE_MAKE_ANY)))
-        nargs++;
+ci_marshal_call_arguments(CiInterpreter* ci, CiLowerCtx* ctx, SrcLoc loc, CiCallDescriptor* d, const uint32_t* slots, uint32_t* storage_slot, uint32_t result, _Bool variadic, _Bool direct){
+    NcCallPlan* plan = d->abi;
+    uint32_t storage = *storage_slot;
     int err;
+    if(direct){
+        size_t size = nc_stack_storage_size(plan);
+        err = ci_alloc_slot(ctx, (uint32_t)size, size? (uint32_t)plan->stack_alignment : 1, &storage);
+        if(err) return err;
+        *storage_slot = storage;
+    }
+    if(nc_stack_storage_size(plan) || variadic){
+        uint32_t stack = storage + (uint32_t)nc_stack_storage_prefix(plan);
+        CiAbiAddressSpec dst = {.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_STACK_BASE, .index = 0}},
+                         src = {.mode = CI_ABI_SLOT, .offset = stack};
+        err = ci_abi_emit(ctx->out, ctx->a, loc, plan->target, CI_ABI_ADDRESS, dst, src, 8);
+        if(err) return err;
+    }
+    switch(plan->target){
+        case CC_TARGET_X86_64_LINUX:
+        case CC_TARGET_X86_64_MACOS:
+            if(variadic || d->call_type->no_prototype){
+                CiAbiAddressSpec dst = {.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_VECTOR_COUNT, .index = 0}},
+                                 src = {.immediate = plan->fp};
+                err = ci_abi_emit(ctx->out, ctx->a, loc, plan->target, CI_ABI_CONSTANT, dst, src, 1);
+                if(err) return err;
+            }
+            break;
+        case CC_TARGET_X86_64_WINDOWS_MSVC:
+        case CC_TARGET_X86_64_WINDOWS_MINGW:
+            break;
+        case CC_TARGET_AARCH64_LINUX:
+            break;
+        case CC_TARGET_AARCH64_MACOS:
+            break;
+        case CC_TARGET_TEST:
+            break;
+        case CC_TARGET_COUNT:
+            err = ci_error(ci, loc, "call: unsupported target");
+            return err;
+        DRP_CASES_EXHAUSTED;
+    }
+    if(plan->result.mode == NC_ABI_INDIRECT){
+        CiAbiAddressSpec dst = {.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_INDIRECT_RESULT, .index = 0}},
+                         src = {.mode = CI_ABI_SLOT, .offset = result};
+        err = ci_abi_emit(ctx->out, ctx->a, loc, plan->target, CI_ABI_ADDRESS, dst, src, 8);
+        if(err) return err;
+    }
+    for(uint32_t i = 0; i < plan->count; i++){
+        err = ci_lower_abi_argument(ctx->out, ctx->a, plan, i, slots[i], 0, loc);
+        if(err) return err;
+    }
+    return 0;
+}
+
+static
+int
+ci_emit_slot_address(CiInterpreter* ci, CiLowerCtx* ctx, SrcLoc loc, uint32_t slot, uint32_t* out){
+    int err = ci_alloc_slot(ctx, sizeof(void*), _Alignof(void*), out);
+    if(err) return err;
+    CiAbiAddressSpec dst = {.mode = CI_ABI_SLOT, .offset = *out},
+                     src = {.mode = CI_ABI_SLOT, .offset = slot};
+    return ci_abi_emit(ctx->out, ctx->a, loc, ci_target(ci)->target, CI_ABI_ADDRESS, dst, src, sizeof(void*));
+}
+
+static
+int
+ci_emit_runtime_call(CiInterpreter* ci, CiLowerCtx* ctx, SrcLoc loc, CiCallDescriptor* d, const uint32_t* slots){
+    int err;
+    uint32_t storage = 0, status;
+    err = ci_alloc_slot(ctx, sizeof(int), _Alignof(int), &status);
+    if(err) return err;
+    err = ci_marshal_call_arguments(ci, ctx, loc, d, slots, &storage, status, 0, 1);
+    if(err) return err;
+    err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.call = {
+        .kind = CI_OP_CALL,
+        .descrip = d,
+        .args_slot = storage,
+        .ret_slot = status,
+        .ret_size = sizeof(int),
+        .loc = loc,
+    }});
+    if(err) return err;
+    err = ci_lower_abi_result(ctx->out, ctx->a, d->abi, status, 0, loc);
+    if(err) return err;
+    return ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.propagate_error = {
+        .kind = CI_OP_PROPAGATE_ERROR,
+        .src = status,
+        .loc = loc,
+    }});
+}
+
+static
+int
+ci_lower_srcloc(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out){
+    int err;
+    err = ci_fold_read_inputs(ci, ctx, e, 0);
+    if(err == CI_OOM_ERROR) return err;
+    if(!err){
+        CcExpr* value = NULL;
+        err = cc_eval_linktime_expr(&ci->parser, e, &value);
+        if(!err){
+            CiFoldCache* cache = ctx->fold_cache;
+            ctx->fold_cache = NULL;
+            err = ci_lower_expr(ci, ctx, value, dest, out);
+            ctx->fold_cache = cache;
+            cc_release_expr(&ci->parser, value);
+            return err;
+        }
+        if(err == CI_OOM_ERROR) return err;
+    }
+    uint32_t receiver_slot, ci_slot, result_slot;
+    err = ci_lower_expr_dest(ci, ctx, e, &dest, out->size);
+    if(err) return err;
+    out->slot = dest;
+    uint32_t temp = ctx->temp;
+    err = ci_alloc_slot(ctx, 8, 8, &receiver_slot);
+    if(err) return err;
+    CiLowerVal v;
+    err = ci_lower_expr(ci, ctx, e->lhs, receiver_slot, &v);
+    if(err) return err;
+    const CcTargetConfig* target = ci_target(ci);
+    err = ci_emit_const(ci, ctx, (uintptr_t)ci, target->sizeof_[CCBT_nullptr_t], e->loc, &ci_slot);
+    if(err) return err;
+    err = ci_emit_slot_address(ci, ctx, e->loc, dest, &result_slot);
+    if(err) return err;
+    switch(e->srcloc.op){
+        case CC_SRCLOC_FILE:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.srcloc_file, (uint32_t[]){ci_slot, receiver_slot, result_slot});
+            break;
+        case CC_SRCLOC_LINE:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.srcloc_line, (uint32_t[]){receiver_slot, result_slot});
+            break;
+        case CC_SRCLOC_COL:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.srcloc_col, (uint32_t[]){receiver_slot, result_slot});
+            break;
+        DRP_CASES_EXHAUSTED;
+    }
+    if(err) return err;
+    ctx->temp = temp;
+    return 0;
+}
+
+static
+int
+ci_lower_type_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
+    int err;
+    err = ci_fold_read_inputs(ci, ctx, e, 0);
+    if(err == CI_OOM_ERROR) return err;
+    if(!err){
+        CcExpr* value = NULL;
+        err = cc_eval_linktime_expr(&ci->parser, e, &value);
+        if(!err){
+            // The evaluator owns this temporary tree and may reuse its addresses.
+            CiFoldCache* cache = ctx->fold_cache;
+            ctx->fold_cache = NULL;
+            if(out) err = ci_lower_expr(ci, ctx, value, dest, (CiLowerVal*)out);
+            ctx->fold_cache = cache;
+            cc_release_expr(&ci->parser, value);
+            return err;
+        }
+        if(err == CI_OOM_ERROR) return err;
+    }
+    uint32_t ci_slot, loc_slot, type_slot, result_slot, argument_slot = CI_NO_SLOT;
+    _Bool has_arg = cc_expr_nvalues(e) != 0;
+    _Bool member_by_name = 0;
+    uint32_t arg_size = 8;
+    switch(e->type_introspection.op){
+        case CC_TYPE_FIELD:
+        case CC_TYPE_METHOD:
+        case CC_TYPE_HAS_FIELD:
+        case CC_TYPE_HAS_METHOD:
+            member_by_name = ccqt_kind(e->values[0]->type) == CC_SLICE;
+            if(member_by_name) arg_size = sizeof(CiRtSlice);
+            break;
+        case CC_TYPE_IS_CALLABLE_WITH:
+            arg_size = sizeof(CiRtSlice);
+            break;
+        default:
+            break;
+    }
     if(out){
         err = ci_lower_expr_dest(ci, ctx, e, &dest, out->size);
         if(err) return err;
@@ -3955,67 +4099,343 @@ ci_lower_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
         uint32_t align;
         err = cc_alignof_as_uint(&ci->parser, e->type, e->loc, &align);
         if(err) return err;
-        // Runtime reflection writes typed objects; a packed caller destination
-        // does not meet that interface's alignment requirement.
         if(dest & (align - 1)){
             err = ci_alloc_slot(ctx, out->size, align, &result);
             if(err) return err;
         }
     }
-    CiOp call = {.rt_call = {
-        .kind = CI_OP_RT_CALL,
-        .op = srcloc ? CI_RT_SRCLOC_REFLECT : module ? CI_RT_MODULE_REFLECT : CI_RT_TYPE_REFLECT,
-        .nargs = nargs,
-        .slot = result,
-        .slot_size = out ? out->size : 0,
-        .reflect_op = subop,
-        .member_by_name = (module ? subop == CC_MODULE_SYMBOL || subop == CC_MODULE_PARSE_TYPE :
-            !srcloc && (subop == CC_TYPE_FIELD || subop == CC_TYPE_METHOD || subop == CC_TYPE_HAS_FIELD || subop == CC_TYPE_HAS_METHOD))
-            && ccqt_kind(e->values[0]->type) == CC_SLICE,
-        .loc = e->loc,
-    }};
-    for(uint32_t i = 0; i < call.rt_call.nargs; i++){
-        _Bool type_list = i && !module && !srcloc && subop == CC_TYPE_IS_CALLABLE_WITH;
-        uint32_t arg_size = i && (call.rt_call.member_by_name || type_list) ? sizeof(CiRtSlice) : 8;
-        err = ci_alloc_slot(ctx, arg_size, 8, &call.rt_call.args[i]);
-        if(err) return err;
-        CiLowerVal v;
-        CcExpr* argument = i ? e->values[0] : e->lhs;
-        err = ci_lower_expr(ci, ctx, argument, call.rt_call.args[i], &v);
-        if(err) return err;
-        if(!srcloc && i == 0 && (module || subop == CC_TYPE_FIELD || subop == CC_TYPE_METHOD || subop == CC_TYPE_ENUMERATOR || subop == CC_TYPE_PARAM_TYPE)){
-            // Receiver errors must precede evaluation of the optional operand.
-            CiOp* check;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &check);
-            if(err) return err;
-            *check = call;
-            check->rt_call.op = module ? CI_RT_MODULE_VALIDATE : CI_RT_TYPE_VALIDATE;
-            check->rt_call.nargs = 1;
-            check->rt_call.slot = CI_NO_SLOT;
-            check->rt_call.slot_size = 0;
-        }
-    }
-    if(module && subop == CC_MODULE_SYMBOL && ccqt_kind(e->type) == CC_POINTER){
-        err = ci_alloc_slot(ctx, 8, 8, &call.rt_call.args[2]);
-        if(err) return err;
-        CiOp* expected;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &expected);
-        if(err) return err;
-        *expected = (CiOp){.constant = {
-            .kind = CI_OP_CONST,
-            .slot = call.rt_call.args[2],
-            .immsize = 8,
-            .immediate = {ccqt_as_ptr(e->type)->pointee.bits},
-            .loc = e->loc,
-        }};
-        call.rt_call.nargs = 3;
-    }
-    CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_alloc_slot(ctx, 8, 8, &type_slot);
     if(err) return err;
-    *op = call;
+    CiLowerVal v;
+    err = ci_lower_expr(ci, ctx, e->lhs, type_slot, &v);
+    if(err) return err;
+    const CcTargetConfig* target = ci_target(ci);
+    err = ci_emit_const(ci, ctx, (uintptr_t)ci, target->sizeof_[CCBT_nullptr_t], e->loc, &ci_slot);
+    if(err) return err;
+    err = ci_emit_const(ci, ctx, e->loc.bits, 8, e->loc, &loc_slot);
+    if(err) return err;
+    switch(e->type_introspection.op){
+        case CC_TYPE_FIELD:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_validate_field, (uint32_t[]){ci_slot, loc_slot, type_slot});
+            if(err) return err;
+            break;
+        case CC_TYPE_METHOD:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_validate_method, (uint32_t[]){ci_slot, loc_slot, type_slot});
+            if(err) return err;
+            break;
+        case CC_TYPE_ENUMERATOR:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_validate_enumerator, (uint32_t[]){ci_slot, loc_slot, type_slot});
+            if(err) return err;
+            break;
+        case CC_TYPE_PARAM_TYPE:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_validate_param_type, (uint32_t[]){ci_slot, loc_slot, type_slot});
+            if(err) return err;
+            break;
+        default: break;
+    }
+    if(has_arg){
+        err = ci_alloc_slot(ctx, arg_size, 8, &argument_slot);
+        if(err) return err;
+        err = ci_lower_expr(ci, ctx, e->values[0], argument_slot, &v);
+        if(err) return err;
+    }
+    if(!out){
+        uint32_t size = sizeof(void*), align = _Alignof(void*);
+        if(!ccqt_bt_eq(e->type, CCBT_void)){
+            err = cc_sizeof_as_uint(&ci->parser, e->type, e->loc, &size);
+            if(err) return err;
+            err = cc_alignof_as_uint(&ci->parser, e->type, e->loc, &align);
+            if(err) return err;
+        }
+        err = ci_alloc_slot(ctx, size, align, &result);
+        if(err) return err;
+    }
+    if(member_by_name || e->type_introspection.op == CC_TYPE_IS_CALLABLE_WITH){
+        err = ci_emit_slot_address(ci, ctx, e->loc, argument_slot, &argument_slot);
+        if(err) return err;
+    }
+    err = ci_emit_slot_address(ci, ctx, e->loc, result, &result_slot);
+    if(err) return err;
+    switch(e->type_introspection.op){
+        case CC_TYPE_NAME:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_name, (uint32_t[]){ci_slot, type_slot, result_slot});
+            break;
+        case CC_TYPE_TAG:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_tag, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_VALID:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_valid, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_INVALID:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_invalid, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_INTEGER:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_integer, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_FLOAT:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_float, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_ARITHMETIC:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_arithmetic, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_POINTER:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_pointer, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_STRUCT:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_struct, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_UNION:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_union, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_ARRAY:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_array, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_VECTOR:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_vector, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_SLICE:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_slice, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_FUNCTION:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_function, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_ENUM:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_enum, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_CONST:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_const, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_VOLATILE:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_volatile, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_ATOMIC:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_atomic, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_UNSIGNED:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_unsigned, (uint32_t[]){ci_slot, type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_SIGNED:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_signed, (uint32_t[]){ci_slot, type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_CALLABLE:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_callable, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_INCOMPLETE:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_incomplete, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_VARIADIC:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_variadic, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_SIZEOF:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_sizeof, (uint32_t[]){ci_slot, loc_slot, type_slot, result_slot});
+            break;
+        case CC_TYPE_ALIGNOF:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_alignof, (uint32_t[]){ci_slot, loc_slot, type_slot, result_slot});
+            break;
+        case CC_TYPE_POINTEE:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_pointee, (uint32_t[]){ci_slot, loc_slot, type_slot, result_slot});
+            break;
+        case CC_TYPE_UNQUAL:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_unqual, (uint32_t[]){ci_slot, type_slot, result_slot});
+            break;
+        case CC_TYPE_COUNT:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_count, (uint32_t[]){ci_slot, loc_slot, type_slot, result_slot});
+            break;
+        case CC_TYPE_LOC:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_loc, (uint32_t[]){type_slot, result_slot});
+            break;
+        case CC_TYPE_IS_CALLABLE_WITH:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_callable_with, (uint32_t[]){ci_slot, type_slot, argument_slot, result_slot});
+            break;
+        case CC_TYPE_IS_CALLABLE_THROUGH:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_is_callable_through, (uint32_t[]){ci_slot, type_slot, argument_slot, result_slot});
+            break;
+        case CC_TYPE_CASTABLE_TO:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_castable_to, (uint32_t[]){ci_slot, type_slot, argument_slot, result_slot});
+            break;
+        case CC_TYPE_MAKE_ANY:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_make_any, (uint32_t[]){ci_slot, loc_slot, type_slot, argument_slot, result_slot});
+            break;
+        case CC_TYPE_FIELD:
+            if(member_by_name)
+                err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_field_named, (uint32_t[]){ci_slot, loc_slot, type_slot, argument_slot, result_slot});
+            else
+                err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_field, (uint32_t[]){ci_slot, loc_slot, type_slot, argument_slot, result_slot});
+            break;
+        case CC_TYPE_METHOD:
+            if(member_by_name)
+                err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_method_named, (uint32_t[]){ci_slot, loc_slot, type_slot, argument_slot, result_slot});
+            else
+                err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_method, (uint32_t[]){ci_slot, loc_slot, type_slot, argument_slot, result_slot});
+            break;
+        case CC_TYPE_HAS_FIELD:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_has_field_named, (uint32_t[]){ci_slot, type_slot, argument_slot, result_slot});
+            break;
+        case CC_TYPE_HAS_METHOD:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_has_method_named, (uint32_t[]){ci_slot, type_slot, argument_slot, result_slot});
+            break;
+        case CC_TYPE_ENUMERATORS:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_enumerators, (uint32_t[]){ci_slot, loc_slot, type_slot, result_slot});
+            break;
+        case CC_TYPE_ENUMERATOR:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_enumerator, (uint32_t[]){ci_slot, loc_slot, type_slot, argument_slot, result_slot});
+            break;
+        case CC_TYPE_RETURN_TYPE:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_return_type, (uint32_t[]){ci_slot, loc_slot, type_slot, result_slot});
+            break;
+        case CC_TYPE_PARAM_COUNT:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_param_count, (uint32_t[]){ci_slot, loc_slot, type_slot, result_slot});
+            break;
+        case CC_TYPE_PARAM_TYPE:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_param_type, (uint32_t[]){ci_slot, loc_slot, type_slot, argument_slot, result_slot});
+            break;
+        case CC_TYPE_ELEMENT_TYPE:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_element_type, (uint32_t[]){ci_slot, loc_slot, type_slot, result_slot});
+            break;
+        case CC_TYPE_UNDERLYING_TYPE:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_underlying_type, (uint32_t[]){ci_slot, loc_slot, type_slot, result_slot});
+            break;
+        case CC_TYPE_FIELDS:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_fields, (uint32_t[]){ci_slot, loc_slot, type_slot, result_slot});
+            break;
+        case CC_TYPE_METHODS:
+            err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.type_methods, (uint32_t[]){ci_slot, loc_slot, type_slot, result_slot});
+            break;
+        case CC_TYPE_PUSH_METHOD:
+            return ci_error(ci, e->loc, "push_method should be handled at parse time");
+        default: return CI_UNREACHABLE_ERROR;
+    }
+    if(err) return err;
     if(out && result != dest){
         err = ci_emit_copy(ctx, dest, result, out->size, e->loc);
+        if(err) return err;
+    }
+    ctx->temp = temp;
+    return 0;
+}
+
+static
+int
+ci_lower_module_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
+    int err;
+    if(!out && e->module.op != CC_MODULE_RUN) return 0;
+    uint32_t receiver_slot, argument_slot = CI_NO_SLOT;
+    _Bool has_arg = 0;
+    uint32_t arg_size = 8;
+    switch(e->module.op){
+        case CC_MODULE_SYMBOL:
+        case CC_MODULE_PARSE_TYPE:
+            if(ccqt_kind(e->values[0]->type) == CC_SLICE) arg_size = sizeof(CiRtSlice);
+            has_arg = 1;
+            break;
+        case CC_MODULE_FUNC:
+        case CC_MODULE_FUNC_INFO:
+        case CC_MODULE_VAR:
+        case CC_MODULE_TYPE:
+            has_arg = 1;
+            break;
+        default:
+            break;
+    }
+    if(out){
+        err = ci_lower_expr_dest(ci, ctx, e, &dest, out->size);
+        if(err) return err;
+        out->slot = dest;
+    }
+    uint32_t temp = ctx->temp;
+    err = ci_alloc_slot(ctx, 8, 8, &receiver_slot);
+    if(err) return err;
+    CiLowerVal v;
+    err = ci_lower_expr(ci, ctx, e->lhs, receiver_slot, &v);
+    if(err) return err;
+    if(has_arg){
+        err = ci_alloc_slot(ctx, arg_size, 8, &argument_slot);
+        if(err) return err;
+        err = ci_lower_expr(ci, ctx, e->values[0], argument_slot, &v);
+        if(err) return err;
+    }
+    const CcTargetConfig* target = ci_target(ci);
+    if(e->module.op == CC_MODULE_RUN){
+        uint32_t callee_slot;
+        err = ci_alloc_slot(ctx, CI_INDIRECT_CALL_PREFIX_SIZE, _Alignof(void*), &callee_slot);
+        if(err) return err;
+        uint32_t slots[4];
+        err = ci_emit_const(ci, ctx, (uintptr_t)ci, target->sizeof_[CCBT_nullptr_t], e->loc, &slots[0]);
+        if(err) return err;
+        err = ci_emit_const(ci, ctx, e->loc.bits, 8, e->loc, &slots[1]);
+        if(err) return err;
+        slots[2] = receiver_slot;
+        err = ci_emit_slot_address(ci, ctx, e->loc, callee_slot, &slots[3]);
+        if(err) return err;
+        CiCallDescriptor* runtime = ci->runtime_calls.module_entry;
+        err = ci_emit_runtime_call(ci, ctx, e->loc, runtime, slots);
+        if(err) return err;
+        CiCallDescriptor* d = ci->runtime_calls.module_run;
+        err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.call = {
+            .kind = CI_OP_CALL,
+            .is_indirect = 1,
+            .descrip = d,
+            .args_slot = callee_slot + CI_INDIRECT_CALL_PREFIX_SIZE,
+            .ret_slot = dest,
+            .ret_size = out ? out->size : 0,
+            .loc = e->loc,
+        }});
+        if(err) return err;
+        if(out){
+            err = ci_lower_abi_result(ctx->out, ctx->a, d->abi, dest, 0, e->loc);
+            if(err) return err;
+        }
+    }
+    else {
+        uint32_t ci_slot, loc_slot, result_slot;
+        err = ci_emit_const(ci, ctx, (uintptr_t)ci, target->sizeof_[CCBT_nullptr_t], e->loc, &ci_slot);
+        if(err) return err;
+        err = ci_emit_const(ci, ctx, e->loc.bits, 8, e->loc, &loc_slot);
+        if(err) return err;
+        if(has_arg && ccqt_kind(e->values[0]->type) == CC_SLICE){
+            err = ci_emit_slot_address(ci, ctx, e->loc, argument_slot, &argument_slot);
+            if(err) return err;
+        }
+        err = ci_emit_slot_address(ci, ctx, e->loc, dest, &result_slot);
+        if(err) return err;
+        switch(e->module.op){
+            case CC_MODULE_FUNC_COUNT:
+                err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.module_func_count, (uint32_t[]){ci_slot, receiver_slot, result_slot});
+                break;
+            case CC_MODULE_VAR_COUNT:
+                err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.module_var_count, (uint32_t[]){ci_slot, receiver_slot, result_slot});
+                break;
+            case CC_MODULE_TYPE_COUNT:
+                err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.module_type_count, (uint32_t[]){ci_slot, receiver_slot, result_slot});
+                break;
+            case CC_MODULE_FUNC:
+                err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.module_func, (uint32_t[]){ci_slot, loc_slot, receiver_slot, argument_slot, result_slot});
+                break;
+            case CC_MODULE_FUNC_INFO:
+                err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.module_func_info, (uint32_t[]){ci_slot, loc_slot, receiver_slot, argument_slot, result_slot});
+                break;
+            case CC_MODULE_VAR:
+                err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.module_var, (uint32_t[]){ci_slot, loc_slot, receiver_slot, argument_slot, result_slot});
+                break;
+            case CC_MODULE_TYPE:
+                err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.module_type, (uint32_t[]){ci_slot, loc_slot, receiver_slot, argument_slot, result_slot});
+                break;
+            case CC_MODULE_PARSE_TYPE:
+                err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.module_parse_type, (uint32_t[]){ci_slot, loc_slot, receiver_slot, argument_slot, result_slot});
+                break;
+            case CC_MODULE_SYMBOL:
+                if(ccqt_kind(e->type) == CC_POINTER){
+                    uint32_t expected_slot;
+                    err = ci_emit_const(ci, ctx, ccqt_as_ptr(e->type)->pointee.bits, 8, e->loc, &expected_slot);
+                    if(err) return err;
+                    err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.module_symbol_typed, (uint32_t[]){ci_slot, loc_slot, receiver_slot, argument_slot, expected_slot, result_slot});
+                }
+                else {
+                    err = ci_emit_runtime_call(ci, ctx, e->loc, ci->runtime_calls.module_symbol, (uint32_t[]){ci_slot, loc_slot, receiver_slot, argument_slot, result_slot});
+                }
+                break;
+            default: return CI_UNREACHABLE_ERROR;
+        }
         if(err) return err;
     }
     ctx->temp = temp;
@@ -4054,50 +4474,167 @@ ci_lower_clear_cache(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
 
 static
 int
-ci_lower_rt_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiRuntimeOp rt_op, uint32_t dest, CiLowerVal*_Nullable out){
-    _Bool trace = rt_op == CI_RT_CAPTURE_BACKTRACE || rt_op == CI_RT_SYMBOLICATE;
-    uint32_t nargs = (trace || rt_op == CI_RT_HOTSWAP || rt_op == CI_RT_COMPILE) ? 2 : 1;
-    CcExpr* args[2] = {e->lhs, NULL};
-    if(nargs == 2)
-        args[1] = e->values[0];
-    if(trace){
-        args[0] = e->values[0];
-        args[1] = e->values[1];
-    }
-    uint32_t result_size = 0;
+ci_lower_intern(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out){
+    int err;
+    err = ci_lower_expr_dest(ci, ctx, e, &dest, out->size);
+    if(err) return err;
+    out->slot = dest;
+    uint32_t temp = ctx->temp;
+    CiLowerVal v;
+    err = ci_lower_expr(ci, ctx, e->lhs, CI_NO_SLOT, &v);
+    if(err) return err;
+    const CcTargetConfig* target = ci_target(ci);
+    uint32_t slots[4];
+    err = ci_emit_const(ci, ctx, (uintptr_t)ci, target->sizeof_[CCBT_nullptr_t], e->loc, &slots[0]);
+    if(err) return err;
+    err = ci_emit_const(ci, ctx, e->loc.bits, 8, e->loc, &slots[1]);
+    if(err) return err;
+    err = ci_emit_slot_address(ci, ctx, e->loc, v.slot, &slots[2]);
+    if(err) return err;
+    err = ci_emit_slot_address(ci, ctx, e->loc, dest, &slots[3]);
+    if(err) return err;
+    CiCallDescriptor* runtime = ci->runtime_calls.intern;
+    err = ci_emit_runtime_call(ci, ctx, e->loc, runtime, slots);
+    if(err) return err;
+    ctx->temp = temp;
+    return 0;
+}
+
+static
+int
+ci_lower_symbolicate(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
+    int err;
+    uint32_t temp = ctx->temp;
+    uint32_t slots[4];
+    CiLowerVal v;
+    err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &v);
+    if(err) return err;
+    err = ci_preserve_value(ci, ctx, e->values[0], &v);
+    if(err) return err;
+    slots[2] = v.slot;
+    err = ci_lower_expr(ci, ctx, e->values[1], CI_NO_SLOT, &v);
+    if(err) return err;
+    slots[3] = v.slot;
+    const CcTargetConfig* target = ci_target(ci);
+    err = ci_emit_const(ci, ctx, (uintptr_t)ci, target->sizeof_[CCBT_nullptr_t], e->loc, &slots[0]);
+    if(err) return err;
+    err = ci_emit_const(ci, ctx, e->loc.bits, 8, e->loc, &slots[1]);
+    if(err) return err;
+    CiCallDescriptor* runtime = ci->runtime_calls.symbolicate;
+    err = ci_emit_runtime_call(ci, ctx, e->loc, runtime, slots);
+    if(err) return err;
+    ctx->temp = temp;
+    return 0;
+}
+
+static
+int
+ci_lower_hotswap(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
+    int err;
     if(out){
-        int err = ci_lower_expr_dest(ci, ctx, e, &dest, out->size);
+        err = ci_lower_expr_dest(ci, ctx, e, &dest, out->size);
         if(err) return err;
         out->slot = dest;
-        result_size = out->size;
     }
     uint32_t temp = ctx->temp;
-    uint32_t slots[3] = {0};
-    for(uint32_t i = 0; i < nargs; i++){
-        CiLowerVal v;
-        int err = ci_lower_expr(ci, ctx, args[i], CI_NO_SLOT, &v);
-        if(err) return err;
-        slots[i] = v.slot;
-    }
-    if(rt_op == CI_RT_COMPILE){
-        int err = ci_emit_const(ci, ctx, (uintptr_t)e->compile.module, sizeof(void*), e->loc, &slots[2]);
-        if(err) return err;
-        nargs = 3;
-    }
-    CiOp* op;
-    int err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    uint32_t slots[4];
+    CiLowerVal v;
+    err = ci_lower_expr(ci, ctx, e->lhs, CI_NO_SLOT, &v);
     if(err) return err;
-    *op = (CiOp){
-        .rt_call = {
-            .kind = CI_OP_RT_CALL,
-            .op = rt_op,
-            .nargs = nargs,
-            .slot = dest,
-            .slot_size = result_size,
-            .args = {slots[0], slots[1], slots[2]},
-            .loc = e->loc,
-        },
-    };
+    err = ci_preserve_value(ci, ctx, e->lhs, &v);
+    if(err) return err;
+    slots[1] = v.slot;
+    err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &v);
+    if(err) return err;
+    slots[2] = v.slot;
+    if(!out){
+        uint32_t size, align;
+        err = cc_sizeof_as_uint(&ci->parser, e->type, e->loc, &size);
+        if(err) return err;
+        err = cc_alignof_as_uint(&ci->parser, e->type, e->loc, &align);
+        if(err) return err;
+        err = ci_alloc_slot(ctx, size, align, &dest);
+        if(err) return err;
+    }
+    const CcTargetConfig* target = ci_target(ci);
+    err = ci_emit_const(ci, ctx, (uintptr_t)ci, target->sizeof_[CCBT_nullptr_t], e->loc, &slots[0]);
+    if(err) return err;
+    err = ci_emit_slot_address(ci, ctx, e->loc, dest, &slots[3]);
+    if(err) return err;
+    CiCallDescriptor* runtime = ci->runtime_calls.hotswap;
+    err = ci_emit_runtime_call(ci, ctx, e->loc, runtime, slots);
+    if(err) return err;
+    ctx->temp = temp;
+    return 0;
+}
+
+static
+int
+ci_lower_compile(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal* out){
+    int err;
+    err = ci_lower_expr_dest(ci, ctx, e, &dest, out->size);
+    if(err) return err;
+    out->slot = dest;
+    uint32_t temp = ctx->temp;
+    uint32_t slots[6];
+    CiLowerVal v;
+    err = ci_lower_expr(ci, ctx, e->lhs, CI_NO_SLOT, &v);
+    if(err) return err;
+    err = ci_preserve_value(ci, ctx, e->lhs, &v);
+    if(err) return err;
+    slots[3] = v.slot;
+    err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &v);
+    if(err) return err;
+    slots[4] = v.slot;
+    err = ci_emit_const(ci, ctx, (uintptr_t)e->compile.module, sizeof(void*), e->loc, &slots[2]);
+    if(err) return err;
+    const CcTargetConfig* target = ci_target(ci);
+    err = ci_emit_const(ci, ctx, (uintptr_t)ci, target->sizeof_[CCBT_nullptr_t], e->loc, &slots[0]);
+    if(err) return err;
+    err = ci_emit_const(ci, ctx, e->loc.bits, 8, e->loc, &slots[1]);
+    if(err) return err;
+    err = ci_emit_slot_address(ci, ctx, e->loc, slots[3], &slots[3]);
+    if(err) return err;
+    err = ci_emit_slot_address(ci, ctx, e->loc, slots[4], &slots[4]);
+    if(err) return err;
+    err = ci_emit_slot_address(ci, ctx, e->loc, dest, &slots[5]);
+    if(err) return err;
+    CiCallDescriptor* runtime = ci->runtime_calls.compile;
+    err = ci_emit_runtime_call(ci, ctx, e->loc, runtime, slots);
+    if(err) return err;
+    ctx->temp = temp;
+    return 0;
+}
+
+static
+int
+ci_lower_capture_backtrace(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowerVal*_Nullable out){
+    int err;
+    if(out){
+        err = ci_lower_expr_dest(ci, ctx, e, &dest, out->size);
+        if(err) return err;
+        out->slot = dest;
+    }
+    uint32_t temp = ctx->temp;
+    uint32_t buffer_slot, capacity_slot;
+    CiLowerVal v;
+    err = ci_lower_expr(ci, ctx, e->values[0], CI_NO_SLOT, &v);
+    if(err) return err;
+    err = ci_preserve_value(ci, ctx, e->values[0], &v);
+    if(err) return err;
+    buffer_slot = v.slot;
+    err = ci_lower_expr(ci, ctx, e->values[1], CI_NO_SLOT, &v);
+    if(err) return err;
+    capacity_slot = v.slot;
+    err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.capture_backtrace = {
+        .kind = CI_OP_CAPTURE_BACKTRACE,
+        .slot = dest,
+        .slot_size = out ? out->size : 0,
+        .buffer = buffer_slot,
+        .capacity = capacity_slot,
+        .loc = e->loc,
+    }});
+    if(err) return err;
     ctx->temp = temp;
     return 0;
 }
@@ -4870,7 +5407,7 @@ ci_lower_memcpy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
 
 static
 int
-ci_lower_native_signature(CiInterpreter* ci, Allocator al, CcFunction* type, CcFunction*_Nonnull*_Nonnull out){
+ci_lower_native_signature(CiInterpreter* ci, Allocator al, const CcFunction* type, const CcFunction*_Nonnull*_Nonnull out){
     *out = type;
     CcTarget target = ci_target(ci)->target;
     uint32_t total = 0, fixed = 0;
@@ -4899,7 +5436,6 @@ static
 int
 ci_lower_call_arguments(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiCallDescriptor* d, uint32_t* storage_slot, uint32_t result, _Bool variadic, _Bool direct){
     NcCallPlan* plan = d->abi;
-    uint32_t storage = *storage_slot;
     uint32_t* slots = Allocator_alloc(ctx->a, (plan->count ? plan->count : 1), sizeof *slots, _Alignof(uint32_t));
     if(!slots) return CI_OOM_ERROR;
     int err = 0;
@@ -4923,53 +5459,7 @@ ci_lower_call_arguments(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiCallDes
         }
         slots[i] = v.slot;
     }
-    if(direct){
-        size_t size = nc_stack_storage_size(plan);
-        err = ci_alloc_slot(ctx, (uint32_t)size, size? (uint32_t)plan->stack_alignment : 1, &storage);
-        if(err) goto cleanup;
-        *storage_slot = storage;
-    }
-    if(nc_stack_storage_size(plan) || variadic){
-        uint32_t stack = storage + (uint32_t)nc_stack_storage_prefix(plan);
-        CiAbiAddressSpec dst = {.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_STACK_BASE, .index = 0}},
-                         src = {.mode = CI_ABI_SLOT, .offset = stack};
-        err = ci_abi_emit(ctx->out, ctx->a, e->loc, plan->target, CI_ABI_ADDRESS, dst, src, 8);
-        if(err) goto cleanup;
-    }
-    switch(plan->target){
-        case CC_TARGET_X86_64_LINUX:
-        case CC_TARGET_X86_64_MACOS:
-            if(variadic || d->call_type->no_prototype){
-                CiAbiAddressSpec dst = {.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_VECTOR_COUNT, .index = 0}},
-                                 src = {.immediate = plan->fp};
-                err = ci_abi_emit(ctx->out, ctx->a, e->loc, plan->target, CI_ABI_CONSTANT, dst, src, 1);
-                if(err) goto cleanup;
-            }
-            break;
-        case CC_TARGET_X86_64_WINDOWS_MSVC:
-        case CC_TARGET_X86_64_WINDOWS_MINGW:
-            break;
-        case CC_TARGET_AARCH64_LINUX:
-            break;
-        case CC_TARGET_AARCH64_MACOS:
-            break;
-        case CC_TARGET_TEST:
-            break;
-        case CC_TARGET_COUNT:
-            err = ci_error(ci, e->loc, "call: unsupported target");
-            goto cleanup;
-        DRP_CASES_EXHAUSTED;
-    }
-    if(plan->result.mode == NC_ABI_INDIRECT){
-        CiAbiAddressSpec dst = {.mode = CI_ABI_REG, .reg = {.bank = CI_ABI_INDIRECT_RESULT, .index = 0}},
-                         src = {.mode = CI_ABI_SLOT, .offset = result};
-        err = ci_abi_emit(ctx->out, ctx->a, e->loc, plan->target, CI_ABI_ADDRESS, dst, src, 8);
-        if(err) goto cleanup;
-    }
-    for(uint32_t i = 0; i < plan->count; i++){
-        err = ci_lower_abi_argument(ctx->out, ctx->a, plan, i, slots[i], 0, e->loc);
-        if(err) goto cleanup;
-    }
+    err = ci_marshal_call_arguments(ci, ctx, e->loc, d, slots, storage_slot, result, variadic, direct);
     cleanup:
     Allocator_free(ctx->a, slots, (plan->count ? plan->count : 1), sizeof *slots, _Alignof(uint32_t));
     return err;
@@ -5108,7 +5598,7 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     CcParser* p = &ci->parser;
     CcExpr* callee = e->lhs;
     CcFunc* func = NULL;
-    CcFunction* ftype;
+    const CcFunction* ftype;
     if(callee->kind == CC_EXPR_FUNCTION){
         func = callee->func;
         ftype = func->type;
@@ -5166,6 +5656,7 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
     }
     CiCallDescriptor* d = Allocator_zalloc(ctx->a, 1, sizeof *d, _Alignof(CiCallDescriptor));
     if(!d) return CI_OOM_ERROR;
+    d->invoke = nc_invoke;
     if(func) d->func = func;
     d->nargs = nargs;
     for(uint32_t i = 0; i < nargs; i++){
@@ -5202,14 +5693,14 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         return ci_error(ci, e->loc, "call argument storage exceeds 32-bit layout limit");
     uint32_t args_slot=0;
     if(!func){
-        err = ci_alloc_slot(ctx, 8, 8, &args_slot);
+        err = ci_alloc_slot(ctx, CI_INDIRECT_CALL_PREFIX_SIZE, 8, &args_slot);
         if(err) return err;
         err = ci_alloc_slot(ctx, (uint32_t)state_size, state_size ? (uint32_t)d->abi->stack_alignment : 1, &args_slot);
         if(err == _cc_overflow_error)
             return ci_error(ci, e->loc, "call argument storage exceeds 32-bit layout limit");
         if(err) return err;
         CiLowerVal v;
-        err = ci_lower_expr(ci, ctx, callee, args_slot - 8, &v);
+        err = ci_lower_expr(ci, ctx, callee, args_slot - CI_INDIRECT_CALL_PREFIX_SIZE, &v);
         if(err == _cc_overflow_error)
             return ci_error(ci, e->loc, "call argument storage exceeds 32-bit layout limit");
         if(err) return err;
@@ -7011,8 +7502,10 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_BUILTIN:{
             if(e->builtin.op == CC_BUILTIN_CLEAR_CACHE)
                 return ci_lower_clear_cache(ci, ctx, e);
-            if(e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE || e->builtin.op == CC_BUILTIN_SYMBOLICATE)
-                return ci_lower_rt_call(ci, ctx, e, e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE ? CI_RT_CAPTURE_BACKTRACE : CI_RT_SYMBOLICATE, CI_NO_SLOT, NULL);
+            if(e->builtin.op == CC_BUILTIN_CAPTURE_BACKTRACE)
+                return ci_lower_capture_backtrace(ci, ctx, e, CI_NO_SLOT, NULL);
+            if(e->builtin.op == CC_BUILTIN_SYMBOLICATE)
+                return ci_lower_symbolicate(ci, ctx, e);
             CiOp* op;
             err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
             if(err) return err;
@@ -7040,10 +7533,11 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             err = ci_lower_expr_discard(ci, ctx, e->values[1]);
             return err;
         case CC_EXPR_HOTSWAP:
-            return ci_lower_rt_call(ci, ctx, e, CI_RT_HOTSWAP, CI_NO_SLOT, NULL);
+            return ci_lower_hotswap(ci, ctx, e, CI_NO_SLOT, NULL);
         case CC_EXPR_MODULE_REFLECT:
+            return ci_lower_module_reflect(ci, ctx, e, CI_NO_SLOT, NULL);
         case CC_EXPR_TYPE_INTROSPECTION:
-            return ci_lower_reflect(ci, ctx, e, CI_NO_SLOT, NULL);
+            return ci_lower_type_reflect(ci, ctx, e, CI_NO_SLOT, NULL);
         DRP_CASES_EXHAUSTED;
     }
     return ci_unreachable(ci, e->loc, "unhandled discarded expression kind");

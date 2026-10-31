@@ -63,6 +63,8 @@ struct CiModule {
     size_t lowered; // number of parsed top-level nodes already lowered
     uint32_t slot_size;
     uint32_t frame_alignment;
+    CcFunc* _Nullable callable;
+    size_t callable_node_count;
 };
 _Static_assert(offsetof(CiModule, cc) == 0, "module handle must identify its parsed module");
 typedef struct CiTlsThread CiTlsThread;
@@ -87,7 +89,7 @@ struct CiInterpreter {
                     _padding:            27;
         };
     };
-    uint32_t inline_budget, 
+    uint32_t inline_budget,
              inline_hint_budget;
     int exit_code;
     AtomMap(CiVirtualLib*) virtual_libs;
@@ -98,10 +100,82 @@ struct CiInterpreter {
     CiClosureData* _Nullable closures;
     LOCK_T error_lock,
            atom_lock,
-           resolve_lock;
-    // Shared worklist: a cached lowered function's dependencies stay here,
-    // including pending work if preparation fails and is retried.
+           resolve_lock,
+           closure_map_lock;
     CiLowerDeps deps;
+    struct {
+        CiCallDescriptor *intern,
+                         *symbolicate,
+                         *hotswap,
+                         *compile,
+                         *module_entry,
+                         *module_run,
+                         *type_name,
+                         *type_tag,
+                         *type_is_valid,
+                         *type_is_invalid,
+                         *type_is_integer,
+                         *type_is_float,
+                         *type_is_arithmetic,
+                         *type_is_pointer,
+                         *type_is_struct,
+                         *type_is_union,
+                         *type_is_array,
+                         *type_is_vector,
+                         *type_is_slice,
+                         *type_is_function,
+                         *type_is_enum,
+                         *type_is_const,
+                         *type_is_volatile,
+                         *type_is_atomic,
+                         *type_is_unsigned,
+                         *type_is_signed,
+                         *type_is_callable,
+                         *type_is_incomplete,
+                         *type_is_variadic,
+                         *type_sizeof,
+                         *type_alignof,
+                         *type_pointee,
+                         *type_unqual,
+                         *type_count,
+                         *type_loc,
+                         *type_is_callable_with,
+                         *type_is_callable_through,
+                         *type_castable_to,
+                         *type_make_any,
+                         *type_field,
+                         *type_field_named,
+                         *type_method,
+                         *type_method_named,
+                         *type_has_field_named,
+                         *type_has_method_named,
+                         *type_enumerators,
+                         *type_enumerator,
+                         *type_return_type,
+                         *type_param_count,
+                         *type_param_type,
+                         *type_element_type,
+                         *type_underlying_type,
+                         *type_fields,
+                         *type_methods,
+                         *type_validate_field,
+                         *type_validate_method,
+                         *type_validate_enumerator,
+                         *type_validate_param_type,
+                         *module_func_count,
+                         *module_var_count,
+                         *module_type_count,
+                         *module_func,
+                         *module_func_info,
+                         *module_var,
+                         *module_type,
+                         *module_symbol,
+                         *module_symbol_typed,
+                         *module_parse_type,
+                         *srcloc_file,
+                         *srcloc_line,
+                         *srcloc_col;
+    } runtime_calls;
     size_t next_module_id;
     BlobTable bt;
     ThreadLocalKey tls_key;
@@ -138,11 +212,6 @@ static int ci_backtrace(CiInterpreter* ci, CiInterpFrame*, int);
 static int ci_register_sym(CiInterpreter*, StringView libname, StringView symname, void* sym);
 static AtomTable* ci_lock_atoms(CiInterpreter*);
 static void ci_unlock_atoms(CiInterpreter*, AtomTable*);
-// Call before releasing the interpreter or its parser.
-// However, this requires you to know there aren't any outstanding
-// threads, so in practice you can't really call this unless you have
-// control over all of the interpreted code.
-static void ci_tls_cleanup(CiInterpreter*);
 
 
 #ifdef __clang__

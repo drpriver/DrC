@@ -47,7 +47,7 @@ enum {
 
 static
 int
-nc_plan_create(Allocator al, const CcTargetConfig* tc, CcFunction* f, NcCallPlan* _Nullable* _Nonnull out){
+nc_plan_create(Allocator al, const CcTargetConfig* tc, const CcFunction* f, NcCallPlan* _Nullable* _Nonnull out){
     NcCallPlan* p = Allocator_zalloc_extra(al, f->param_count, sizeof *p->args, sizeof *p, _Alignof(NcCallPlan));
     if(!p) return _cc_oom_error;
     p->target = tc->target;
@@ -719,7 +719,7 @@ static struct {
 
 static
 int
-nc_create_closure(Allocator al, CcFunction* type, NcClosureCallback* cb, void*_Null_unspecified userdata, NcClosure* _Nullable* _Nonnull out){
+nc_create_closure(Allocator al, const CcFunction* type, NcClosureCallback* cb, void*_Null_unspecified userdata, NcClosure* _Nullable* _Nonnull out){
     NcCallPlan* plan = NULL;
     int err = nc_plan_create(al, &cc_target_native, type, &plan);
     if(err) return err;
@@ -1069,7 +1069,7 @@ nc_invoke(const NcCallPlan* p, void (*fn)(void), NcCallState* s){
 }
 static
 int
-nc_create_closure(Allocator al, CcFunction* t, NcClosureCallback* cb,
+nc_create_closure(Allocator al, const CcFunction* t, NcClosureCallback* cb,
     void*_Null_unspecified ud, NcClosure* _Nullable* _Nonnull out){
     (void)al;
     (void)t;

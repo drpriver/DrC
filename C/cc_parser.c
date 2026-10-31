@@ -1132,7 +1132,7 @@ cc_parse_type_string(CcParser* p, CcScope* scope, SrcLoc loc, StringView source,
 
 static
 int
-cc_check_function_definition_type(CcParser* p, CcFunction* type, SrcLoc loc){
+cc_check_function_definition_type(CcParser* p, const CcFunction* type, SrcLoc loc){
     const char* failure;
     if(cc_check_function_definition_types(cc_target(p), type, &failure)) return cc_type_error(p, loc, (CcQualType){.bits=(uintptr_t)type}, "%s", failure);
     return 0;
@@ -1449,13 +1449,13 @@ static
 int
 cc_check_func_compat(CcParser* p, CcFunc* existing, const CcDeclBase* declbase, CcQualType new_ftype, _Bool definition, SrcLoc loc){
     CcFunction* new_type = ccqt_as_function(new_ftype);
-    CcFunction* old_type = existing->type;
+    const CcFunction* old_type = existing->type;
     if(!existing->static_ && declbase->spec.sp_static)
         return cc_error(p, loc, "static declaration of '%.*s' follows non-static declaration", existing->name->length, existing->name->data);
     if(!cc_types_compatible(old_type->return_type, new_type->return_type))
         return cc_types_error(p, loc, old_type->return_type, new_type->return_type, "conflicting return type for '%.*s'", existing->name->length, existing->name->data);
     if(old_type->no_prototype || new_type->no_prototype){
-        CcFunction* prototype = new_type->no_prototype ? old_type : new_type;
+        const CcFunction* prototype = new_type->no_prototype ? old_type : new_type;
         if(prototype->is_variadic)
             return cc_types_error(p, loc, (CcQualType){.bits=(uintptr_t)old_type}, new_ftype, "conflicting variadic specifier for '%.*s'", existing->name->length, existing->name->data);
         // An empty parameter list in a definition specifies zero parameters.
@@ -1670,7 +1670,7 @@ cc_merge_qualified_types(CcParser* p, CcQualType a, CcQualType b, CcQualType* ou
 
 static
 int
-cc_merge_func_decl_type(CcParser* p, CcFunction* old, CcQualType* type){
+cc_merge_func_decl_type(CcParser* p, const CcFunction* old, CcQualType* type){
     CcQualType composite;
     int err = cc_merge_compatible_decl_types(p, (CcQualType){.bits=(uintptr_t)old}, *type, &composite);
     if(err) return err;
@@ -2999,7 +2999,7 @@ cc_check_addressable(CcParser* p, CcExpr* operand, SrcLoc loc){
 
 static
 int
-cc_adapt_receiver(CcParser* p, CcFunction* function, CcExpr* operand,
+cc_adapt_receiver(CcParser* p, const CcFunction* function, CcExpr* operand,
     SrcLoc loc, CcExpr* _Nullable* _Nonnull out){
     *out = operand;
     if(!function->param_count) return 0;

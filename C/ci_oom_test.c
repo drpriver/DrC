@@ -22,6 +22,7 @@
 #include "cc_parser.h"
 #include "cc_target.h"
 #include "ci_interp.h"
+#include "ci_rt.h"
 
 #ifdef __clang__
 #pragma clang assume_nonnull begin
@@ -36,6 +37,8 @@ static struct OomTestCase {
     int baseline_done;
     int fail_idx; // atomic
 } test_programs[] = {
+    {__LINE__, SVI("_Module m=__compile(\"int n;return ++n;\",\"\");"
+         "return m && m.run()==1 && m.run()==2;")},
     {__LINE__, SVI("#define R 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31\n"
          "constexpr int a[]={R,R,R,R,99,[0]=99};_Static_assert(a[0]==99&&a[127]==31&&a[128]==99);"
          "int calls;int next(void){return ++calls;}int b[]={R,1+next(),R};"
@@ -560,6 +563,7 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
     LOCK_T_init(&interp.error_lock);
     LOCK_T_init(&interp.atom_lock);
     LOCK_T_init(&interp.resolve_lock);
+    LOCK_T_init(&interp.closure_map_lock);
     interp.parser.cpp.synth_arena.base = al;
     interp.parser.scratch_arena.base = al;
     interp.bt.arena.base = al;
@@ -575,6 +579,8 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
     err = ci_register_pragmas(&interp);
     if(err) goto cleanup;
     err = ci_register_macros(&interp);
+    if(err) goto cleanup;
+    err = ci_init_runtime_calls(&interp);
     if(err) goto cleanup;
     CppFrame frame_data = {
         .file_id = (uint32_t)fc->map.count - 1,

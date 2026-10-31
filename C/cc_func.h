@@ -106,7 +106,7 @@ typedef struct CcFunc CcFunc;
 struct CcFunc {
     CcFunc*_Nullable enclosing; // For nested functions
     CcQualType _Self_type;
-    CcFunction* type;
+    const CcFunction* type;
     // TODO: we can have a slim attribute map here instead
     const CcPrintfFormat* _Nullable printf_formats;
     Atom name;

@@ -184,7 +184,7 @@ nc_abi_type(const CcTargetConfig *tc, CcQualType qt, NcAbiRole role, NcAbiType *
 
 static
 int
-nc_plan_create(Allocator al, const CcTargetConfig *tc, CcFunction *f,
+nc_plan_create(Allocator al, const CcTargetConfig *tc, const CcFunction *f,
         NcCallPlan *_Nullable *_Nonnull out);
 // nc_plan_create()
 // ----------------
@@ -568,7 +568,7 @@ nc_invoke(const NcCallPlan *plan, void (*fn)(void), NcCallState *state);
 
 static
 int
-nc_create_closure(Allocator al, CcFunction *func_type, NcClosureCallback *cb,
+nc_create_closure(Allocator al, const CcFunction *func_type, NcClosureCallback *cb,
     void *_Null_unspecified userdata, NcClosure *_Nullable *_Nonnull out);
 // nc_create_closure()
 // -------------------

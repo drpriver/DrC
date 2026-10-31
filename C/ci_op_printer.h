@@ -468,21 +468,13 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                     : op->abi_move.operation==CI_ABI_ZERO_EXTEND? " zero-extend" : ""
             );
             break;
-        case CI_OP_RT_CALL:
-            if(op->rt_call.slot_size){
-                ci_op_print_range(out, op->rt_call.slot, op->rt_call.slot_size);
+        case CI_OP_CAPTURE_BACKTRACE:
+            if(op->capture_backtrace.slot_size){
+                ci_op_print_range(out, op->capture_backtrace.slot, op->capture_backtrace.slot_size);
                 msb_write_literal(out, " = ");
             }
-            msb_sprintf(out, "runtime[%u", (unsigned)op->rt_call.op);
-            if(op->rt_call.op == CI_RT_TYPE_REFLECT || op->rt_call.op == CI_RT_MODULE_REFLECT
-                || op->rt_call.op == CI_RT_TYPE_VALIDATE || op->rt_call.op == CI_RT_MODULE_VALIDATE
-                || op->rt_call.op == CI_RT_SRCLOC_REFLECT)
-                msb_sprintf(out, ":%u", (unsigned)op->rt_call.reflect_op);
-            msb_write_literal(out, "](");
-            for(uint32_t i = 0; i < op->rt_call.nargs; i++){
-                if(i) msb_write_literal(out, ", ");
-                msb_sprintf(out, "%%%u", op->rt_call.args[i]);
-            }
+            msb_write_literal(out, "capture_backtrace(");
+            msb_sprintf(out, "%%%u, %%%u", op->capture_backtrace.buffer, op->capture_backtrace.capacity);
             msb_write_literal(out, ")");
             break;
         case CI_OP_CONST:
@@ -762,6 +754,9 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             msb_write_literal(out, ", ");
             ci_op_print_range(out, op->checked.src2, op->checked.src2_size);
         } break;
+        case CI_OP_PROPAGATE_ERROR:
+            msb_sprintf(out, "propagate_error %%%u", op->propagate_error.src);
+            break;
         case CI_OP_CHECK:
             msb_write_literal(out, "check ");
             ci_op_print_range(out, op->check.src, 1);
@@ -879,7 +874,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
         case CI_OP_CALL:{
             CiCallDescriptor* d = op->call.descrip;
             if(op->call.is_indirect){
-                msb_sprintf(out, "call *[%u](", op->call.args_slot - 8);
+                msb_sprintf(out, "call *[%u](", op->call.args_slot - CI_INDIRECT_CALL_PREFIX_SIZE);
             }else {
                 Atom name = d->func->name;
                 const char *s = name&&name->length?name->data:"<anon>";
