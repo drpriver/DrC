@@ -141,6 +141,117 @@ typedef struct { _Alignas(16) char bytes[16]; } CiAtomic16;
 #endif
 #endif
 
+// Userdata for interpreted function closures.
+typedef struct CiClosureData CiClosureData;
+struct CiClosureData {
+    CiInterpreter* ci;
+    CcFunc* func;
+    uint32_t ret_sz;
+    NcClosure* _Nullable closure;
+    CiClosureData* _Nullable next;
+};
+
+static
+CcFunc*_Nullable
+ci_closure_map_get(CiInterpreter* ci, void*_Null_unspecified entry){
+    LOCK_T_lock(&ci->closure_map_lock);
+    CcFunc* func = BPM_rget(&ci->closure_map, entry);
+    LOCK_T_unlock(&ci->closure_map_lock);
+    return func;
+}
+
+static
+int
+ci_closure_map_put(CiInterpreter* ci, CcFunc* func, void* entry){
+    LOCK_T_lock(&ci->closure_map_lock);
+    int err = BPM_put(&ci->closure_map, ci_allocator(ci), func, entry);
+    LOCK_T_unlock(&ci->closure_map_lock);
+    return err;
+}
+
+static
+void
+ci_closure_cleanup(CiInterpreter* ci){
+    Allocator al = ci_allocator(ci);
+    while(ci->closures){
+        CiClosureData* cd = ci->closures;
+        ci->closures = cd->next;
+        if(cd->closure) nc_destroy_closure(al, (NcClosure* _Nonnull)cd->closure);
+        cd->func->native_closure = NULL;
+        cd->func->native_func = NULL;
+        Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
+    }
+    LOCK_T_lock(&ci->closure_map_lock);
+    BidiPointerMap map = ci->closure_map;
+    ci->closure_map = (BidiPointerMap){0};
+    LOCK_T_unlock(&ci->closure_map_lock);
+    if(map.cap) Allocator_free(al, map.data, BPM_alloc_size(map.cap), 1, _Alignof(BidiPointerMapItem));
+}
+
+static
+void
+ci_closure_callback(const NcCallPlan* plan, NcCallState* state, void* userdata){
+    // The compiled function already embeds its parameter import plan in bytecode.
+    (void)plan;
+    CiClosureData* cd = userdata;
+    ci_call_abi(cd->ci, NULL, cd->func, state, cd->func->loc);
+}
+
+static
+int
+ci_create_closure(CiInterpreter* ci, CcFunc* func){
+    DRP_PROFILE_BEGIN(profile, "resolve.native_closure");
+    int err;
+    void (*entry)(void);
+    #ifdef NO_NATIVE_CALL
+        // No native code can call this, so just use the CcFunc* itself as a
+        // fake function pointer. The closure_map reverse lookup will catch it
+        // at interpreted call sites.
+        entry = (void(*)(void))(uintptr_t)func;
+    #else
+        Allocator al = ci_allocator(ci);
+        CiClosureData* cd = Allocator_zalloc(al, 1, sizeof *cd, _Alignof(CiClosureData));
+        if(!cd) return CI_OOM_ERROR;
+        cd->ci = ci;
+        cd->func = func;
+        if(!(ccqt_bt_eq(func->type->return_type, CCBT_void))){
+            err = cc_sizeof_as_uint(&ci->parser, func->type->return_type, func->loc, &cd->ret_sz);
+            // This should never happen, but who knows.
+            if(err){
+                Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
+                return err;
+            }
+        }
+        NcClosure* nc;
+        err = nc_create_closure(al, func->interp_ops->native_type, ci_closure_callback, cd, &nc);
+        if(err){
+            Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
+            if(err == CI_UNIMPLEMENTED_ERROR)
+                ci_ice(ci, func->loc, "function should've already been rejected in lowering%s", "");
+            return err;
+        }
+        entry = nc_closure_get_fn(nc);
+    #endif
+    err = ci_closure_map_put(ci, func, (void*)entry);
+    if(err){
+        #ifndef NO_NATIVE_CALL
+        nc_destroy_closure(al, nc);
+        Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
+        #endif
+        return err == 1 ? CI_OOM_ERROR : CI_RUNTIME_ERROR;
+    }
+    // Publish only after registration succeeds, so preparation can be retried.
+    func->native_func = entry;
+    #ifndef NO_NATIVE_CALL
+    func->native_closure = nc;
+    cd->closure = nc;
+    cd->next = ci->closures;
+    ci->closures = cd;
+#endif
+    return 0;
+    DRP_PROFILE_END(profile);
+}
+
 static inline
 uint64_t
 ci_read_uint(const void* buf, uint32_t sz){
@@ -164,7 +275,6 @@ ci_read_int(const void* buf, uint32_t sz){
         default: ci_unsafe_unreachable();
     }
 }
-
 
 static inline
 void
@@ -375,147 +485,143 @@ ci_bitfield_write_128_bytes(void* storage_addr, uint8_t bit_offset, uint8_t bit_
     }
 }
 
-// Userdata for interpreted function closures.
-typedef struct CiClosureData CiClosureData;
-struct CiClosureData {
-    CiInterpreter* ci;
-    CcFunc* func;
-    uint32_t ret_sz;
-    NcClosure* _Nullable closure;
-    CiClosureData* _Nullable next;
-};
-
-static
-CcFunc*_Nullable
-ci_closure_map_get(CiInterpreter* ci, void*_Null_unspecified entry){
-    LOCK_T_lock(&ci->closure_map_lock);
-    CcFunc* func = BPM_rget(&ci->closure_map, entry);
-    LOCK_T_unlock(&ci->closure_map_lock);
-    return func;
-}
-
-static
-int
-ci_closure_map_put(CiInterpreter* ci, CcFunc* func, void* entry){
-    LOCK_T_lock(&ci->closure_map_lock);
-    int err = BPM_put(&ci->closure_map, ci_allocator(ci), func, entry);
-    LOCK_T_unlock(&ci->closure_map_lock);
-    return err;
-}
-
-static
-void
-ci_closure_cleanup(CiInterpreter* ci){
-    Allocator al = ci_allocator(ci);
-    while(ci->closures){
-        CiClosureData* cd = ci->closures;
-        ci->closures = cd->next;
-        if(cd->closure) nc_destroy_closure(al, (NcClosure* _Nonnull)cd->closure);
-        cd->func->native_closure = NULL;
-        cd->func->native_func = NULL;
-        Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
-    }
-    LOCK_T_lock(&ci->closure_map_lock);
-    BidiPointerMap map = ci->closure_map;
-    ci->closure_map = (BidiPointerMap){0};
-    LOCK_T_unlock(&ci->closure_map_lock);
-    if(map.cap) Allocator_free(al, map.data, BPM_alloc_size(map.cap), 1, _Alignof(BidiPointerMapItem));
-}
-
-static
-void
-ci_closure_callback(const NcCallPlan* plan, NcCallState* state, void* userdata){
-    // The compiled function already embeds its parameter import plan in bytecode.
-    (void)plan;
-    CiClosureData* cd = userdata;
-    ci_call_abi(cd->ci, NULL, cd->func, state, cd->func->loc);
-}
-
-static
-int
-ci_create_closure(CiInterpreter* ci, CcFunc* func){
-    DRP_PROFILE_BEGIN(profile, "resolve.native_closure");
-    int err;
-    void (*entry)(void);
-    #ifdef NO_NATIVE_CALL
-        // No native code can call this, so just use the CcFunc* itself as a
-        // fake function pointer. The closure_map reverse lookup will catch it
-        // at interpreted call sites.
-        entry = (void(*)(void))(uintptr_t)func;
-    #else
-        Allocator al = ci_allocator(ci);
-        CiClosureData* cd = Allocator_zalloc(al, 1, sizeof *cd, _Alignof(CiClosureData));
-        if(!cd) return CI_OOM_ERROR;
-        cd->ci = ci;
-        cd->func = func;
-        if(!(ccqt_bt_eq(func->type->return_type, CCBT_void))){
-            err = cc_sizeof_as_uint(&ci->parser, func->type->return_type, func->loc, &cd->ret_sz);
-            // This should never happen, but who knows.
-            if(err){
-                Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
-                return err;
-            }
-        }
-        NcClosure* nc;
-        err = nc_create_closure(al, func->interp_ops->native_type, ci_closure_callback, cd, &nc);
-        if(err){
-            Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
-            if(err == CI_UNIMPLEMENTED_ERROR)
-                ci_ice(ci, func->loc, "function should've already been rejected in lowering%s", "");
-            return err;
-        }
-        entry = nc_closure_get_fn(nc);
-    #endif
-    err = ci_closure_map_put(ci, func, (void*)entry);
-    if(err){
-        #ifndef NO_NATIVE_CALL
-        nc_destroy_closure(al, nc);
-        Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
-        #endif
-        return err == 1 ? CI_OOM_ERROR : CI_RUNTIME_ERROR;
-    }
-    // Publish only after registration succeeds, so preparation can be retried.
-    func->native_func = entry;
-    #ifndef NO_NATIVE_CALL
-    func->native_closure = nc;
-    cd->closure = nc;
-    cd->next = ci->closures;
-    ci->closures = cd;
-#endif
-    return 0;
-    DRP_PROFILE_END(profile);
-}
-
-static
+static inline
 void*
-ci_abi_address(CiInterpFrame* frame, CiAbiAddress mode, uint32_t offset, uint32_t pointer){
-    NcCallState* registers = &frame->stack->registers;
-    char* base;
-    switch(mode){
-        case CI_ABI_SLOT: return (char*)frame->slots+offset;
-        case CI_ABI_REG: return (char*)registers + ((CiAbiRegister){.bits=offset}).capture_offset;
-        case CI_ABI_INCOMING: return (char*)frame->incoming + ((CiAbiRegister){.bits=offset}).capture_offset;
-        case CI_ABI_GP_SAVE:
-        case CI_ABI_FP_SAVE:
-            return (char*)frame->incoming + ((CiAbiRegister){.bits=pointer}).capture_offset + offset;
-        case CI_ABI_SLOT_PTR:
-            CI_INLINE_MEMCPY(&base, (char*)frame->slots+pointer, sizeof base);
-            return base+(int32_t)offset;
-        case CI_ABI_INCOMING_PTR:
-        case CI_ABI_INCOMING_PTR_INDIRECT:
-            registers = frame->incoming;
-            break;
-        case CI_ABI_REG_PTR:
-        case CI_ABI_REG_PTR_INDIRECT:
-            break;
-        DRP_CASES_EXHAUSTED;
-    }
-    CI_INLINE_MEMCPY(&base, (char*)registers + ((CiAbiRegister){.bits=pointer}).capture_offset, sizeof base);
-    base += (int32_t)offset;
-    if(mode == CI_ABI_REG_PTR_INDIRECT || mode == CI_ABI_INCOMING_PTR_INDIRECT)
-        CI_INLINE_MEMCPY(&base, base, sizeof(char*));
-    return base;
+ci_va_stack_source(void* _Nonnull* _Nonnull stack, uint32_t mask, uint32_t stride){
+    uintptr_t cursor = ((uintptr_t)*stack + mask) & ~(uintptr_t)mask;
+    *stack = (void*)(cursor + stride);
+    return (void*)cursor;
 }
+
+static inline
+CiUint128
+ci_read_u128(const void* src){
+    CiUint128 value;
+    memcpy(&value, src, 16);
+    return value;
+}
+
+static inline
+float
+ci_read_f32(const void* src){
+    float value;
+    memcpy(&value, src, 4);
+    return value;
+}
+
+static inline
+double
+ci_read_f64(const void* src){
+    double value;
+    memcpy(&value, src, 8);
+    return value;
+}
+
+#if defined _MSC_VER
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+#define CI_ATOMIC_LOAD8(p, d) do { *(uint8_t*)(d) = (uint8_t)__iso_volatile_load8((const volatile __int8*)(p)); __dmb(_ARM64_BARRIER_ISH); } while(0)
+#define CI_ATOMIC_STORE8(p, s) do { __dmb(_ARM64_BARRIER_ISH); __iso_volatile_store8((volatile __int8*)(p), *(const __int8*)(s)); __dmb(_ARM64_BARRIER_ISH); } while(0)
+#else
+#define CI_ATOMIC_LOAD8(p, d) do { *(uint8_t*)(d) = *(volatile uint8_t*)(p); _ReadWriteBarrier(); } while(0)
+#define CI_ATOMIC_STORE8(p, s) (void)_InterlockedExchange8((volatile char*)(p), *(const char*)(s))
+#endif
+#define CI_ATOMIC_XCHG8(p, v, o) (*(uint8_t*)(o) = (uint8_t)_InterlockedExchange8((volatile char*)(p), *(const char*)(v)))
+#define CI_ATOMIC_ADD8(p, v, o) (*(uint8_t*)(o) = (uint8_t)_InterlockedExchangeAdd8((volatile char*)(p), *(const char*)(v)))
+#define CI_ATOMIC_SUB8(p, v, o) (*(uint8_t*)(o) = (uint8_t)_InterlockedExchangeAdd8((volatile char*)(p), -*(const char*)(v)))
+#define CI_ATOMIC_AND8(p, v, o) (*(uint8_t*)(o) = (uint8_t)_InterlockedAnd8((volatile char*)(p), *(const char*)(v)))
+#define CI_ATOMIC_OR8(p, v, o) (*(uint8_t*)(o) = (uint8_t)_InterlockedOr8((volatile char*)(p), *(const char*)(v)))
+#define CI_ATOMIC_XOR8(p, v, o) (*(uint8_t*)(o) = (uint8_t)_InterlockedXor8((volatile char*)(p), *(const char*)(v)))
+#define CI_ATOMIC_CAS8(p, e, d, weak, result) do { uint8_t exp = *(uint8_t*)(e); uint8_t old = (uint8_t)_InterlockedCompareExchange8((volatile char*)(p), *(const char*)(d), (char)exp); (result) = old == exp; *(uint8_t*)(e) = old; } while(0)
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+#define CI_ATOMIC_LOAD16(p, d) do { *(uint16_t*)(d) = (uint16_t)__iso_volatile_load16((const volatile __int16*)(p)); __dmb(_ARM64_BARRIER_ISH); } while(0)
+#define CI_ATOMIC_STORE16(p, s) do { __dmb(_ARM64_BARRIER_ISH); __iso_volatile_store16((volatile __int16*)(p), *(const __int16*)(s)); __dmb(_ARM64_BARRIER_ISH); } while(0)
+#else
+#define CI_ATOMIC_LOAD16(p, d) do { *(uint16_t*)(d) = *(volatile uint16_t*)(p); _ReadWriteBarrier(); } while(0)
+#define CI_ATOMIC_STORE16(p, s) (void)_InterlockedExchange16((volatile short*)(p), *(const short*)(s))
+#endif
+#define CI_ATOMIC_XCHG16(p, v, o) (*(uint16_t*)(o) = (uint16_t)_InterlockedExchange16((volatile short*)(p), *(const short*)(v)))
+#define CI_ATOMIC_ADD16(p, v, o) (*(uint16_t*)(o) = (uint16_t)_InterlockedExchangeAdd16((volatile short*)(p), *(const short*)(v)))
+#define CI_ATOMIC_SUB16(p, v, o) (*(uint16_t*)(o) = (uint16_t)_InterlockedExchangeAdd16((volatile short*)(p), -*(const short*)(v)))
+#define CI_ATOMIC_AND16(p, v, o) (*(uint16_t*)(o) = (uint16_t)_InterlockedAnd16((volatile short*)(p), *(const short*)(v)))
+#define CI_ATOMIC_OR16(p, v, o) (*(uint16_t*)(o) = (uint16_t)_InterlockedOr16((volatile short*)(p), *(const short*)(v)))
+#define CI_ATOMIC_XOR16(p, v, o) (*(uint16_t*)(o) = (uint16_t)_InterlockedXor16((volatile short*)(p), *(const short*)(v)))
+#define CI_ATOMIC_CAS16(p, e, d, weak, result) do { uint16_t exp = *(uint16_t*)(e); uint16_t old = (uint16_t)_InterlockedCompareExchange16((volatile short*)(p), *(const short*)(d), (short)exp); (result) = old == exp; *(uint16_t*)(e) = old; } while(0)
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+#define CI_ATOMIC_LOAD32(p, d) do { *(uint32_t*)(d) = (uint32_t)__iso_volatile_load32((const volatile __int32*)(p)); __dmb(_ARM64_BARRIER_ISH); } while(0)
+#define CI_ATOMIC_STORE32(p, s) do { __dmb(_ARM64_BARRIER_ISH); __iso_volatile_store32((volatile __int32*)(p), *(const __int32*)(s)); __dmb(_ARM64_BARRIER_ISH); } while(0)
+#else
+#define CI_ATOMIC_LOAD32(p, d) do { *(uint32_t*)(d) = *(volatile uint32_t*)(p); _ReadWriteBarrier(); } while(0)
+#define CI_ATOMIC_STORE32(p, s) (void)_InterlockedExchange((volatile long*)(p), *(const long*)(s))
+#endif
+#define CI_ATOMIC_XCHG32(p, v, o) (*(uint32_t*)(o) = (uint32_t)_InterlockedExchange((volatile long*)(p), *(const long*)(v)))
+#define CI_ATOMIC_ADD32(p, v, o) (*(uint32_t*)(o) = (uint32_t)_InterlockedExchangeAdd((volatile long*)(p), *(const long*)(v)))
+#define CI_ATOMIC_SUB32(p, v, o) (*(uint32_t*)(o) = (uint32_t)_InterlockedExchangeAdd((volatile long*)(p), (long)(0u - *(const uint32_t*)(v))))
+#define CI_ATOMIC_AND32(p, v, o) (*(uint32_t*)(o) = (uint32_t)_InterlockedAnd((volatile long*)(p), *(const long*)(v)))
+#define CI_ATOMIC_OR32(p, v, o) (*(uint32_t*)(o) = (uint32_t)_InterlockedOr((volatile long*)(p), *(const long*)(v)))
+#define CI_ATOMIC_XOR32(p, v, o) (*(uint32_t*)(o) = (uint32_t)_InterlockedXor((volatile long*)(p), *(const long*)(v)))
+#define CI_ATOMIC_CAS32(p, e, d, weak, result) do { uint32_t exp = *(uint32_t*)(e); uint32_t old = (uint32_t)_InterlockedCompareExchange((volatile long*)(p), *(const long*)(d), (long)exp); (result) = old == exp; *(uint32_t*)(e) = old; } while(0)
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+#define CI_ATOMIC_LOAD64(p, d) do { *(uint64_t*)(d) = (uint64_t)__iso_volatile_load64((const volatile __int64*)(p)); __dmb(_ARM64_BARRIER_ISH); } while(0)
+#define CI_ATOMIC_STORE64(p, s) do { __dmb(_ARM64_BARRIER_ISH); __iso_volatile_store64((volatile __int64*)(p), *(const __int64*)(s)); __dmb(_ARM64_BARRIER_ISH); } while(0)
+#else
+#define CI_ATOMIC_LOAD64(p, d) do { *(uint64_t*)(d) = *(volatile uint64_t*)(p); _ReadWriteBarrier(); } while(0)
+#define CI_ATOMIC_STORE64(p, s) (void)_InterlockedExchange64((volatile __int64*)(p), *(const __int64*)(s))
+#endif
+#define CI_ATOMIC_XCHG64(p, v, o) (*(uint64_t*)(o) = (uint64_t)_InterlockedExchange64((volatile __int64*)(p), *(const __int64*)(v)))
+#define CI_ATOMIC_ADD64(p, v, o) (*(uint64_t*)(o) = (uint64_t)_InterlockedExchangeAdd64((volatile __int64*)(p), *(const __int64*)(v)))
+#define CI_ATOMIC_SUB64(p, v, o) (*(uint64_t*)(o) = (uint64_t)_InterlockedExchangeAdd64((volatile __int64*)(p), (__int64)(UINT64_C(0) - *(const uint64_t*)(v))))
+#define CI_ATOMIC_AND64(p, v, o) (*(uint64_t*)(o) = (uint64_t)_InterlockedAnd64((volatile __int64*)(p), *(const __int64*)(v)))
+#define CI_ATOMIC_OR64(p, v, o) (*(uint64_t*)(o) = (uint64_t)_InterlockedOr64((volatile __int64*)(p), *(const __int64*)(v)))
+#define CI_ATOMIC_XOR64(p, v, o) (*(uint64_t*)(o) = (uint64_t)_InterlockedXor64((volatile __int64*)(p), *(const __int64*)(v)))
+#define CI_ATOMIC_CAS64(p, e, d, weak, result) do { uint64_t exp = *(uint64_t*)(e); uint64_t old = (uint64_t)_InterlockedCompareExchange64((volatile __int64*)(p), *(const __int64*)(d), (__int64)exp); (result) = old == exp; *(uint64_t*)(e) = old; } while(0)
+#define CI_ATOMIC_LOAD128(p, d) do { __int64* out = (d); out[0] = 0; out[1] = 0; _InterlockedCompareExchange128((volatile __int64*)(p), 0, 0, out); } while(0)
+#define CI_ATOMIC_XCHG128(p, v, o) do { __int64 ci_atomic_desired[2], previous[2] = {0}; memcpy(ci_atomic_desired, (v), 16); while(!_InterlockedCompareExchange128((volatile __int64*)(p), ci_atomic_desired[1], ci_atomic_desired[0], previous)){} memcpy((o), previous, 16); } while(0)
+#define CI_ATOMIC_STORE128(p, v) do { __int64 ignored[2]; CI_ATOMIC_XCHG128(p, v, ignored); } while(0)
+#define CI_ATOMIC_CAS128(p, e, d, weak, result) do { __int64 ci_atomic_desired[2]; memcpy(ci_atomic_desired, (d), 16); (result) = (_Bool)_InterlockedCompareExchange128((volatile __int64*)(p), ci_atomic_desired[1], ci_atomic_desired[0], (__int64*)(e)); } while(0)
+#define CI_THREAD_FENCE() MemoryBarrier()
+#else
+#define CI_ATOMIC_LOAD8(p, d) __atomic_load((uint8_t*)(p), (uint8_t*)(d), __ATOMIC_SEQ_CST)
+#define CI_ATOMIC_STORE8(p, s) __atomic_store((uint8_t*)(p), (uint8_t*)(s), __ATOMIC_SEQ_CST)
+#define CI_ATOMIC_XCHG8(p, v, o) __atomic_exchange((uint8_t*)(p), (uint8_t*)(v), (uint8_t*)(o), __ATOMIC_SEQ_CST)
+#define CI_ATOMIC_CAS8(p, e, d, weak, result) ((result) = __atomic_compare_exchange((uint8_t*)(p), (uint8_t*)(e), (uint8_t*)(d), weak, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_ADD8(p, v, o) (*(uint8_t*)(o) = __atomic_fetch_add((uint8_t*)(p), *(const uint8_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_SUB8(p, v, o) (*(uint8_t*)(o) = __atomic_fetch_sub((uint8_t*)(p), *(const uint8_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_AND8(p, v, o) (*(uint8_t*)(o) = __atomic_fetch_and((uint8_t*)(p), *(const uint8_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_OR8(p, v, o) (*(uint8_t*)(o) = __atomic_fetch_or((uint8_t*)(p), *(const uint8_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_XOR8(p, v, o) (*(uint8_t*)(o) = __atomic_fetch_xor((uint8_t*)(p), *(const uint8_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_LOAD16(p, d) __atomic_load((uint16_t*)(p), (uint16_t*)(d), __ATOMIC_SEQ_CST)
+#define CI_ATOMIC_STORE16(p, s) __atomic_store((uint16_t*)(p), (uint16_t*)(s), __ATOMIC_SEQ_CST)
+#define CI_ATOMIC_XCHG16(p, v, o) __atomic_exchange((uint16_t*)(p), (uint16_t*)(v), (uint16_t*)(o), __ATOMIC_SEQ_CST)
+#define CI_ATOMIC_CAS16(p, e, d, weak, result) ((result) = __atomic_compare_exchange((uint16_t*)(p), (uint16_t*)(e), (uint16_t*)(d), weak, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_ADD16(p, v, o) (*(uint16_t*)(o) = __atomic_fetch_add((uint16_t*)(p), *(const uint16_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_SUB16(p, v, o) (*(uint16_t*)(o) = __atomic_fetch_sub((uint16_t*)(p), *(const uint16_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_AND16(p, v, o) (*(uint16_t*)(o) = __atomic_fetch_and((uint16_t*)(p), *(const uint16_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_OR16(p, v, o) (*(uint16_t*)(o) = __atomic_fetch_or((uint16_t*)(p), *(const uint16_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_XOR16(p, v, o) (*(uint16_t*)(o) = __atomic_fetch_xor((uint16_t*)(p), *(const uint16_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_LOAD32(p, d) __atomic_load((uint32_t*)(p), (uint32_t*)(d), __ATOMIC_SEQ_CST)
+#define CI_ATOMIC_STORE32(p, s) __atomic_store((uint32_t*)(p), (uint32_t*)(s), __ATOMIC_SEQ_CST)
+#define CI_ATOMIC_XCHG32(p, v, o) __atomic_exchange((uint32_t*)(p), (uint32_t*)(v), (uint32_t*)(o), __ATOMIC_SEQ_CST)
+#define CI_ATOMIC_CAS32(p, e, d, weak, result) ((result) = __atomic_compare_exchange((uint32_t*)(p), (uint32_t*)(e), (uint32_t*)(d), weak, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_ADD32(p, v, o) (*(uint32_t*)(o) = __atomic_fetch_add((uint32_t*)(p), *(const uint32_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_SUB32(p, v, o) (*(uint32_t*)(o) = __atomic_fetch_sub((uint32_t*)(p), *(const uint32_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_AND32(p, v, o) (*(uint32_t*)(o) = __atomic_fetch_and((uint32_t*)(p), *(const uint32_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_OR32(p, v, o) (*(uint32_t*)(o) = __atomic_fetch_or((uint32_t*)(p), *(const uint32_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_XOR32(p, v, o) (*(uint32_t*)(o) = __atomic_fetch_xor((uint32_t*)(p), *(const uint32_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_LOAD64(p, d) __atomic_load((uint64_t*)(p), (uint64_t*)(d), __ATOMIC_SEQ_CST)
+#define CI_ATOMIC_STORE64(p, s) __atomic_store((uint64_t*)(p), (uint64_t*)(s), __ATOMIC_SEQ_CST)
+#define CI_ATOMIC_XCHG64(p, v, o) __atomic_exchange((uint64_t*)(p), (uint64_t*)(v), (uint64_t*)(o), __ATOMIC_SEQ_CST)
+#define CI_ATOMIC_CAS64(p, e, d, weak, result) ((result) = __atomic_compare_exchange((uint64_t*)(p), (uint64_t*)(e), (uint64_t*)(d), weak, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_ADD64(p, v, o) (*(uint64_t*)(o) = __atomic_fetch_add((uint64_t*)(p), *(const uint64_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_SUB64(p, v, o) (*(uint64_t*)(o) = __atomic_fetch_sub((uint64_t*)(p), *(const uint64_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_AND64(p, v, o) (*(uint64_t*)(o) = __atomic_fetch_and((uint64_t*)(p), *(const uint64_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_OR64(p, v, o) (*(uint64_t*)(o) = __atomic_fetch_or((uint64_t*)(p), *(const uint64_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_XOR64(p, v, o) (*(uint64_t*)(o) = __atomic_fetch_xor((uint64_t*)(p), *(const uint64_t*)(v), __ATOMIC_SEQ_CST))
+#define CI_ATOMIC_LOAD128(p, d) __atomic_load((CiAtomic16*)(p), (CiAtomic16*)(d), __ATOMIC_SEQ_CST)
+#define CI_ATOMIC_STORE128(p, s) __atomic_store((CiAtomic16*)(p), (CiAtomic16*)(s), __ATOMIC_SEQ_CST)
+#define CI_ATOMIC_XCHG128(p, v, o) __atomic_exchange((CiAtomic16*)(p), (CiAtomic16*)(v), (CiAtomic16*)(o), __ATOMIC_SEQ_CST)
+#define CI_ATOMIC_CAS128(p, e, d, weak, result) ((result) = __atomic_compare_exchange((CiAtomic16*)(p), (CiAtomic16*)(e), (CiAtomic16*)(d), weak, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+#define CI_THREAD_FENCE() __atomic_thread_fence(__ATOMIC_SEQ_CST)
+#endif
 
 force_inline
 int
@@ -524,8 +630,656 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         return 0;
     const CiOp* op = &frame->ops[frame->pc];
     switch(op->kind){
+        case CI_OP_COUNT: break;
+#if (defined __clang__ || defined __GNUC__) && !defined __DRC__
+#define CI_ALIGNED(p, a) __builtin_assume_aligned((p), (a))
+#else
+#define CI_ALIGNED(p, a) (p)
+#endif
+
+#define CI_CONST_CASE(name, bytes, da, sa) \
+        case CI_OP_##name: { \
+            memcpy((char*)frame->slots + op->constant.slot, op->constant.immediate, bytes); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_CONST_OPS(CI_CONST_CASE)
+#undef CI_CONST_CASE
+
+#define CI_LOAD_CASE(name, bytes, da, sa) \
+        case CI_OP_##name: { \
+            char* ptr; memcpy(&ptr, (char*)frame->slots + op->load.src, sizeof ptr); \
+            memmove(CI_ALIGNED((char*)frame->slots + op->load.slot, sa), CI_ALIGNED(ptr + op->load.offset, da), bytes); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_LOAD_OPS(CI_LOAD_CASE)
+#undef CI_LOAD_CASE
+
+#define CI_STORE_CASE(name, bytes, da, sa) \
+        case CI_OP_##name: { \
+            char* ptr; memcpy(&ptr, (char*)frame->slots + op->store.slot, sizeof ptr); \
+            memmove(CI_ALIGNED(ptr + op->store.offset, da), CI_ALIGNED((char*)frame->slots + op->store.src, sa), bytes); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_STORE_OPS(CI_STORE_CASE)
+#undef CI_STORE_CASE
+
+#define CI_STORE_IMM_CASE(name, bytes, da, sa) \
+        case CI_OP_##name: { \
+            char* ptr; memcpy(&ptr, (char*)frame->slots + op->store_imm.slot, sizeof ptr); \
+            memcpy(CI_ALIGNED(ptr + op->store_imm.offset, da), &op->store_imm.immediate, bytes); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_STORE_IMM_OPS(CI_STORE_IMM_CASE)
+#undef CI_STORE_IMM_CASE
+
+#define CI_ZERO_CASE(name, bytes, da, sa) \
+        case CI_OP_##name: { \
+            char* ptr; memcpy(&ptr, (char*)frame->slots + op->zero.slot, sizeof ptr); \
+            memset(CI_ALIGNED(ptr + op->zero.offset, da), 0, bytes); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_ZERO_OPS(CI_ZERO_CASE)
+#undef CI_ZERO_CASE
+
+#define CI_COPY_CASE(name, bytes, da, sa) \
+        case CI_OP_##name: { \
+            memmove(CI_ALIGNED((char*)frame->slots + op->copy.slot, da), CI_ALIGNED((char*)frame->slots + op->copy.src, sa), bytes); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_COPY_OPS(CI_COPY_CASE)
+#undef CI_COPY_CASE
+
+#define CI_MEMCOPY_CASE(name, bytes, da, sa) \
+        case CI_OP_##name: { \
+            char *dst, *src; \
+            memcpy(&dst, (char*)frame->slots + op->memcopy.slot, sizeof dst); \
+            memcpy(&src, (char*)frame->slots + op->memcopy.src, sizeof src); \
+            memmove(CI_ALIGNED(dst + op->memcopy.offset, da), CI_ALIGNED(src + op->memcopy.src_offset, sa), bytes); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_MEMCOPY_OPS(CI_MEMCOPY_CASE)
+#undef CI_MEMCOPY_CASE
+
+#define CI_EXTEND_CASE(name, from, to, value) \
+        case CI_OP_##name: { \
+            const void* src = (char*)frame->slots + op->convert.src; \
+            CiUint128 result = value; \
+            ci_uint128_write((char*)frame->slots + op->convert.slot, to, result); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_EXTEND_OPS(CI_EXTEND_CASE)
+#undef CI_EXTEND_CASE
+
+#define CI_CHECKED_CASE(name, type, wide_type, operation) \
+        case CI_OP_##name: { \
+            type a, b; \
+            memcpy(&a, (char*)frame->slots + op->checked.src, sizeof a); \
+            memcpy(&b, (char*)frame->slots + op->checked.src2, sizeof b); \
+            wide_type wide; \
+            _Bool overflow = operation((wide_type)a, (wide_type)b, &wide); \
+            type result = (type)wide; \
+            overflow |= wide != (wide_type)result; \
+            memcpy((char*)frame->slots + op->checked.result, &result, sizeof result); \
+            *((unsigned char*)frame->slots + op->checked.overflow) = overflow; \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_CHECKED_OPS(CI_CHECKED_CASE)
+#undef CI_CHECKED_CASE
+
+#define CI_OVERFLOW_CASE(name, bits, uns) \
+        case CI_OP_##name: { \
+            CiUint128 value; \
+            ci_uint128_read(&value, (char*)frame->slots + op->checked.src, 16); \
+            *((unsigned char*)frame->slots + op->checked.overflow) = !ci_uint128_fits_integer(value, bits, uns); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_OVERFLOW_OPS(CI_OVERFLOW_CASE)
+#undef CI_OVERFLOW_CASE
+
+#define CI_TRUTH_CASE(name, test) \
+        case CI_OP_##name: { \
+            const void* src = (char*)frame->slots + op->istrue.src; \
+            *((unsigned char*)frame->slots + op->istrue.slot) = (test); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_TRUTH_OPS(CI_TRUTH_CASE)
+#undef CI_TRUTH_CASE
+
+#define CI_ITOF_CASE(name, type, expression, write) \
+        case CI_OP_##name: { \
+            const void* src = (char*)frame->slots + op->convert.src; \
+            void* dest = (char*)frame->slots + op->convert.slot; \
+            type result = expression; \
+            write; \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_ITOF_OPS(CI_ITOF_CASE)
+#undef CI_ITOF_CASE
+
+#define CI_FTOI_CASE(name, bytes, expression) \
+        case CI_OP_##name: { \
+            const void* src = (char*)frame->slots + op->convert.src; \
+            CiUint128 result = expression; \
+            ci_uint128_write((char*)frame->slots + op->convert.slot, bytes, result); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_FTOI_OPS(CI_FTOI_CASE)
+#undef CI_FTOI_CASE
+
+#define CI_FTOF_CASE(name, type, expression, write) \
+        case CI_OP_##name: { \
+            const void* src = (char*)frame->slots + op->convert.src; \
+            void* dest = (char*)frame->slots + op->convert.slot; \
+            type result = expression; \
+            write; \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_FTOF_OPS(CI_FTOF_CASE)
+#undef CI_FTOF_CASE
+
+#define CI_ABI_MOVE_CASE(name, state, bytes, alignment, transfer) \
+        case CI_OP_##name: { \
+            void* reg = CI_ALIGNED((char*)(state) + op->abi_move.reg.capture_offset, alignment); \
+            void* slot = CI_ALIGNED((char*)frame->slots + op->abi_move.slot, alignment); \
+            transfer; \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_ABI_MOVE_OPS(CI_ABI_MOVE_CASE)
+#undef CI_ABI_MOVE_CASE
+
+#define CI_ABI_TRANSFER_CASE(name, transfer) \
+        case CI_OP_##name: { \
+            transfer \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_ABI_TRANSFER_OPS(CI_ABI_TRANSFER_CASE)
+#undef CI_ABI_TRANSFER_CASE
+
+
+#define CI_JUMP_FALSE_CASE(name, bytes) \
+        case CI_OP_##name: { \
+            CiUint128 value; \
+            ci_uint128_read(&value, (char*)frame->slots + op->jump_false.slot, bytes); \
+            frame->pc = !ci_uint128_nonzero(value) ? op->jump_false.jump : frame->pc + 1; \
+            return 0; \
+        }
+        CI_JUMP_FALSE_OPS(CI_JUMP_FALSE_CASE)
+#undef CI_JUMP_FALSE_CASE
+
+#define CI_JUMP_TRUE_CASE(name, bytes) \
+        case CI_OP_##name: { \
+            CiUint128 value; \
+            ci_uint128_read(&value, (char*)frame->slots + op->jump_true.slot, bytes); \
+            frame->pc = ci_uint128_nonzero(value) ? op->jump_true.jump : frame->pc + 1; \
+            return 0; \
+        }
+        CI_JUMP_TRUE_OPS(CI_JUMP_TRUE_CASE)
+#undef CI_JUMP_TRUE_CASE
+
+#define CI_BSWAP_CASE(name, bytes, expression) \
+        case CI_OP_##name: { \
+            const void* src = (char*)frame->slots + op->bswap.src; \
+            ci_write_uint((char*)frame->slots + op->bswap.slot, bytes, expression); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_BSWAP_OPS(CI_BSWAP_CASE)
+#undef CI_BSWAP_CASE
+
+#define CI_BOUNDS_CASE(name, bytes, comparison, signed_index) \
+        case CI_OP_##name: { \
+            uint64_t index = ci_read_uint((char*)frame->slots + op->bounds.src, bytes); \
+            uint64_t length = ci_read_uint((char*)frame->slots + op->bounds.src2, bytes); \
+            if(index comparison length){ \
+                const char* close = op->bounds.inclusive ? "]" : ")"; \
+                if(signed_index) return ci_error(ci, op->loc, "array subscript out of bounds: index %lld not in [0, %llu%s", (long long)index, (unsigned long long)length, close); \
+                return ci_error(ci, op->loc, "array subscript out of bounds: index %llu not in [0, %llu%s", (unsigned long long)index, (unsigned long long)length, close); \
+            } \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_BOUNDS_OPS(CI_BOUNDS_CASE)
+#undef CI_BOUNDS_CASE
+
+#define CI_INDEX_CASE(name, ptr_size, read_index) \
+        case CI_OP_##name: { \
+            const void* src = (char*)frame->slots + op->index.index; \
+            uint64_t index = read_index; \
+            uint64_t base = ci_read_uint((char*)frame->slots + op->index.base, ptr_size); \
+            ci_write_uint((char*)frame->slots + op->index.slot, ptr_size, base + index * op->index.scale); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_INDEX_OPS(CI_INDEX_CASE)
+#undef CI_INDEX_CASE
+
+#define CI_LOAD_BITFIELD_CASE(name, size, value, alignment) \
+        case CI_OP_##name: { \
+            char* ptr; \
+            memcpy(&ptr, (char*)frame->slots + op->load_bf.src, sizeof ptr); \
+            uint64_t result = value; \
+            memcpy(CI_ALIGNED((char*)frame->slots + op->load_bf.slot, alignment), &result, size); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_LOAD_BITFIELD_OPS(CI_LOAD_BITFIELD_CASE)
+#undef CI_LOAD_BITFIELD_CASE
+
+#define CI_LOAD_BITFIELD_128_CASE(name, uns, alignment) \
+        case CI_OP_##name: { \
+            char* ptr; \
+            memcpy(&ptr, (char*)frame->slots + op->load_bf.src, sizeof ptr); \
+            CiUint128 result = ci_bitfield_read128(CI_ALIGNED(ptr + op->load_bf.offset, alignment), op->load_bf.bit_offset, op->load_bf.bit_width); \
+            result = ci_bitfield_extend128(result, op->load_bf.bit_width, !uns); \
+            memcpy(CI_ALIGNED((char*)frame->slots + op->load_bf.slot, alignment), &result, 16); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_LOAD_BITFIELD_128_OPS(CI_LOAD_BITFIELD_128_CASE)
+#undef CI_LOAD_BITFIELD_128_CASE
+
+#define CI_LOAD_BITFIELD_BYTES_CASE(name, size, value) \
+        case CI_OP_##name: { \
+            char* ptr; \
+            memcpy(&ptr, (char*)frame->slots + op->load_bf.src, sizeof ptr); \
+            uint64_t result = value; \
+            memcpy((char*)frame->slots + op->load_bf.slot, &result, size); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_LOAD_BITFIELD_BYTES_OPS(CI_LOAD_BITFIELD_BYTES_CASE)
+#undef CI_LOAD_BITFIELD_BYTES_CASE
+
+#define CI_LOAD_BITFIELD_BYTES_128_CASE(name, uns) \
+        case CI_OP_##name: { \
+            char* ptr; \
+            memcpy(&ptr, (char*)frame->slots + op->load_bf.src, sizeof ptr); \
+            CiUint128 result = ci_bitfield_read128_bytes(ptr + op->load_bf.offset, op->load_bf.bit_offset, op->load_bf.bit_width); \
+            result = ci_bitfield_extend128(result, op->load_bf.bit_width, !uns); \
+            memcpy((char*)frame->slots + op->load_bf.slot, &result, 16); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_LOAD_BITFIELD_BYTES_128_OPS(CI_LOAD_BITFIELD_BYTES_128_CASE)
+#undef CI_LOAD_BITFIELD_BYTES_128_CASE
+
+#define CI_STORE_BITFIELD_CASE(name, size, alignment) \
+        case CI_OP_##name: { \
+            char* ptr; \
+            memcpy(&ptr, (char*)frame->slots + op->store_bf.slot, sizeof ptr); \
+            uint64_t value = ci_read_uint(CI_ALIGNED((char*)frame->slots + op->store_bf.src, alignment), size); \
+            ci_bitfield_write(CI_ALIGNED(ptr + op->store_bf.offset, alignment), size, op->store_bf.bit_offset, op->store_bf.bit_width, value); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_STORE_BITFIELD_OPS(CI_STORE_BITFIELD_CASE)
+#undef CI_STORE_BITFIELD_CASE
+
+#define CI_STORE_BITFIELD_128_CASE(name, alignment) \
+        case CI_OP_##name: { \
+            char* ptr; \
+            memcpy(&ptr, (char*)frame->slots + op->store_bf.slot, sizeof ptr); \
+            CiUint128 value = ci_read_u128(CI_ALIGNED((char*)frame->slots + op->store_bf.src, alignment)); \
+            ci_bitfield_write_128(CI_ALIGNED(ptr + op->store_bf.offset, alignment), op->store_bf.bit_offset, op->store_bf.bit_width, value); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_STORE_BITFIELD_128_OPS(CI_STORE_BITFIELD_128_CASE)
+#undef CI_STORE_BITFIELD_128_CASE
+
+#define CI_STORE_BITFIELD_BYTES_CASE(name, size) \
+        case CI_OP_##name: { \
+            char* ptr; \
+            memcpy(&ptr, (char*)frame->slots + op->store_bf.slot, sizeof ptr); \
+            uint64_t value = ci_read_uint((char*)frame->slots + op->store_bf.src, size); \
+            ci_bitfield_write_bytes(ptr + op->store_bf.offset, op->store_bf.bit_offset, op->store_bf.bit_width, value); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_STORE_BITFIELD_BYTES_OPS(CI_STORE_BITFIELD_BYTES_CASE)
+#undef CI_STORE_BITFIELD_BYTES_CASE
+
+#define CI_STORE_BITFIELD_BYTES_128_CASE(name, unused) \
+        case CI_OP_##name: { \
+            char* ptr; \
+            memcpy(&ptr, (char*)frame->slots + op->store_bf.slot, sizeof ptr); \
+            CiUint128 value = ci_read_u128((char*)frame->slots + op->store_bf.src); \
+            ci_bitfield_write_128_bytes(ptr + op->store_bf.offset, op->store_bf.bit_offset, op->store_bf.bit_width, value); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_STORE_BITFIELD_BYTES_128_OPS(CI_STORE_BITFIELD_BYTES_128_CASE)
+#undef CI_STORE_BITFIELD_BYTES_128_CASE
+
+#define CI_CALL_CASE(name, resolve) \
+        case CI_OP_##name: { \
+            CiCallDescriptor* d = op->call.descrip; \
+            NcCallState* state = &frame->stack->registers; \
+            void (*fn)(void); \
+            const CcFunc* func; \
+            resolve \
+            if(func && func->defined){ \
+                int err = ci_make_abi_call_frame(ci, frame, func, op, child); \
+                return err ? err : CI_STEP_ENTER_FRAME; \
+            } \
+            if(!fn) return ci_error(ci, op->loc, "call through null function pointer"); \
+            NcCallState native = *state; \
+            int err = d->invoke(d->abi, fn, &native); \
+            if(err) return err; \
+            size_t offset = nc_capture_result_offset(d->abi->target); \
+            memcpy((char*)state + offset, (char*)&native + offset, nc_capture_size(d->abi->target) - offset); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_CALL_OPS(CI_CALL_CASE)
+#undef CI_CALL_CASE
+
+#define CI_SWITCH_DENSE_CASE(name, unused) \
+        case CI_OP_##name: { \
+            uint64_t value = ci_read_uint((char*)frame->slots + op->switch_.slot, 8); \
+            const CiSwitchTable* table = op->switch_.table; \
+            uint64_t index = value - table->data[0].low; \
+            frame->pc = index < table->count ? table->data[index].target : op->switch_.jump; \
+            return 0; \
+        }
+        CI_SWITCH_DENSE_OPS(CI_SWITCH_DENSE_CASE)
+#undef CI_SWITCH_DENSE_CASE
+
+#define CI_SWITCH_RANGE_CASE(name, sign) \
+        case CI_OP_##name: { \
+            uint64_t value = ci_read_uint((char*)frame->slots + op->switch_.slot, 8) ^ (sign); \
+            const CiSwitchTable* table = op->switch_.table; \
+            size_t lo = 0, hi = table->count; \
+            while(lo < hi){ \
+                size_t mid = lo + (hi - lo) / 2; \
+                if((table->data[mid].high ^ (sign)) < value) lo = mid + 1; \
+                else if((table->data[mid].low ^ (sign)) > value) hi = mid; \
+                else { frame->pc = table->data[mid].target; return 0; } \
+            } \
+            frame->pc = op->switch_.jump; \
+            return 0; \
+        }
+        CI_SWITCH_RANGE_OPS(CI_SWITCH_RANGE_CASE)
+#undef CI_SWITCH_RANGE_CASE
+
+#define CI_BUILTIN_CASE(name, action) \
+        case CI_OP_##name: { \
+            action \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_BUILTIN_OPS(CI_BUILTIN_CASE)
+#undef CI_BUILTIN_CASE
+
+#define CI_ALLOCA_CASE(name, allocate) \
+        case CI_OP_##name: { \
+            size_t size; \
+            memcpy(&size, (char*)frame->slots + op->alloca.src, sizeof size); \
+            CiStack* stack; \
+            int err = ci_frame_stack(ci, frame, &stack); \
+            if(err) return err; \
+            void* ptr = allocate(stack, size, op->alloca.alignment); \
+            if(!ptr) return CI_OOM_ERROR; \
+            memcpy((char*)frame->slots + op->alloca.slot, &ptr, sizeof ptr); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_ALLOCA_OPS(CI_ALLOCA_CASE)
+#undef CI_ALLOCA_CASE
+
+#define CI_FENCE_CASE(name, fence) \
+        case CI_OP_##name: { \
+            fence \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_FENCE_OPS(CI_FENCE_CASE)
+#undef CI_FENCE_CASE
+
+#define CI_BIT_COUNT_CASE(name, bits, mask, expression) \
+        case CI_OP_##name: { \
+            CiUint128 value; \
+            ci_uint128_read(&value, (char*)frame->slots + op->bit_builtin.src, bits / 8); \
+            uint64_t lo = ci_uint128_lo(value), hi = ci_uint128_hi(value); \
+            (void)lo; (void)hi; \
+            uint32_t result = (uint32_t)(expression); \
+            memcpy((char*)frame->slots + op->bit_builtin.slot, &result, 4); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_BIT_COUNT_OPS(CI_BIT_COUNT_CASE)
+#undef CI_BIT_COUNT_CASE
+
+#define CI_SINGLE_BIT_CASE(name, bits) \
+        case CI_OP_##name: { \
+            CiUint128 value; \
+            ci_uint128_read(&value, (char*)frame->slots + op->bit_builtin.src, bits / 8); \
+            uint32_t result = popcount_64(ci_uint128_lo(value)) + popcount_64(ci_uint128_hi(value)) == 1; \
+            memcpy((char*)frame->slots + op->bit_builtin.slot, &result, 4); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_SINGLE_BIT_OPS(CI_SINGLE_BIT_CASE)
+#undef CI_SINGLE_BIT_CASE
+
+#define CI_BIT_CEIL_CASE(name, bits, mask, calculate) \
+        case CI_OP_##name: { \
+            CiUint128 value; \
+            ci_uint128_read(&value, (char*)frame->slots + op->bit_builtin.src, bits / 8); \
+            uint64_t lo = ci_uint128_lo(value), hi = ci_uint128_hi(value); \
+            CiUint128 result = ci_uint128_from_uint64(0); \
+            calculate \
+            ci_uint128_write((char*)frame->slots + op->bit_builtin.slot, bits / 8, result); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_BIT_CEIL_OPS(CI_BIT_CEIL_CASE)
+#undef CI_BIT_CEIL_CASE
+
+#define CI_BIT_FLOOR_CASE(name, bits, mask, calculate) \
+        case CI_OP_##name: { \
+            CiUint128 value; \
+            ci_uint128_read(&value, (char*)frame->slots + op->bit_builtin.src, bits / 8); \
+            uint64_t lo = ci_uint128_lo(value), hi = ci_uint128_hi(value); \
+            CiUint128 result = ci_uint128_from_uint64(0); \
+            calculate \
+            ci_uint128_write((char*)frame->slots + op->bit_builtin.slot, bits / 8, result); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_BIT_FLOOR_OPS(CI_BIT_FLOOR_CASE)
+#undef CI_BIT_FLOOR_CASE
+
+#define CI_ROTATE_CASE(name, bits, left, right) \
+        case CI_OP_##name: { \
+            CiUint128 value; \
+            ci_uint128_read(&value, (char*)frame->slots + op->bit_builtin.src, bits / 8); \
+            uint32_t shift = (uint32_t)(ci_read_uint((char*)frame->slots + op->bit_builtin.src2, 8) % bits); \
+            CiUint128 result = ci_uint128_or(left, right); \
+            ci_uint128_write((char*)frame->slots + op->bit_builtin.slot, bits / 8, result); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_ROTATE_OPS(CI_ROTATE_CASE)
+#undef CI_ROTATE_CASE
+
+#define CI_CRC_CASE(name, bytes) \
+        case CI_OP_##name: { \
+            uint32_t seed = (uint32_t)ci_read_uint((char*)frame->slots + op->bit_builtin.src, 4); \
+            uint64_t value = ci_read_uint((char*)frame->slots + op->bit_builtin.src2, bytes); \
+            uint32_t result = drp_crc32c(seed, value, bytes); \
+            memcpy((char*)frame->slots + op->bit_builtin.slot, &result, 4); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_CRC_OPS(CI_CRC_CASE)
+#undef CI_CRC_CASE
+
+#define CI_ATOMIC_LOAD_CASE(name, bits) \
+        case CI_OP_##name: { \
+            char* ptr; \
+            memcpy(&ptr, (char*)frame->slots + op->atomic_load.src, sizeof ptr); \
+            ptr += op->atomic_load.offset; \
+            void* dest = (char*)frame->slots + op->atomic_load.slot; \
+            CI_ATOMIC_LOAD##bits(ptr, dest); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_ATOMIC_LOAD_OPS(CI_ATOMIC_LOAD_CASE)
+#undef CI_ATOMIC_LOAD_CASE
+
+#define CI_ATOMIC_STORE_CASE(name, bits) \
+        case CI_OP_##name: { \
+            char* ptr; \
+            memcpy(&ptr, (char*)frame->slots + op->atomic_store.slot, sizeof ptr); \
+            ptr += op->atomic_store.offset; \
+            void* src = (char*)frame->slots + op->atomic_store.src; \
+            CI_ATOMIC_STORE##bits(ptr, src); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_ATOMIC_STORE_OPS(CI_ATOMIC_STORE_CASE)
+#undef CI_ATOMIC_STORE_CASE
+
+#define CI_ATOMIC_RMW_CASE(name, action) \
+        case CI_OP_##name: { \
+            char* ptr; \
+            memcpy(&ptr, (char*)frame->slots + op->atomic_rmw.src, sizeof ptr); \
+            ptr += op->atomic_rmw.offset; \
+            void* old = (char*)frame->slots + op->atomic_rmw.slot; \
+            void* value = (char*)frame->slots + op->atomic_rmw.src2; \
+            action(ptr, value, old); \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_ATOMIC_RMW_OPS(CI_ATOMIC_RMW_CASE)
+#undef CI_ATOMIC_RMW_CASE
+
+#define CI_ATOMIC_CAS_CASE(name, bits, weak) \
+        case CI_OP_##name: { \
+            char* ptr; \
+            memcpy(&ptr, (char*)frame->slots + op->atomic_cas.src, sizeof ptr); \
+            ptr += op->atomic_cas.offset; \
+            void* expected = (char*)frame->slots + op->atomic_cas.expected; \
+            void* desired = (char*)frame->slots + op->atomic_cas.desired; \
+            _Bool result; \
+            CI_ATOMIC_CAS##bits(ptr, expected, desired, weak, result); \
+            *((unsigned char*)frame->slots + op->atomic_cas.slot) = result; \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_ATOMIC_CAS_OPS(CI_ATOMIC_CAS_CASE)
+#undef CI_ATOMIC_CAS_CASE
+
+#define CI_VA_SYSV_CASE(name, unused) \
+        case CI_OP_##name: { \
+            void* ap; \
+            memcpy(&ap, (char*)frame->slots + op->va_arg_.src, sizeof ap); \
+            void** pointers = (void**)((char*)frame->slots + op->va_arg_.pointers); \
+            NcSysvVaListTag* va = ap; \
+            unsigned ng = op->va_arg_.gp, nf = op->va_arg_.fp; \
+            if(va->gp_offset + ng * 8 <= 48 && va->fp_offset + nf * 16 <= 176){ \
+                pointers[0] = (char*)va->reg_save_area + va->gp_offset; \
+                pointers[1] = (char*)va->reg_save_area + va->fp_offset; \
+                va->gp_offset += ng * 8; \
+                va->fp_offset += nf * 16; \
+                frame->pc++; \
+                return 0; \
+            } \
+            void** stack = &va->overflow_arg_area; \
+            void* source = ci_va_stack_source(stack, op->va_arg_.stack_mask, op->va_arg_.stack_stride); \
+            pointers[0] = source; \
+            frame->pc += 2 + op->va_arg_.count; \
+            return 0; \
+        }
+        CI_VA_SYSV_OPS(CI_VA_SYSV_CASE)
+#undef CI_VA_SYSV_CASE
+
+#define CI_VA_ARM_CASE(name, align_gp) \
+        case CI_OP_##name: { \
+            void* ap; \
+            memcpy(&ap, (char*)frame->slots + op->va_arg_.src, sizeof ap); \
+            void** pointers = (void**)((char*)frame->slots + op->va_arg_.pointers); \
+            NcAapcs64VaList* va = ap; \
+            unsigned ng = op->va_arg_.gp, nf = op->va_arg_.fp; \
+            int go = va->__gr_offs, fo = va->__vr_offs; \
+            align_gp \
+            if((!ng || (go < 0 && go + (int)ng * 8 <= 0)) && (!nf || (fo < 0 && fo + (int)nf * 16 <= 0))){ \
+                pointers[0] = ng ? (char*)va->__gr_top + go : NULL; \
+                pointers[1] = nf ? (char*)va->__vr_top + fo : NULL; \
+                if(ng) va->__gr_offs = go + (int)ng * 8; \
+                if(nf) va->__vr_offs = fo + (int)nf * 16; \
+                frame->pc++; \
+                return 0; \
+            } \
+            if(ng) va->__gr_offs = 0; \
+            if(nf) va->__vr_offs = 0; \
+            void** stack = &va->__stack; \
+            void* source = ci_va_stack_source(stack, op->va_arg_.stack_mask, op->va_arg_.stack_stride); \
+            pointers[0] = source; \
+            frame->pc += 2 + op->va_arg_.count; \
+            return 0; \
+        }
+        CI_VA_ARM_OPS(CI_VA_ARM_CASE)
+#undef CI_VA_ARM_CASE
+
+#define CI_VA_ARM_INDIRECT_CASE(name, unused) \
+        case CI_OP_##name: { \
+            void* ap; \
+            memcpy(&ap, (char*)frame->slots + op->va_arg_.src, sizeof ap); \
+            void** pointers = (void**)((char*)frame->slots + op->va_arg_.pointers); \
+            NcAapcs64VaList* va = ap; \
+            void* location; \
+            if(va->__gr_offs < 0 && va->__gr_offs + 8 <= 0){ \
+                location = (char*)va->__gr_top + va->__gr_offs; \
+                va->__gr_offs += 8; \
+            } \
+            else { \
+                va->__gr_offs = 0; \
+                location = ci_va_stack_source(&va->__stack, 7, 8); \
+            } \
+            void* source; \
+            memcpy(&source, location, sizeof source); \
+            pointers[0] = source; \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_VA_ARM_INDIRECT_OPS(CI_VA_ARM_INDIRECT_CASE)
+#undef CI_VA_ARM_INDIRECT_CASE
+
+#define CI_VA_STACK_CASE(name, stack_address, indirection) \
+        case CI_OP_##name: { \
+            void* ap; \
+            memcpy(&ap, (char*)frame->slots + op->va_arg_.src, sizeof ap); \
+            void** pointers = (void**)((char*)frame->slots + op->va_arg_.pointers); \
+            void* source = ci_va_stack_source(stack_address, op->va_arg_.stack_mask, op->va_arg_.stack_stride); \
+            indirection \
+            pointers[0] = source; \
+            frame->pc++; \
+            return 0; \
+        }
+        CI_VA_STACK_OPS(CI_VA_STACK_CASE)
+#undef CI_VA_STACK_CASE
+
+#undef CI_ALIGNED
         case CI_OP_CAPTURE_BACKTRACE: {
-            void* result = op->capture_backtrace.slot_size ? (char*)frame->slots + op->capture_backtrace.slot : NULL;
+            void* result = (char*)frame->slots + op->capture_backtrace.slot;
             _Static_assert(sizeof(SrcLoc) == sizeof(void*), "backtrace entry size");
             void** buffer;
             int capacity, count = 0;
@@ -537,41 +1291,11 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 if(!f->ops || f->pc >= f->op_count) continue;
                 CI_INLINE_MEMCPY(&buffer[count++], &f->ops[f->pc].loc, sizeof(SrcLoc));
             }
-            if(op->capture_backtrace.slot_size) CI_INLINE_MEMCPY(result, &count, sizeof count);
+            CI_INLINE_MEMCPY(result, &count, sizeof count);
             frame->pc++;
             return 0;
         }
-        case CI_OP_CONST: {
-            ci_copy((char*)frame->slots + op->constant.slot, op->constant.immediate, op->constant.immsize);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_COPY: {
-            ci_copy((char*)frame->slots + op->copy.slot, (char*)frame->slots + op->copy.src, op->copy.slot_size);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_INDEX: {
-            const void* src = (char*)frame->slots + op->index.index;
-            if(op->index.ptr_size == 8 && (op->index.index_size == 4 || op->index.index_size == 8)){
-                uint64_t index;
-                if(op->index.index_size == 8)
-                    index = ci_read_uint(src, 8);
-                else if(op->index.index_unsigned)
-                    index = ci_read_uint(src, 4);
-                else
-                    index = (uint64_t)ci_read_int(src, 4);
-                uint64_t base = ci_read_uint((char*)frame->slots + op->index.base, 8);
-                ci_write_uint((char*)frame->slots + op->index.slot, 8, base + index * op->index.scale);
-            }
-            else {
-                uint64_t index = op->index.index_unsigned ? ci_read_uint(src, op->index.index_size) : (uint64_t)ci_read_int(src, op->index.index_size);
-                uint64_t base = ci_read_uint((char*)frame->slots + op->index.base, op->index.ptr_size);
-                ci_write_uint((char*)frame->slots + op->index.slot, op->index.ptr_size, base + index * op->index.scale);
-            }
-            frame->pc++;
-            return 0;
-        }
+
 #define CI_INTEGER(name, suffix, bits, type, rhs, expression) \
         case CI_OP_##name##suffix: { \
             type a = (type)ci_read_uint((char*)frame->slots + op->alu.src, bits / 8); \
@@ -645,10 +1369,10 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->cmp.src2, sizeof b); \
             _Bool result = (expression); \
             if(branch){ \
-                frame->pc = result == op->cmp_jump.when_true ? op->cmp_jump.jump : frame->pc + 1; \
+                frame->pc = result ? op->cmp_jump.jump : frame->pc + 1; \
             } \
             else { \
-                ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, result); \
+                *((unsigned char*)frame->slots + op->cmp.slot) = (unsigned char)result; \
                 frame->pc++; \
             } \
             return 0; \
@@ -676,7 +1400,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             ci_uint128_read(&a, (char*)frame->slots + op->cmp.src, 16); \
             ci_uint128_read(&b, (char*)frame->slots + op->cmp.src2, 16); \
             _Bool result = (expression); \
-            ci_write_uint((char*)frame->slots + op->cmp.slot, op->cmp.slot_size, result); \
+            *((unsigned char*)frame->slots + op->cmp.slot) = (unsigned char)result; \
             frame->pc++; \
             return 0; \
         }
@@ -691,8 +1415,8 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         CI_COMPARE128(SGE, ci_int128_ge(ci_int128_from_uint128(a), ci_int128_from_uint128(b)))
         CI_COMPARE128(UGE, ci_uint128_ge(a, b))
 #undef CI_COMPARE128
-#define CI_FALU16_CASE(name, expression) \
-        case CI_OP_##name##16: { \
+#define CI_FALU16_CASE(name, suffix, expression) \
+        case CI_OP_##name##suffix: { \
             uint16_t a = (uint16_t)ci_read_uint((char*)frame->slots + op->falu32.src, 2); \
             uint16_t b = (uint16_t)ci_read_uint((char*)frame->slots + op->falu32.src2, 2); \
             (void)b; \
@@ -702,11 +1426,16 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             frame->pc++; \
             return 0; \
         }
-        CI_FALU16_CASE(FADD, ci_float16_add(a, b, op->falu32.is_brian_float))
-        CI_FALU16_CASE(FSUB, ci_float16_sub(a, b, op->falu32.is_brian_float))
-        CI_FALU16_CASE(FMUL, ci_float16_mul(a, b, op->falu32.is_brian_float))
-        CI_FALU16_CASE(FDIV, ci_float16_div(a, b, op->falu32.is_brian_float))
-        CI_FALU16_CASE(FNEG, ci_float16_neg(a))
+        CI_FALU16_CASE(FADD, 16, ci_float16_add(a, b, 0))
+        CI_FALU16_CASE(FSUB, 16, ci_float16_sub(a, b, 0))
+        CI_FALU16_CASE(FMUL, 16, ci_float16_mul(a, b, 0))
+        CI_FALU16_CASE(FDIV, 16, ci_float16_div(a, b, 0))
+        CI_FALU16_CASE(FNEG, 16, ci_float16_neg(a))
+        CI_FALU16_CASE(FADD, _BF16, ci_float16_add(a, b, 1))
+        CI_FALU16_CASE(FSUB, _BF16, ci_float16_sub(a, b, 1))
+        CI_FALU16_CASE(FMUL, _BF16, ci_float16_mul(a, b, 1))
+        CI_FALU16_CASE(FDIV, _BF16, ci_float16_div(a, b, 1))
+        CI_FALU16_CASE(FNEG, _BF16, ci_float16_neg(a))
 #undef CI_FALU16_CASE
 #define CI_FALU32_CASE(name, expression) \
         case CI_OP_##name##32: { \
@@ -774,22 +1503,28 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         CI_FALU128_CASE(FDIV, ci_float128_div(a, b))
         CI_FALU128_CASE(FNEG, ci_float128_neg(a))
 #undef CI_FALU128_CASE
-#define CI_FCMP16_CASE(name, expression) \
-        case CI_OP_##name##16: { \
+#define CI_FCMP16_CASE(name, suffix, expression) \
+        case CI_OP_##name##suffix: { \
             uint16_t a = (uint16_t)ci_read_uint((char*)frame->slots + op->fcmp32.src, 2); \
             uint16_t b = (uint16_t)ci_read_uint((char*)frame->slots + op->fcmp32.src2, 2); \
             _Bool r; \
             r = (expression); \
-            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, r); \
+            *((unsigned char*)frame->slots + op->fcmp32.slot) = (unsigned char)r; \
             frame->pc++; \
             return 0; \
         }
-        CI_FCMP16_CASE(FEQ,  ci_float16_eq(a, b, op->fcmp32.is_brian_float))
-        CI_FCMP16_CASE(FNE, !ci_float16_eq(a, b, op->fcmp32.is_brian_float))
-        CI_FCMP16_CASE(FLT,  ci_float16_lt(a, b, op->fcmp32.is_brian_float))
-        CI_FCMP16_CASE(FGT,  ci_float16_lt(b, a, op->fcmp32.is_brian_float))
-        CI_FCMP16_CASE(FLE,  ci_float16_le(a, b, op->fcmp32.is_brian_float))
-        CI_FCMP16_CASE(FGE,  ci_float16_le(b, a, op->fcmp32.is_brian_float))
+        CI_FCMP16_CASE(FEQ, 16,  ci_float16_eq(a, b, 0))
+        CI_FCMP16_CASE(FNE, 16, !ci_float16_eq(a, b, 0))
+        CI_FCMP16_CASE(FLT, 16,  ci_float16_lt(a, b, 0))
+        CI_FCMP16_CASE(FGT, 16,  ci_float16_lt(b, a, 0))
+        CI_FCMP16_CASE(FLE, 16,  ci_float16_le(a, b, 0))
+        CI_FCMP16_CASE(FGE, 16,  ci_float16_le(b, a, 0))
+        CI_FCMP16_CASE(FEQ, _BF16,  ci_float16_eq(a, b, 1))
+        CI_FCMP16_CASE(FNE, _BF16, !ci_float16_eq(a, b, 1))
+        CI_FCMP16_CASE(FLT, _BF16,  ci_float16_lt(a, b, 1))
+        CI_FCMP16_CASE(FGT, _BF16,  ci_float16_lt(b, a, 1))
+        CI_FCMP16_CASE(FLE, _BF16,  ci_float16_le(a, b, 1))
+        CI_FCMP16_CASE(FGE, _BF16,  ci_float16_le(b, a, 1))
 #undef CI_FCMP16_CASE
 #define CI_FCMP32_CASE(name, expression) \
         case CI_OP_##name##32: { \
@@ -798,7 +1533,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->fcmp32.src2, sizeof b); \
             uint64_t res; \
             res = (expression); \
-            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, res); \
+            *((unsigned char*)frame->slots + op->fcmp32.slot) = (unsigned char)res; \
             frame->pc++; \
             return 0; \
         }
@@ -816,7 +1551,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->fcmp64.src2, sizeof b); \
             uint64_t res; \
             res = (expression); \
-            ci_write_uint((char*)frame->slots + op->fcmp64.slot, op->fcmp64.slot_size, res); \
+            *((unsigned char*)frame->slots + op->fcmp64.slot) = (unsigned char)res; \
             frame->pc++; \
             return 0; \
         }
@@ -833,7 +1568,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             CiFloat80 b = ci_float80_read((char*)frame->slots + op->fcmp32.src2); \
             _Bool r; \
             r = (expression); \
-            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, r); \
+            *((unsigned char*)frame->slots + op->fcmp32.slot) = (unsigned char)r; \
             frame->pc++; return 0; \
         }
         CI_FCMP80_CASE(FEQ, ci_float80_eq(a, b))
@@ -849,7 +1584,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             CiFloat128 b = ci_float128_read((char*)frame->slots + op->fcmp32.src2); \
             _Bool r; \
             r = (expression); \
-            ci_write_uint((char*)frame->slots + op->fcmp32.slot, op->fcmp32.slot_size, r); \
+            *((unsigned char*)frame->slots + op->fcmp32.slot) = (unsigned char)r; \
             frame->pc++; return 0; \
         }
         CI_FCMP128_CASE(FEQ, ci_float128_eq(a, b))
@@ -859,33 +1594,7 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
         CI_FCMP128_CASE(FGT, ci_float128_lt(b, a))
         CI_FCMP128_CASE(FGE, ci_float128_le(b, a))
 #undef CI_FCMP128_CASE
-        case CI_OP_CHECKED: {
-            // __builtin_{add,sub,mul}_overflow: compute in exact 128-bit
-            // precision (operands are <= 64-bit), truncate to the destination
-            // type, and flag overflow when the exact value doesn't fit.
-            const void* s1 = (char*)frame->slots + op->checked.src;
-            const void* s2 = (char*)frame->slots + op->checked.src2;
-            CiInt128 a = op->checked.src_unsigned
-                ? ci_int128_from_uint64(ci_read_uint(s1, op->checked.src_size))
-                : ci_int128_from_int64(ci_read_int(s1, op->checked.src_size));
-            CiInt128 b = op->checked.src2_unsigned
-                ? ci_int128_from_uint64(ci_read_uint(s2, op->checked.src2_size))
-                : ci_int128_from_int64(ci_read_int(s2, op->checked.src2_size));
-            CiInt128 r;
-            switch((CiCheckedOp)op->checked.op){
-                case CI_CHK_ADD: r = ci_int128_add(a, b); break;
-                case CI_CHK_SUB: r = ci_int128_sub(a, b); break;
-                case CI_CHK_MUL: r = ci_int128_from_uint128(ci_uint128_mul(ci_uint128_from_int128(a), ci_uint128_from_int128(b))); break;
-                DRP_CASES_EXHAUSTED;
-            }
-            uint32_t dsz = op->checked.res_size;
-            uint64_t truncated = ci_int128_lo(r);
-            ci_write_uint((char*)frame->slots + op->checked.result, dsz, truncated);
-            _Bool overflowed = !ci_uint128_fits_integer(ci_uint128_from_int128(r), dsz * 8, op->checked.res_unsigned);
-            *((char*)frame->slots + op->checked.overflow) = (char)overflowed;
-            frame->pc++;
-            return 0;
-        }
+
         case CI_OP_PROPAGATE_ERROR: {
             int err;
             CI_INLINE_MEMCPY(&err, (char*)frame->slots + op->propagate_error.src, sizeof err);
@@ -898,274 +1607,6 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
                 return ci_error(ci, op->loc, "%s", op->check.message);
             frame->pc++;
             return 0;
-        case CI_OP_BIT_BUILTIN: {
-            if(op->bit_builtin.op >= CC_BIT_CRC32C8 && op->bit_builtin.op <= CC_BIT_CRC32C64){
-                uint32_t seed = (uint32_t)ci_read_uint((char*)frame->slots + op->bit_builtin.src, 4);
-                uint64_t value = ci_read_uint((char*)frame->slots + op->bit_builtin.src2, op->bit_builtin.src2_size);
-                ci_write_uint((char*)frame->slots + op->bit_builtin.slot, 4, drp_crc32c(seed, value, op->bit_builtin.src2_size));
-                frame->pc++;
-                return 0;
-            }
-            CiUint128 v, result,
-                      arg = ci_uint128_from_uint64(0);
-            ci_uint128_read(&v, (char*)frame->slots + op->bit_builtin.src, op->bit_builtin.src_size);
-            if(op->bit_builtin.src2_size)
-                ci_uint128_read(&arg, (char*)frame->slots + op->bit_builtin.src2, op->bit_builtin.src2_size);
-            cc_bit_builtin(op->bit_builtin.op, v, op->bit_builtin.src_size*8, arg, op->bit_builtin.src2_size != 0, &result);
-            ci_uint128_write((char*)frame->slots + op->bit_builtin.slot, op->bit_builtin.slot_size, result);
-            frame->pc++;
-            return 0;
-        }
-
-        case CI_OP_ITOF: {
-            if(op->convert.dst_float == 16){
-                const void* src = (char*)frame->slots + op->convert.src;
-                _Bool is_brian = op->convert.dst_is_brian_float;
-                uint16_t r;
-                if(op->convert.src_size > 8){
-                    CiUint128 v;
-                    ci_uint128_read(&v, src, op->convert.src_size);
-                    r = ci_float16_from_uint128(v, op->convert.is_unsigned, is_brian);
-                }
-                else if(op->convert.is_unsigned){
-                    uint64_t v = ci_read_uint(src, op->convert.src_size);
-                    if(op->convert.src_size <= 4)
-                        r = ci_float16_from_uint32((uint32_t)v, is_brian);
-                    else
-                        r = ci_float16_from_uint64(v, is_brian);
-                }
-                else {
-                    int64_t v = ci_read_int(src, op->convert.src_size);
-                    if(op->convert.src_size <= 4)
-                        r = ci_float16_from_int32((int32_t)v, is_brian);
-                    else
-                        r = ci_float16_from_int64(v, is_brian);
-                }
-                ci_write_uint((char*)frame->slots + op->convert.slot, 2, r);
-                frame->pc++;
-                return 0;
-            }
-            if(op->convert.dst_float == 80){
-                const void* src = (char*)frame->slots + op->convert.src;
-                void* dest = (char*)frame->slots + op->convert.slot;
-                CiUint128 v;
-                if(op->convert.src_size > 8) ci_uint128_read(&v, src, op->convert.src_size);
-                else v = op->convert.is_unsigned ? ci_uint128_from_uint64(ci_read_uint(src, op->convert.src_size)) : ci_uint128_from_int64(ci_read_int(src, op->convert.src_size));
-                ci_float80_write(dest, op->convert.slot_size, ci_float80_from_uint128(v, op->convert.is_unsigned));
-                frame->pc++; return 0;
-            }
-            if(op->convert.dst_float == 128){
-                const void* src = (char*)frame->slots + op->convert.src;
-                void* dest = (char*)frame->slots + op->convert.slot;
-                CiUint128 v;
-                if(op->convert.src_size > 8) ci_uint128_read(&v, src, op->convert.src_size);
-                else v = op->convert.is_unsigned ? ci_uint128_from_uint64(ci_read_uint(src, op->convert.src_size)) : ci_uint128_from_int64(ci_read_int(src, op->convert.src_size));
-                ci_float128_write(dest, op->convert.slot_size, ci_float128_from_uint128(v, op->convert.is_unsigned));
-                frame->pc++; return 0;
-            }
-
-            const void* src = (char*)frame->slots + op->itof.src;
-            void* dest = (char*)frame->slots + op->itof.slot;
-            if(op->itof.src_size > 8){
-                CiUint128 v;
-                ci_uint128_read(&v, src, op->itof.src_size);
-                if(op->itof.slot_size == 4){
-                    float f = ci_uint128_to_float(v, op->itof.is_unsigned);
-                    CI_INLINE_MEMCPY(dest, &f, sizeof f);
-                }
-                else {
-                    double d = ci_uint128_to_double(v, op->itof.is_unsigned);
-                    CI_INLINE_MEMCPY(dest, &d, sizeof d);
-                }
-            }
-            else if(op->itof.slot_size == 4){
-                float f;
-                if(op->itof.is_unsigned)
-                    f = (float)ci_read_uint(src, op->itof.src_size);
-                else
-                    f = (float)ci_read_int(src, op->itof.src_size);
-                CI_INLINE_MEMCPY(dest, &f, sizeof f);
-            }
-            else {
-                double d;
-                if(op->itof.is_unsigned)
-                    d = (double)ci_read_uint(src, op->itof.src_size);
-                else
-                    d = (double)ci_read_int(src, op->itof.src_size);
-                CI_INLINE_MEMCPY(dest, &d, sizeof d);
-            }
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_FTOI: {
-            if(op->convert.src_float == 16){
-                uint16_t bits = (uint16_t)ci_read_uint((char*)frame->slots + op->convert.src, 2);
-                _Bool is_brian = op->convert.src_is_brian_float;
-                void* dest = (char*)frame->slots + op->convert.slot;
-                if(op->convert.slot_size > 8)
-                    ci_uint128_write(dest, op->convert.slot_size, ci_float16_to_uint128(bits, is_brian));
-                else {
-                    uint64_t v;
-                    if(op->convert.is_unsigned){
-                        if(op->convert.slot_size <= 4)
-                            v = ci_float16_to_uint32(bits, is_brian);
-                        else
-                            v = ci_float16_to_uint64(bits, is_brian);
-                    }
-                    else {
-                        if(op->convert.slot_size <= 4)
-                            v = (uint64_t)ci_float16_to_int32(bits, is_brian);
-                        else
-                            v = (uint64_t)ci_float16_to_int64(bits, is_brian);
-                    }
-                    ci_write_uint(dest, op->convert.slot_size, v);
-                }
-                frame->pc++;
-                return 0;
-            }
-            if(op->convert.src_float == 80){
-                const void* src = (char*)frame->slots + op->convert.src;
-                void* dest = (char*)frame->slots + op->convert.slot;
-                CiUint128 v = ci_float80_to_uint128(ci_float80_read(src));
-                ci_uint128_write(dest, op->convert.slot_size, v);
-                frame->pc++; return 0;
-            }
-            if(op->convert.src_float == 128){
-                const void* src = (char*)frame->slots + op->convert.src;
-                void* dest = (char*)frame->slots + op->convert.slot;
-                CiUint128 v = ci_float128_to_uint128(ci_float128_read(src));
-                ci_uint128_write(dest, op->convert.slot_size, v);
-                frame->pc++; return 0;
-            }
-
-            const void* src = (char*)frame->slots + op->ftoi.src;
-            double d;
-            if(op->ftoi.src_size == 4){
-                float f;
-                CI_INLINE_MEMCPY(&f, src, sizeof f);
-                d = (double)f;
-            }
-            else {
-                CI_INLINE_MEMCPY(&d, src, sizeof d);
-            }
-            void* dest = (char*)frame->slots + op->ftoi.slot;
-            if(op->ftoi.slot_size > 8){
-                CiUint128 v = ci_uint128_from_double(d, op->ftoi.is_unsigned);
-                ci_uint128_write(dest, op->ftoi.slot_size, v);
-            }
-            else {
-                uint64_t v = ci_uint64_from_double(d, op->ftoi.is_unsigned);
-                ci_write_uint(dest, op->ftoi.slot_size, v);
-            }
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_FTOF: {
-            if(op->convert.src_float == 16 || op->convert.dst_float == 16){
-                const void* src = (char*)frame->slots + op->convert.src;
-                void* dest = (char*)frame->slots + op->convert.slot;
-                if(op->convert.src_float == 16){
-                    uint16_t bits = (uint16_t)ci_read_uint(src, 2);
-                    _Bool is_brian = op->convert.src_is_brian_float;
-                    if(op->convert.dst_float == 16){
-                        uint16_t result = bits;
-                        if(is_brian != op->convert.dst_is_brian_float){
-                            float value = ci_float16_to_float(bits, is_brian);
-                            result = ci_float16_from_float(value, op->convert.dst_is_brian_float);
-                        }
-                        ci_write_uint(dest, 2, result);
-                    }
-                    else if(op->convert.dst_float == 80)
-                        ci_float80_write(dest, op->convert.slot_size, ci_float16_to_float80(bits, is_brian));
-                    else if(op->convert.dst_float == 128)
-                        ci_float128_write(dest, op->convert.slot_size, ci_float16_to_quad(bits, is_brian));
-                    else if(op->convert.dst_float == 32){
-                        float f = ci_float16_to_float(bits, is_brian);
-                        memcpy(dest, &f, sizeof f);
-                    }
-                    else {
-                        double d = ci_float16_to_double(bits, is_brian);
-                        memcpy(dest, &d, sizeof d);
-                    }
-                }
-                else {
-                    _Bool is_brian = op->convert.dst_is_brian_float;
-                    uint16_t bits;
-                    if(op->convert.src_float == 80) bits = ci_float16_from_float80(ci_float80_read(src), is_brian);
-                    else if(op->convert.src_float == 128) bits = ci_float16_from_quad(ci_float128_read(src), is_brian);
-                    else if(op->convert.src_float == 32){
-                        float f;
-                        memcpy(&f, src, sizeof f);
-                        bits = ci_float16_from_float(f, is_brian);
-                    }
-                    else {
-                        double d;
-                        memcpy(&d, src, sizeof d);
-                        bits = ci_float16_from_double(d, is_brian);
-                    }
-                    ci_write_uint(dest, 2, bits);
-                }
-                frame->pc++;
-                return 0;
-            }
-            if(op->convert.dst_float == 80){
-                const void* src = (char*)frame->slots + op->convert.src;
-                void* dest = (char*)frame->slots + op->convert.slot;
-                CiFloat80 v;
-                if(op->convert.src_float == 80) v = ci_float80_read(src);
-                else if(op->convert.src_float == 128) v = ci_float80_from_float128(ci_float128_read(src));
-                else if(op->convert.src_size == 4){ float f; memcpy(&f, src, 4); v = ci_float80_from_float(f); }
-                else { double d; memcpy(&d, src, 8); v = ci_float80_from_double(d); }
-                ci_float80_write(dest, op->convert.slot_size, v);
-                frame->pc++; return 0;
-            }
-            if(op->convert.dst_float == 128){
-                const void* src = (char*)frame->slots + op->convert.src;
-                void* dest = (char*)frame->slots + op->convert.slot;
-                CiFloat128 v;
-                if(op->convert.src_float == 128) v = ci_float128_read(src);
-                else if(op->convert.src_float == 80) v = ci_float128_from_float80(ci_float80_read(src));
-                else if(op->convert.src_size == 4){ float f; memcpy(&f, src, 4); v = ci_float128_from_float(f); }
-                else { double d; memcpy(&d, src, 8); v = ci_float128_from_double(d); }
-                ci_float128_write(dest, op->convert.slot_size, v);
-                frame->pc++; return 0;
-            }
-            if(op->convert.src_float == 80){
-                CiFloat80 v = ci_float80_read((char*)frame->slots + op->convert.src);
-                void* dest = (char*)frame->slots + op->convert.slot;
-                if(op->convert.slot_size == 4){ float f = ci_float80_to_float(v); memcpy(dest, &f, 4); }
-                else { double d = ci_float80_to_double(v); memcpy(dest, &d, 8); }
-                frame->pc++; return 0;
-            }
-            if(op->convert.src_float == 128){
-                CiFloat128 v = ci_float128_read((char*)frame->slots + op->convert.src);
-                void* dest = (char*)frame->slots + op->convert.slot;
-                if(op->convert.slot_size == 4){ float f = ci_float128_to_float(v); memcpy(dest, &f, 4); }
-                else { double d = ci_float128_to_double(v); memcpy(dest, &d, 8); }
-                frame->pc++; return 0;
-            }
-
-            const void* src = (char*)frame->slots + op->ftof.src;
-            void* dest = (char*)frame->slots + op->ftof.slot;
-            double d;
-            if(op->ftof.src_size == 4){
-                float f;
-                CI_INLINE_MEMCPY(&f, src, sizeof f);
-                d = (double)f;
-            }
-            else {
-                CI_INLINE_MEMCPY(&d, src, sizeof d);
-            }
-            if(op->ftof.slot_size == 4){
-                float f = (float)d;
-                CI_INLINE_MEMCPY(dest, &f, sizeof f);
-            }
-            else {
-                CI_INLINE_MEMCPY(dest, &d, sizeof d);
-            }
-            frame->pc++;
-            return 0;
-        }
         case CI_OP_SLOT_ADDR: {
             void* addr = (char*)frame->slots + op->slot_addr.src;
             CI_INLINE_MEMCPY((char*)frame->slots + op->slot_addr.slot, &addr, sizeof addr);
@@ -1197,320 +1638,10 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             frame->pc++;
             return 0;
         }
-        case CI_OP_BOUNDS: {
-            uint64_t idx = ci_read_uint((char*)frame->slots + op->bounds.src, op->bounds.src_size);
-            uint64_t len = ci_read_uint((char*)frame->slots + op->bounds.src2, op->bounds.src2_size);
-            _Bool oob = op->bounds.inclusive ? (idx > len) : (idx >= len);
-            if(oob){
-                const char* close = op->bounds.inclusive ? "]" : ")";
-                if(op->bounds.index_signed)
-                    return ci_error(ci, op->loc,
-                        "array subscript out of bounds: index %lld not in [0, %llu%s",
-                        (long long)idx, (unsigned long long)len, close);
-                return ci_error(ci, op->loc,
-                    "array subscript out of bounds: index %llu not in [0, %llu%s",
-                    (unsigned long long)idx, (unsigned long long)len, close);
-            }
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_ABI_TRANSFER: {
-            void *dst = ci_abi_address(
-                frame,
-                op->abi_transfer.destination,
-                op->abi_transfer.dst, op->abi_transfer.dst_pointer
-            );
-            CiAbiTransfer action = op->abi_transfer.operation;
-            switch(action){
-                DRP_CASES_EXHAUSTED;
-                case CI_ABI_ZERO:
-                    memset(dst, 0, op->abi_transfer.size);
-                    break;
-                case CI_ABI_CONSTANT:{
-                    uint64_t value = op->abi_transfer.immediate;
-                    memcpy(dst, &value, op->abi_transfer.size);
-                    break;
-                }
-                case CI_ABI_COPY:{
-                    void* src = ci_abi_address(
-                        frame,
-                        op->abi_transfer.source,
-                        op->abi_transfer.src, op->abi_transfer.src_pointer
-                    );
-                    memmove(dst, src, op->abi_transfer.size);
-                    break;
-                }
-                case CI_ABI_ADDRESS:{
-                    uintptr_t address = (uintptr_t)ci_abi_address(
-                        frame,
-                        op->abi_transfer.source,
-                        op->abi_transfer.src, op->abi_transfer.src_pointer
-                    );
-                    CI_INLINE_MEMCPY(dst, &address, sizeof address);
-                    break;
-                }
-                case CI_ABI_ZERO_EXTEND:{
-                    void* src = ci_abi_address(
-                        frame,
-                        op->abi_transfer.source,
-                        op->abi_transfer.src, op->abi_transfer.src_pointer
-                    );
-                    uint64_t value = ci_read_uint(src, op->abi_transfer.source_size);
-                    memcpy(dst, &value, op->abi_transfer.size);
-                    break;
-                }
-                case CI_ABI_SIGN_EXTEND:{
-                    void* src = ci_abi_address(
-                        frame,
-                        op->abi_transfer.source,
-                        op->abi_transfer.src, op->abi_transfer.src_pointer
-                    );
-                    int64_t value = ci_read_int(src, op->abi_transfer.source_size);
-                    memcpy(dst, &value, op->abi_transfer.size);
-                    break;
-                }
-            }
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_ABI_MOVE: {
-            NcCallState* state = op->abi_move.incoming ? frame->incoming : &frame->stack->registers;
-            void* reg = (char*)state + op->abi_move.reg.capture_offset;
-            void* slot = (char*)frame->slots + op->abi_move.slot;
-            if(op->abi_move.write){
-                if(op->abi_move.operation != CI_ABI_COPY){
-                    union {
-                        uint64_t u;
-                        int64_t s;
-                    } value;
-                    if(op->abi_move.operation == CI_ABI_SIGN_EXTEND)
-                        value.s = ci_read_int(slot, op->abi_move.source_size);
-                    else
-                        value.u = ci_read_uint(slot, op->abi_move.source_size);
-                    memcpy(reg, &value, op->abi_move.size);
-                }
-                else memcpy(reg, slot, op->abi_move.size);
-            }
-            else memcpy(slot, reg, op->abi_move.size);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_CALL: {
-            CiCallDescriptor* d = op->call.descrip;
-            NcCallState* state = &frame->stack->registers;
-            void (*fn)(void);
-            const CcFunc* func;
-            if(op->call.is_indirect){
-                CI_INLINE_MEMCPY(&fn, (char*)frame->slots + op->call.args_slot - CI_INDIRECT_CALL_PREFIX_SIZE, sizeof fn);
-                func = ci_closure_map_get(ci, (void*)fn);
-            }
-            else {
-                func = d->func;
-                fn = func->native_func;
-            }
-            if(func && func->defined){
-                int err = ci_make_abi_call_frame(ci, frame, func, op, child);
-                return err ? err : CI_STEP_ENTER_FRAME;
-            }
-            if(!fn) return ci_error(ci, op->loc, "call through null function pointer");
-            NcCallState native = *state;
-            int err = d->invoke(d->abi, fn, &native);
-            if(err) return err;
-            size_t result_offset = nc_capture_result_offset(d->abi->target);
-            memcpy((char*)state + result_offset, (char*)&native + result_offset, nc_capture_size(d->abi->target) - result_offset);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_LOAD: {
-            char* ptr;
-            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots + op->load.src, sizeof ptr);
-            ci_copy((char*)frame->slots + op->load.slot, ptr + op->load.offset, op->load.slot_size);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_LOAD_BITFIELD: {
-            char* ptr;
-            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots+op->load_bf.src, sizeof ptr);
-            if(op->load_bf.slot_size == 16){
-                CiUint128 val = ci_bitfield_read128(ptr+op->load_bf.offset, op->load_bf.bit_offset, op->load_bf.bit_width);
-                val = ci_bitfield_extend128(val, op->load_bf.bit_width, op->load_bf.is_signed);
-                CI_INLINE_MEMCPY((char*)frame->slots + op->load_bf.slot, &val, sizeof val);
-            }
-            else {
-                uint64_t val = ci_bitfield_read(ptr + op->load_bf.offset, op->load_bf.slot_size, op->load_bf.bit_offset, op->load_bf.bit_width);
-                val = ci_bitfield_extend(val, op->load_bf.bit_width, op->load_bf.is_signed);
-                memcpy((char*)frame->slots + op->load_bf.slot, &val, op->load_bf.slot_size);
-            }
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_LOAD_BITFIELD_BYTES: {
-            char* ptr;
-            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots+op->load_bf.src, sizeof ptr);
-            if(op->load_bf.slot_size == 16){
-                CiUint128 val = ci_bitfield_read128_bytes(ptr+op->load_bf.offset, op->load_bf.bit_offset, op->load_bf.bit_width);
-                val = ci_bitfield_extend128(val, op->load_bf.bit_width, op->load_bf.is_signed);
-                CI_INLINE_MEMCPY((char*)frame->slots + op->load_bf.slot, &val, sizeof val);
-            }
-            else {
-                uint64_t val = ci_bitfield_read_bytes(ptr + op->load_bf.offset, op->load_bf.bit_offset, op->load_bf.bit_width);
-                val = ci_bitfield_extend(val, op->load_bf.bit_width, op->load_bf.is_signed);
-                memcpy((char*)frame->slots + op->load_bf.slot, &val, op->load_bf.slot_size);
-            }
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_STORE_IMM: {
-            char* ptr;
-            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots + op->store_imm.slot, sizeof ptr);
-            ci_copy(ptr + op->store_imm.offset, &op->store_imm.immediate, op->store_imm.size);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_STORE: {
-            char* ptr;
-            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots + op->store.slot, sizeof ptr);
-            ci_copy(ptr + op->store.offset, (char*)frame->slots + op->store.src, op->store.src_size);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_MEMCOPY: {
-            char* dst;
-            char* src;
-            CI_INLINE_MEMCPY(&dst, (char*)frame->slots + op->memcopy.slot, sizeof dst);
-            CI_INLINE_MEMCPY(&src, (char*)frame->slots + op->memcopy.src, sizeof src);
-            size_t size = op->memcopy.size;
-            if(op->memcopy.dynamic_size)
-                CI_INLINE_MEMCPY(&size, (char*)frame->slots + op->memcopy.size, sizeof size);
-            memmove(dst + op->memcopy.offset, src + op->memcopy.src_offset, size);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_ZERO: {
-            char* dst;
-            CI_INLINE_MEMCPY(&dst, (char*)frame->slots + op->zero.slot, sizeof dst);
-            memset(dst+op->zero.offset, 0, op->zero.size);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_STORE_BITFIELD: {
-            char* ptr;
-            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots + op->store_bf.slot, sizeof ptr);
-            if(op->store_bf.src_size == 16){
-                CiUint128 val = {0};
-                CI_INLINE_MEMCPY(&val, (char*)frame->slots + op->store_bf.src, sizeof val);
-                ci_bitfield_write_128(ptr+op->store_bf.offset, op->store_bf.bit_offset, op->store_bf.bit_width, val);
-            }
-            else {
-                uint64_t val = 0;
-                memcpy(&val, (char*)frame->slots + op->store_bf.src, op->store_bf.src_size);
-                ci_bitfield_write(ptr + op->store_bf.offset, op->store_bf.src_size, op->store_bf.bit_offset, op->store_bf.bit_width, val);
-            }
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_STORE_BITFIELD_BYTES: {
-            char* ptr;
-            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots + op->store_bf.slot, sizeof ptr);
-            if(op->store_bf.src_size == 16){
-                CiUint128 val = {0};
-                CI_INLINE_MEMCPY(&val, (char*)frame->slots + op->store_bf.src, sizeof val);
-                ci_bitfield_write_128_bytes(ptr+op->store_bf.offset, op->store_bf.bit_offset, op->store_bf.bit_width, val);
-            }
-            else {
-                uint64_t val = 0;
-                memcpy(&val, (char*)frame->slots + op->store_bf.src, op->store_bf.src_size);
-                ci_bitfield_write_bytes(ptr + op->store_bf.offset, op->store_bf.bit_offset, op->store_bf.bit_width, val);
-            }
-            frame->pc++;
-            return 0;
-        }
         case CI_OP_JUMP:
             frame->pc = op->jump.jump;
             return 0;
-        case CI_OP_CONVERT: {
-            const void* src = (char*)frame->slots + op->convert.src;
-            void* dest = (char*)frame->slots + op->convert.slot;
-            if(op->convert.src_size > 8 || op->convert.slot_size > 8){
-                // 128-bit path, extending per the source's signedness
-                CiUint128 v;
-                if(op->convert.src_size > 8)
-                    ci_uint128_read(&v, src, op->convert.src_size);
-                else if(op->convert.is_unsigned)
-                    v = ci_uint128_from_uint64(ci_read_uint(src, op->convert.src_size));
-                else
-                    v = ci_uint128_from_int64(ci_read_int(src, op->convert.src_size));
-                if((op->convert.checked_index || op->convert.checked_bound)
-                    && !ci_uint128_fits_integer(v, op->convert.slot_size*8, op->convert.checked_bound || op->convert.is_unsigned))
-                    return ci_error(ci, op->loc, "%s", op->convert.checked_bound ? "VLA bound is outside the size_t range" : "index is outside the pointer-sized integer range");
-                if(op->convert.slot_size <= 8)
-                    ci_write_uint(dest, op->convert.slot_size, ci_uint128_lo(v));
-                else
-                    ci_uint128_write(dest, op->convert.slot_size, v);
-                frame->pc++;
-                return 0;
-            }
-            uint64_t v;
-            if(op->convert.is_unsigned)
-                v = ci_read_uint(src, op->convert.src_size);
-            else
-                v = (uint64_t)ci_read_int(src, op->convert.src_size);
-            if((op->convert.checked_index || op->convert.checked_bound)
-                && !ci_uint128_fits_integer(op->convert.is_unsigned ? ci_uint128_from_uint64(v)
-                    : ci_uint128_from_int64((int64_t)v), op->convert.slot_size*8, op->convert.checked_bound || op->convert.is_unsigned))
-                return ci_error(ci, op->loc, "%s", op->convert.checked_bound ? "VLA bound is outside the size_t range" : "index is outside the pointer-sized integer range");
-            ci_write_uint(dest, op->convert.slot_size, v);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_ISTRUE: {
-            const void* src = (char*)frame->slots + op->istrue.src;
-            uint32_t float_width = op->istrue.float_width;
-            _Bool v;
-            if(float_width == 128)
-                v = ci_float128_nonzero(ci_float128_read(src));
-            else if(float_width == 80)
-                v = ci_float80_nonzero(ci_float80_read(src));
-            else if(float_width == 16)
-                v = ci_narrow_float_nonzero((uint16_t)ci_read_uint(src, 2));
-            else if(float_width == 32){
-                float f;
-                CI_INLINE_MEMCPY(&f, src, sizeof f);
-                v = f != 0.0f;
-            }
-            else if(float_width == 64){
-                double d;
-                CI_INLINE_MEMCPY(&d, src, sizeof d);
-                v = d != 0.0;
-            }
-            else if(op->istrue.src_size > 8){
-                CiUint128 u;
-                ci_uint128_read(&u, src, op->istrue.src_size);
-                v = ci_uint128_nonzero(u);
-            }
-            else
-                v = ci_read_uint(src, op->istrue.src_size) != 0;
-            v ^= (_Bool)op->istrue.negate;
-            ci_write_uint((char*)frame->slots + op->istrue.slot, op->istrue.slot_size, v);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_JUMP_FALSE: {
-            const void* cond = (char*)frame->slots + op->jump_false.slot;
-            if(ci_read_uint(cond, op->jump_false.slot_size) == 0)
-                frame->pc = op->jump_false.jump;
-            else
-                frame->pc++;
-            return 0;
-        }
-        case CI_OP_JUMP_TRUE: {
-            const void* cond = (char*)frame->slots + op->jump_true.slot;
-            if(ci_read_uint(cond, op->jump_true.slot_size) != 0)
-                frame->pc = op->jump_true.jump;
-            else
-                frame->pc++;
-            return 0;
-        }
+
         case CI_OP_RETURN: {
             frame->pc = frame->op_count;
             return 0;
@@ -1522,280 +1653,6 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             frame->pc = frame->op_count;
             return 0;
         }
-        case CI_OP_SWITCH: {
-            const void* src = (char*)frame->slots + op->switch_.slot;
-            // Sign-extend or zero-extend to 64 bits;
-            // decided at lowering.
-            uint64_t val;
-            if(op->switch_.is_unsigned)
-                val = ci_read_uint(src, op->switch_.slot_size);
-            else
-                val = (uint64_t)ci_read_int(src, op->switch_.slot_size);
-            size_t count = op->switch_.table->count;
-            const CcSwitchEntry* table = op->switch_.table->data;
-            if(op->switch_.is_dense){
-                uint64_t index = val - table[0].low;
-                frame->pc = index < count ? table[index].target : op->switch_.jump;
-                return 0;
-            }
-            // Binary search the disjoint intervals in signed or unsigned order.
-            uint64_t sign = op->switch_.is_unsigned ? 0 : UINT64_C(1) << 63;
-            val ^= sign;
-            size_t lo = 0, hi = count;
-            while(lo < hi){
-                size_t mid = lo + (hi - lo) / 2;
-                if((table[mid].high ^ sign) < val)
-                    lo = mid + 1;
-                else if((table[mid].low ^ sign) > val)
-                    hi = mid;
-                else {
-                    frame->pc = table[mid].target;
-                    return 0;
-                }
-            }
-            // No match — jump to default or exit
-            frame->pc = op->switch_.jump;
-            return 0;
-        }
-        case CI_OP_ATOMIC_LOAD:{
-            char *ptr, *dest;
-            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots+op->atomic_load.src, sizeof ptr);
-            ptr += op->atomic_load.offset;
-            dest = (char*)frame->slots + op->atomic_load.slot;
-            uint32_t sz = op->atomic_load.slot_size;
-            switch(sz){
-                // TODO: is this the best way to do an atomic load with msvc?
-                #ifdef _MSC_VER
-                    #if defined(_M_ARM64) || defined(_M_ARM64EC)
-                        case 1:  *(uint8_t*)(dest)  = (uint8_t)__iso_volatile_load8((const volatile __int8*)ptr); __dmb(_ARM64_BARRIER_ISH); break;
-                        case 2:  *(uint16_t*)(dest) = (uint16_t)__iso_volatile_load16((const volatile __int16*)ptr); __dmb(_ARM64_BARRIER_ISH); break;
-                        case 4:  *(uint32_t*)(dest) = (uint32_t)__iso_volatile_load32((const volatile __int32*)ptr); __dmb(_ARM64_BARRIER_ISH); break;
-                        case 8:  *(uint64_t*)(dest) = (uint64_t)__iso_volatile_load64((const volatile __int64*)ptr); __dmb(_ARM64_BARRIER_ISH); break;
-                        case 16: {
-                            __int64* d = (__int64*)(dest);
-                            d[0] = 0; d[1] = 0;
-                            _InterlockedCompareExchange128((volatile __int64*)ptr, 0, 0, d);
-                            break;
-                        }
-                        default: return ci_ice(ci, op->loc, "unsupported atomic operand size %u", sz);
-                    #else
-                        case 1:  *(uint8_t*)(dest)  = *(volatile uint8_t*)ptr; _ReadWriteBarrier(); break;
-                        case 2:  *(uint16_t*)(dest) = *(volatile uint16_t*)ptr; _ReadWriteBarrier(); break;
-                        case 4:  *(uint32_t*)(dest) = *(volatile uint32_t*)ptr; _ReadWriteBarrier(); break;
-                        case 8:  *(uint64_t*)(dest) = *(volatile uint64_t*)ptr; _ReadWriteBarrier(); break;
-                        case 16: {
-                            __int64* d = (__int64*)(dest);
-                            d[0] = 0; d[1] = 0;
-                            _InterlockedCompareExchange128((volatile __int64*)ptr, 0, 0, d);
-                            break;
-                        }
-                        default: return ci_ice(ci, op->loc, "unsupported atomic operand size %u", sz);
-                    #endif
-                #else
-                    case 1:  __atomic_load(( uint8_t*)ptr, ( uint8_t*)(dest), __ATOMIC_SEQ_CST); break;
-                    case 2:  __atomic_load((uint16_t*)ptr, (uint16_t*)(dest), __ATOMIC_SEQ_CST); break;
-                    case 4:  __atomic_load((uint32_t*)ptr, (uint32_t*)(dest), __ATOMIC_SEQ_CST); break;
-                    case 8:  __atomic_load((uint64_t*)ptr, (uint64_t*)(dest), __ATOMIC_SEQ_CST); break;
-                    case 16: __atomic_load((CiAtomic16*)ptr, (CiAtomic16*)(dest), __ATOMIC_SEQ_CST); break;
-                    default: return ci_ice(ci, op->loc, "unsupported atomic operand size %u", sz);
-                #endif
-            }
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_ATOMIC_STORE:{
-            char *src, *dest;
-            CI_INLINE_MEMCPY(&dest, (char*)frame->slots + op->atomic_store.slot, sizeof src);
-            dest += op->atomic_store.offset;
-            src = (char*)frame->slots + op->atomic_store.src;
-            uint32_t sz = op->atomic_store.src_size;
-            switch(sz){
-                // TODO: is this the best way to do an atomic store with msvc?
-                #ifdef _MSC_VER
-                    #if defined(_M_ARM64) || defined(_M_ARM64EC)
-                        case 1:  __dmb(_ARM64_BARRIER_ISH); __iso_volatile_store8((volatile __int8*)dest, *(const __int8*)src); __dmb(_ARM64_BARRIER_ISH); break;
-                        case 2:  __dmb(_ARM64_BARRIER_ISH); __iso_volatile_store16((volatile __int16*)dest, *(const __int16*)src); __dmb(_ARM64_BARRIER_ISH); break;
-                        case 4:  __dmb(_ARM64_BARRIER_ISH); __iso_volatile_store32((volatile __int32*)dest, *(const __int32*)src); __dmb(_ARM64_BARRIER_ISH); break;
-                        case 8:  __dmb(_ARM64_BARRIER_ISH); __iso_volatile_store64((volatile __int64*)dest, *(const __int64*)src); __dmb(_ARM64_BARRIER_ISH); break;
-                        case 16: {
-                            __int64 _tmp[2];
-                            CI_INLINE_MEMCPY(_tmp, src, 16);
-                            __int64 _old[2] = {0};
-                            while (!_InterlockedCompareExchange128((volatile __int64*)dest, _tmp[1], _tmp[0], _old)){
-                            }
-                            break;
-                        }
-                        default: return ci_ice(ci, op->loc, "unsupported atomic operand size %u", sz);
-                    #else
-                        case 1:  _InterlockedExchange8((volatile char*)dest, *(const char*)src); break;
-                        case 2:  _InterlockedExchange16((volatile short*)dest, *(const short*)src); break;
-                        case 4:  _InterlockedExchange((volatile long*)dest, *(const long*)src); break;
-                        case 8:  _InterlockedExchange64((volatile long long*)dest, *(const long long*)src); break;
-                        case 16: {
-                            __int64 _tmp[2];
-                            CI_INLINE_MEMCPY(_tmp, src, 16);
-                            __int64 _old[2] = {0};
-                            while (!_InterlockedCompareExchange128((volatile __int64*)dest, _tmp[1], _tmp[0], _old)){
-                            }
-                            break;
-                        }
-                        default: return ci_ice(ci, op->loc, "unsupported atomic operand size %u", sz);
-                    #endif
-                #else
-                    case 1:  __atomic_store(( uint8_t*)dest, ( uint8_t*)(src), __ATOMIC_SEQ_CST); break;
-                    case 2:  __atomic_store((uint16_t*)dest, (uint16_t*)(src), __ATOMIC_SEQ_CST); break;
-                    case 4:  __atomic_store((uint32_t*)dest, (uint32_t*)(src), __ATOMIC_SEQ_CST); break;
-                    case 8:  __atomic_store((uint64_t*)dest, (uint64_t*)(src), __ATOMIC_SEQ_CST); break;
-                    case 16: __atomic_store((CiAtomic16*)dest, (CiAtomic16*)(src), __ATOMIC_SEQ_CST); break;
-                    default: return ci_ice(ci, op->loc, "unsupported atomic operand size %u", sz);
-                #endif
-            }
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_ATOMIC_RMW:{
-            // The interpreter runs every order as seq_cst; the encoded order
-            // is for the JIT.
-            char* ptr;
-            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots + op->atomic_rmw.src, sizeof ptr);
-            ptr += op->atomic_rmw.offset;
-            char* old = (char*)frame->slots + op->atomic_rmw.slot;
-            char* val = (char*)frame->slots + op->atomic_rmw.src2;
-            uint32_t sz = op->atomic_rmw.slot_size;
-            if(op->atomic_rmw.op == CI_ARMW_XCHG){
-                switch(sz){
-                    #ifdef _MSC_VER
-                    case 1:  *(uint8_t*)old  = (uint8_t)_InterlockedExchange8((volatile char*)ptr, *(char*)val); break;
-                    case 2:  *(uint16_t*)old = (uint16_t)_InterlockedExchange16((volatile short*)ptr, *(short*)val); break;
-                    case 4:  *(uint32_t*)old = (uint32_t)_InterlockedExchange((volatile long*)ptr, *(long*)val); break;
-                    case 8:  *(uint64_t*)old = (uint64_t)_InterlockedExchange64((volatile long long*)ptr, *(long long*)val); break;
-                    case 16: {
-                        __int64 _tmp[2];
-                        CI_INLINE_MEMCPY(_tmp, val, 16);
-                        __int64 _old[2] = {0};
-                        while (!_InterlockedCompareExchange128((volatile __int64*)ptr, _tmp[1], _tmp[0], _old)){
-                        }
-                        CI_INLINE_MEMCPY(old, _old, 16);
-                        break;
-                    }
-                    #else
-                    case 1:  __atomic_exchange(( uint8_t*)ptr, ( uint8_t*)val, ( uint8_t*)old, __ATOMIC_SEQ_CST); break;
-                    case 2:  __atomic_exchange((uint16_t*)ptr, (uint16_t*)val, (uint16_t*)old, __ATOMIC_SEQ_CST); break;
-                    case 4:  __atomic_exchange((uint32_t*)ptr, (uint32_t*)val, (uint32_t*)old, __ATOMIC_SEQ_CST); break;
-                    case 8:  __atomic_exchange((uint64_t*)ptr, (uint64_t*)val, (uint64_t*)old, __ATOMIC_SEQ_CST); break;
-                    case 16: __atomic_exchange((CiAtomic16*)ptr, (CiAtomic16*)val, (CiAtomic16*)old, __ATOMIC_SEQ_CST); break;
-                    #endif
-                    default: return ci_ice(ci, op->loc, "unsupported atomic operand size %u", sz);
-                }
-                frame->pc++;
-                return 0;
-            }
-            #ifdef _MSC_VER
-            #define CI_ARMW_DISPATCH(f8, f16, f32, f64, neg) \
-                switch(sz){ \
-                    case 1:  *(uint8_t*)old  = (uint8_t)f8((volatile char*)ptr, neg *(char*)val); break; \
-                    case 2:  *(uint16_t*)old = (uint16_t)f16((volatile short*)ptr, neg *(short*)val); break; \
-                    case 4:  *(uint32_t*)old = (uint32_t)f32((volatile long*)ptr, neg *(long*)val); break; \
-                    case 8:  *(uint64_t*)old = (uint64_t)f64((volatile long long*)ptr, neg *(long long*)val); break; \
-                    default: return ci_ice(ci, op->loc, "unsupported atomic operand size %u", sz); \
-                }
-            switch(op->atomic_rmw.op){
-                case CI_ARMW_ADD: CI_ARMW_DISPATCH(_InterlockedExchangeAdd8, _InterlockedExchangeAdd16, _InterlockedExchangeAdd, _InterlockedExchangeAdd64, +); break;
-                case CI_ARMW_SUB: CI_ARMW_DISPATCH(_InterlockedExchangeAdd8, _InterlockedExchangeAdd16, _InterlockedExchangeAdd, _InterlockedExchangeAdd64, -); break;
-                case CI_ARMW_AND: CI_ARMW_DISPATCH(_InterlockedAnd8, _InterlockedAnd16, _InterlockedAnd, _InterlockedAnd64, +); break;
-                case CI_ARMW_OR:  CI_ARMW_DISPATCH(_InterlockedOr8, _InterlockedOr16, _InterlockedOr, _InterlockedOr64, +); break;
-                case CI_ARMW_XOR: CI_ARMW_DISPATCH(_InterlockedXor8, _InterlockedXor16, _InterlockedXor, _InterlockedXor64, +); break;
-                case CI_ARMW_XCHG: break; // handled above
-            }
-            #else
-            #define CI_ARMW_DISPATCH(fetch) \
-                switch(sz){ \
-                    case 1:  *( uint8_t*)old = fetch(( uint8_t*)ptr, *( uint8_t*)val, __ATOMIC_SEQ_CST); break; \
-                    case 2:  *(uint16_t*)old = fetch((uint16_t*)ptr, *(uint16_t*)val, __ATOMIC_SEQ_CST); break; \
-                    case 4:  *(uint32_t*)old = fetch((uint32_t*)ptr, *(uint32_t*)val, __ATOMIC_SEQ_CST); break; \
-                    case 8:  *(uint64_t*)old = fetch((uint64_t*)ptr, *(uint64_t*)val, __ATOMIC_SEQ_CST); break; \
-                    default: return ci_ice(ci, op->loc, "unsupported atomic operand size %u", sz); \
-                }
-            switch(op->atomic_rmw.op){
-                case CI_ARMW_ADD: CI_ARMW_DISPATCH(__atomic_fetch_add); break;
-                case CI_ARMW_SUB: CI_ARMW_DISPATCH(__atomic_fetch_sub); break;
-                case CI_ARMW_AND: CI_ARMW_DISPATCH(__atomic_fetch_and); break;
-                case CI_ARMW_OR:  CI_ARMW_DISPATCH(__atomic_fetch_or); break;
-                case CI_ARMW_XOR: CI_ARMW_DISPATCH(__atomic_fetch_xor); break;
-                case CI_ARMW_XCHG: break; // handled above
-            }
-            #endif
-            #undef CI_ARMW_DISPATCH
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_ATOMIC_CAS:{
-            char* ptr;
-            CI_INLINE_MEMCPY(&ptr, (char*)frame->slots + op->atomic_cas.src, sizeof ptr);
-            ptr += op->atomic_cas.offset;
-            char* expected = (char*)frame->slots + op->atomic_cas.expected;
-            char* desired = (char*)frame->slots + op->atomic_cas.desired;
-            uint32_t sz = op->atomic_cas.size;
-            _Bool r;
-            #ifdef _MSC_VER
-            switch(sz){
-                case 1: { uint8_t exp = *(uint8_t*)expected;
-                          uint8_t o = (uint8_t)_InterlockedCompareExchange8((volatile char*)ptr, *(char*)desired, (char)exp);
-                          r = o == exp; *(uint8_t*)expected = o; break; }
-                case 2: { uint16_t exp = *(uint16_t*)expected;
-                          uint16_t o = (uint16_t)_InterlockedCompareExchange16((volatile short*)ptr, *(short*)desired, (short)exp);
-                          r = o == exp; *(uint16_t*)expected = o; break; }
-                case 4: { uint32_t exp = *(uint32_t*)expected;
-                          uint32_t o = (uint32_t)_InterlockedCompareExchange((volatile long*)ptr, *(long*)desired, (long)exp);
-                          r = o == exp; *(uint32_t*)expected = o; break; }
-                case 8: { uint64_t exp = *(uint64_t*)expected;
-                          uint64_t o = (uint64_t)_InterlockedCompareExchange64((volatile long long*)ptr, *(long long*)desired, (long long)exp);
-                          r = o == exp; *(uint64_t*)expected = o; break; }
-                case 16: {
-                    __int64 _des[2];
-                    CI_INLINE_MEMCPY(_des, desired, 16);
-                    r = (_Bool)_InterlockedCompareExchange128((volatile __int64*)ptr, _des[1], _des[0], (__int64*)expected);
-                    break;
-                }
-                default: return ci_ice(ci, op->loc, "unsupported atomic operand size %u", sz);
-            }
-            #else
-            _Bool weak = op->atomic_cas.weak;
-            if(weak){
-                switch(sz){
-                    case 1:  r = __atomic_compare_exchange(( uint8_t*)ptr, ( uint8_t*)expected, ( uint8_t*)desired, 1, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
-                    case 2:  r = __atomic_compare_exchange((uint16_t*)ptr, (uint16_t*)expected, (uint16_t*)desired, 1, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
-                    case 4:  r = __atomic_compare_exchange((uint32_t*)ptr, (uint32_t*)expected, (uint32_t*)desired, 1, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
-                    case 8:  r = __atomic_compare_exchange((uint64_t*)ptr, (uint64_t*)expected, (uint64_t*)desired, 1, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
-                    case 16: r = __atomic_compare_exchange((CiAtomic16*)ptr, (CiAtomic16*)expected, (CiAtomic16*)desired, 1, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
-                    default: return ci_ice(ci, op->loc, "unsupported atomic operand size %u", sz);
-                }
-            }
-            else {
-                switch(sz){
-                    case 1:  r = __atomic_compare_exchange(( uint8_t*)ptr, ( uint8_t*)expected, ( uint8_t*)desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
-                    case 2:  r = __atomic_compare_exchange((uint16_t*)ptr, (uint16_t*)expected, (uint16_t*)desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
-                    case 4:  r = __atomic_compare_exchange((uint32_t*)ptr, (uint32_t*)expected, (uint32_t*)desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
-                    case 8:  r = __atomic_compare_exchange((uint64_t*)ptr, (uint64_t*)expected, (uint64_t*)desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
-                    case 16: r = __atomic_compare_exchange((CiAtomic16*)ptr, (CiAtomic16*)expected, (CiAtomic16*)desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
-                    default: return ci_ice(ci, op->loc, "unsupported atomic operand size %u", sz);
-                }
-            }
-            #endif
-            *((char*)frame->slots + op->atomic_cas.slot) = r;
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_FENCE:
-            if(!op->fence.is_signal){
-                #ifdef _MSC_VER
-                MemoryBarrier();
-                #else
-                __atomic_thread_fence(__ATOMIC_SEQ_CST);
-                #endif
-            }
-            frame->pc++;
-            return 0;
         case CI_OP_CLEAR_CACHE: {
             char *begin, *end;
             CI_INLINE_MEMCPY(&begin, (char*)frame->slots + op->clear_cache.begin, sizeof begin);
@@ -1806,21 +1663,6 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             #else
             __builtin___clear_cache(begin, end);
             #endif
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_ALLOCA:{
-            size_t sz;
-            void* dest = (char*)frame->slots + op->alloca.slot;
-            CI_INLINE_MEMCPY(&sz, (char*)frame->slots + op->alloca.src, sizeof sz);
-            CiStack* stack;
-            int err = ci_frame_stack(ci, frame, &stack);
-            if(err) return err;
-            void* ptr = op->alloca.zero_initialize?
-                ci_stack_zalloc(stack, sz, op->alloca.alignment)
-                : ci_stack_alloc(stack, sz, op->alloca.alignment);
-            if(!ptr) return CI_OOM_ERROR;
-            CI_INLINE_MEMCPY(dest, &ptr, sizeof dest);
             frame->pc++;
             return 0;
         }
@@ -1837,71 +1679,6 @@ _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable
             CiStackMark mark;
             CI_INLINE_MEMCPY(&mark, (char*)frame->slots + op->stack_restore.slot, sizeof mark);
             ci_stack_rewind(frame->stack, mark);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_BSWAP:{
-            size_t sz = op->bswap.size;
-            void* dest = (char*)frame->slots + op->bswap.slot;
-            void* src = (char*)frame->slots + op->bswap.src;
-            switch(sz){
-                case 2: ci_write_uint(dest, 2, bswap16((uint16_t)ci_read_uint(src, 2))); break;
-                case 4: ci_write_uint(dest, 4, bswap32((uint32_t)ci_read_uint(src, 4))); break;
-                case 8: ci_write_uint(dest, 8, bswap64(ci_read_uint(src, 8))); break;
-                default:
-                    return ci_unreachable(ci, op->loc, "bswap other than 2,4,8 bytes");
-            }
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_BUILTIN:{
-            switch(op->builtin.op){
-                case CC_BUILTIN_UNREACHABLE:
-                    return ci_error(ci, op->loc, "__builtin_unreachable reached");
-                case CC_BUILTIN_TRAP:
-                    return ci_error(ci, op->loc, "__builtin_trap");
-                case CC_BUILTIN_READCYCLECOUNTER:{
-                    uint64_t ticks = performance_counter();
-                    if(op->builtin.slot != UINT32_MAX)
-                        ci_write_uint((char*)frame->slots + op->builtin.slot, 8, ticks);
-                    frame->pc++;
-                    return 0;
-                }
-                case CC_BUILTIN_DEBUGTRAP:
-                    frame->pc++;
-                    return 0;
-                case CC_BUILTIN_ABORT:
-                    return ci_error(ci, op->loc, "__builtin_abort called");
-                case CC_BUILTIN_BACKTRACE:
-                    ci_backtrace(ci, frame, 0);
-                    frame->pc++;
-                    return 0;
-                case CC_BUILTIN_LINE:
-                case CC_BUILTIN_COLUMN:
-                case CC_BUILTIN_FILE:
-                case CC_BUILTIN_FUNCTION:
-                case CC_BUILTIN_SRCLOC:
-                    return ci_unreachable(ci, op->loc, "unexpanded default argument source location");
-                case CC_BUILTIN_COMPLEX:
-                    return ci_unimplemented(ci, op->loc, "complex expression lowering");
-                case CC_BUILTIN_CAPTURE_BACKTRACE:
-                case CC_BUILTIN_SYMBOLICATE:
-                case CC_BUILTIN_CLEAR_CACHE:
-                    return ci_unreachable(ci, op->loc, "unlowered builtin");
-                DRP_CASES_EXHAUSTED;
-            }
-        }
-        case CI_OP_VA_ARG:{
-            void* ap;
-            memcpy(&ap, (char*)frame->slots + op->va_arg_.src, sizeof ap);
-            NcAbiType type = {
-                .size = op->va_arg_.size,
-                .align_log2 = op->va_arg_.align_log2,
-                .count = op->va_arg_.count,
-                .mode = op->va_arg_.mode,
-                .pieces = {op->va_arg_.pieces[0], op->va_arg_.pieces[1], op->va_arg_.pieces[2], op->va_arg_.pieces[3]},
-            };
-            nc_va_arg(type, (CcTarget)op->va_arg_.target, ap, (char*)frame->slots + op->va_arg_.slot);
             frame->pc++;
             return 0;
         }

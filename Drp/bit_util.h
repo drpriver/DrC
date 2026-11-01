@@ -112,6 +112,47 @@ bswap64(uint64_t v){
     #endif
 }
 
+force_inline
+uint32_t
+min_u32(uint32_t a, uint32_t b){
+    return a < b? a : b;
+}
+force_inline
+uint32_t
+min_s32(int32_t a, int32_t b){
+    return a < b? a : b;
+}
+force_inline
+uint64_t
+min_u64(uint64_t a, uint64_t b){
+    return a < b? a : b;
+}
+force_inline
+uint64_t
+min_s64(int64_t a, int64_t b){
+    return a < b? a : b;
+}
+force_inline
+uint32_t
+max_u32(uint32_t a, uint32_t b){
+    return a > b? a : b;
+}
+force_inline
+uint32_t
+max_s32(int32_t a, int32_t b){
+    return a > b? a : b;
+}
+force_inline
+uint64_t
+max_u64(uint64_t a, uint64_t b){
+    return a > b? a : b;
+}
+force_inline
+uint64_t
+max_s64(int64_t a, int64_t b){
+    return a > b? a : b;
+}
+
 
 
 #endif

@@ -11,6 +11,7 @@
 #include "cc_memory_order.h"
 #include "cc_target.h"
 #include "nc_native_call.h"
+#include "ci_op_list.h"
 #include "../Drp/typed_enum.h"
 #include "../Drp/atom.h"
 
@@ -88,13 +89,8 @@ TYPEDEF_ENUM(CiCheckedOp, uint32_t);
 #define CI_OPCODE_CASE(name, suffix) case CI_OP_##name##suffix:
 
 enum CiOpKind TYPED_ENUM(uint32_t){
-    CI_OP_ABI_MOVE,
-    CI_OP_ABI_TRANSFER,
-    CI_OP_CONST,
-    CI_OP_COPY,
     CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, _IMM32)
     CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, _IMM64)
-    CI_OP_INDEX,
     CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, 8)
     CI_ALU_UNARY_OPS(CI_OPCODE_ENUM, 8)
     CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, 16)
@@ -110,64 +106,342 @@ enum CiOpKind TYPED_ENUM(uint32_t){
     CI_CMP_OPS(CI_OPCODE_ENUM, 128)
     CI_CMP_OPS(CI_OPCODE_ENUM, _JUMP32)
     CI_CMP_OPS(CI_OPCODE_ENUM, _JUMP64)
+    CI_FALU_OPS(CI_OPCODE_ENUM, _BF16)
     CI_FALU_OPS(CI_OPCODE_ENUM, 16)
     CI_FALU_OPS(CI_OPCODE_ENUM, 32)
     CI_FALU_OPS(CI_OPCODE_ENUM, 64)
     CI_FALU_OPS(CI_OPCODE_ENUM, 80)
     CI_FALU_OPS(CI_OPCODE_ENUM, 128)
+    CI_FCMP_OPS(CI_OPCODE_ENUM, _BF16)
     CI_FCMP_OPS(CI_OPCODE_ENUM, 16)
     CI_FCMP_OPS(CI_OPCODE_ENUM, 32)
     CI_FCMP_OPS(CI_OPCODE_ENUM, 64)
     CI_FCMP_OPS(CI_OPCODE_ENUM, 80)
     CI_FCMP_OPS(CI_OPCODE_ENUM, 128)
-    CI_OP_CHECKED,
     CI_OP_CHECK,
     CI_OP_PROPAGATE_ERROR,
-    CI_OP_BIT_BUILTIN,
-    CI_OP_CONVERT,
-    CI_OP_ITOF,
-    CI_OP_FTOI,
-    CI_OP_FTOF,
     CI_OP_SLOT_ADDR,
     CI_OP_VAR_ADDR,
     CI_OP_TLS_ADDR,
     CI_OP_FUNC_ADDR,
-    CI_OP_BOUNDS,
-    CI_OP_LOAD,
-    CI_OP_STORE,
-    CI_OP_STORE_IMM,
-    CI_OP_MEMCOPY,
-    CI_OP_ZERO,
-    CI_OP_LOAD_BITFIELD,
-    CI_OP_STORE_BITFIELD,
-    // Like above, but byte-wise read/write for exotic bitfields
-    CI_OP_LOAD_BITFIELD_BYTES,
-    CI_OP_STORE_BITFIELD_BYTES,
-    CI_OP_CALL,
-    CI_OP_ISTRUE,
     CI_OP_JUMP,
-    CI_OP_JUMP_FALSE,
-    CI_OP_JUMP_TRUE,
     CI_OP_RETURN,
     CI_OP_RETURN_SLOT,
-    CI_OP_SWITCH,
-    CI_OP_ATOMIC_LOAD,
-    CI_OP_ATOMIC_STORE,
-    CI_OP_ATOMIC_RMW,
-    CI_OP_ATOMIC_CAS,
-    CI_OP_FENCE,
     CI_OP_CLEAR_CACHE,
-    CI_OP_ALLOCA,
     CI_OP_STACK_SAVE,
     CI_OP_STACK_RESTORE,
-    CI_OP_BSWAP,
-    CI_OP_BUILTIN,
-    CI_OP_VA_ARG,
     CI_OP_CAPTURE_BACKTRACE,
+#define CI_OP_ENUM(name, ...) CI_OP_##name,
+    CI_CONST_OPS(CI_OP_ENUM)
+    CI_LOAD_OPS(CI_OP_ENUM)
+    CI_STORE_OPS(CI_OP_ENUM)
+    CI_STORE_IMM_OPS(CI_OP_ENUM)
+    CI_ZERO_OPS(CI_OP_ENUM)
+    CI_COPY_OPS(CI_OP_ENUM)
+    CI_MEMCOPY_OPS(CI_OP_ENUM)
+    CI_EXTEND_OPS(CI_OP_ENUM)
+    CI_OVERFLOW_OPS(CI_OP_ENUM)
+    CI_CHECKED_OPS(CI_OP_ENUM)
+    CI_TRUTH_OPS(CI_OP_ENUM)
+    CI_ITOF_OPS(CI_OP_ENUM)
+    CI_FTOI_OPS(CI_OP_ENUM)
+    CI_FTOF_OPS(CI_OP_ENUM)
+    CI_ABI_MOVE_OPS(CI_OP_ENUM)
+    CI_ABI_TRANSFER_OPS(CI_OP_ENUM)
+    CI_JUMP_FALSE_OPS(CI_OP_ENUM)
+    CI_JUMP_TRUE_OPS(CI_OP_ENUM)
+    CI_BSWAP_OPS(CI_OP_ENUM)
+    CI_BOUNDS_OPS(CI_OP_ENUM)
+    CI_INDEX_OPS(CI_OP_ENUM)
+    CI_LOAD_BITFIELD_OPS(CI_OP_ENUM)
+    CI_LOAD_BITFIELD_128_OPS(CI_OP_ENUM)
+    CI_LOAD_BITFIELD_BYTES_OPS(CI_OP_ENUM)
+    CI_LOAD_BITFIELD_BYTES_128_OPS(CI_OP_ENUM)
+    CI_STORE_BITFIELD_OPS(CI_OP_ENUM)
+    CI_STORE_BITFIELD_128_OPS(CI_OP_ENUM)
+    CI_STORE_BITFIELD_BYTES_OPS(CI_OP_ENUM)
+    CI_STORE_BITFIELD_BYTES_128_OPS(CI_OP_ENUM)
+    CI_CALL_OPS(CI_OP_ENUM)
+    CI_SWITCH_DENSE_OPS(CI_OP_ENUM)
+    CI_SWITCH_RANGE_OPS(CI_OP_ENUM)
+    CI_BUILTIN_OPS(CI_OP_ENUM)
+    CI_ALLOCA_OPS(CI_OP_ENUM)
+    CI_FENCE_OPS(CI_OP_ENUM)
+    CI_BIT_COUNT_OPS(CI_OP_ENUM)
+    CI_SINGLE_BIT_OPS(CI_OP_ENUM)
+    CI_BIT_CEIL_OPS(CI_OP_ENUM)
+    CI_BIT_FLOOR_OPS(CI_OP_ENUM)
+    CI_ROTATE_OPS(CI_OP_ENUM)
+    CI_CRC_OPS(CI_OP_ENUM)
+    CI_ATOMIC_LOAD_OPS(CI_OP_ENUM)
+    CI_ATOMIC_STORE_OPS(CI_OP_ENUM)
+    CI_ATOMIC_RMW_OPS(CI_OP_ENUM)
+    CI_ATOMIC_CAS_OPS(CI_OP_ENUM)
+    CI_VA_SYSV_OPS(CI_OP_ENUM)
+    CI_VA_ARM_OPS(CI_OP_ENUM)
+    CI_VA_ARM_INDIRECT_OPS(CI_OP_ENUM)
+    CI_VA_STACK_OPS(CI_OP_ENUM)
+#undef CI_OP_ENUM
+    CI_OP_COUNT,
 };
 TYPEDEF_ENUM(CiOpKind, uint32_t);
 #undef CI_OPCODE_ENUM
-_Static_assert(CI_OP_CAPTURE_BACKTRACE < 256, "CiOpKind must fit in its 8-bit field");
+_Static_assert(CI_OP_COUNT < 65536, "16-bit opcode");
+
+
+// Printing categories are not opcodes and are never stored in instructions.
+enum CiOpFamily {
+    CI_F_CONST = CI_OP_COUNT,
+    CI_F_LOAD,
+    CI_F_STORE,
+    CI_F_STORE_IMM,
+    CI_F_ZERO,
+    CI_F_COPY,
+    CI_F_MEMCOPY,
+    CI_F_CONVERT,
+    CI_F_CHECKED,
+    CI_F_CHECKED_ARITH,
+    CI_F_ISTRUE,
+    CI_F_ITOF,
+    CI_F_FTOI,
+    CI_F_FTOF,
+    CI_F_ABI_MOVE,
+    CI_F_ABI_TRANSFER,
+    CI_F_JUMP_FALSE,
+    CI_F_JUMP_TRUE,
+    CI_F_BSWAP,
+    CI_F_BOUNDS,
+    CI_F_INDEX,
+    CI_F_LOAD_BITFIELD,
+    CI_F_LOAD_BITFIELD_BYTES,
+    CI_F_STORE_BITFIELD,
+    CI_F_STORE_BITFIELD_BYTES,
+    CI_F_CALL,
+    CI_F_SWITCH,
+    CI_F_BUILTIN,
+    CI_F_ALLOCA,
+    CI_F_FENCE,
+    CI_F_BIT_BUILTIN,
+    CI_F_ATOMIC_LOAD,
+    CI_F_ATOMIC_STORE,
+    CI_F_ATOMIC_RMW,
+    CI_F_ATOMIC_CAS,
+    CI_F_VA_ARG,
+};
+
+static inline
+uint32_t
+ci_op_family(CiOpKind kind){
+    switch(kind){
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_CONST;
+        CI_CONST_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_LOAD;
+        CI_LOAD_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_STORE;
+        CI_STORE_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_STORE_IMM;
+        CI_STORE_IMM_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_ZERO;
+        CI_ZERO_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_COPY;
+        CI_COPY_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_MEMCOPY;
+        CI_MEMCOPY_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_CONVERT;
+        CI_EXTEND_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_CHECKED;
+        CI_OVERFLOW_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_CHECKED_ARITH;
+        CI_CHECKED_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_ISTRUE;
+        CI_TRUTH_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_ITOF;
+        CI_ITOF_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_FTOI;
+        CI_FTOI_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_FTOF;
+        CI_FTOF_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_ABI_MOVE;
+        CI_ABI_MOVE_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_ABI_TRANSFER;
+        CI_ABI_TRANSFER_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_JUMP_FALSE;
+        CI_JUMP_FALSE_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_JUMP_TRUE;
+        CI_JUMP_TRUE_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_BSWAP;
+        CI_BSWAP_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_BOUNDS;
+        CI_BOUNDS_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_INDEX;
+        CI_INDEX_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_LOAD_BITFIELD;
+        CI_LOAD_BITFIELD_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_LOAD_BITFIELD;
+        CI_LOAD_BITFIELD_128_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_LOAD_BITFIELD_BYTES;
+        CI_LOAD_BITFIELD_BYTES_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_LOAD_BITFIELD_BYTES;
+        CI_LOAD_BITFIELD_BYTES_128_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_STORE_BITFIELD;
+        CI_STORE_BITFIELD_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_STORE_BITFIELD;
+        CI_STORE_BITFIELD_128_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_STORE_BITFIELD_BYTES;
+        CI_STORE_BITFIELD_BYTES_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_STORE_BITFIELD_BYTES;
+        CI_STORE_BITFIELD_BYTES_128_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_CALL;
+        CI_CALL_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_SWITCH;
+        CI_SWITCH_DENSE_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_SWITCH;
+        CI_SWITCH_RANGE_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_BUILTIN;
+        CI_BUILTIN_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_ALLOCA;
+        CI_ALLOCA_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_FENCE;
+        CI_FENCE_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_BIT_BUILTIN;
+        CI_BIT_COUNT_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_BIT_BUILTIN;
+        CI_SINGLE_BIT_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_BIT_BUILTIN;
+        CI_BIT_CEIL_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_BIT_BUILTIN;
+        CI_BIT_FLOOR_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_BIT_BUILTIN;
+        CI_ROTATE_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_BIT_BUILTIN;
+        CI_CRC_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_ATOMIC_LOAD;
+        CI_ATOMIC_LOAD_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_ATOMIC_STORE;
+        CI_ATOMIC_STORE_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_ATOMIC_RMW;
+        CI_ATOMIC_RMW_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_ATOMIC_CAS;
+        CI_ATOMIC_CAS_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_VA_ARG;
+        CI_VA_SYSV_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_VA_ARG;
+        CI_VA_ARM_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_VA_ARG;
+        CI_VA_ARM_INDIRECT_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_VA_ARG;
+        CI_VA_STACK_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+        default: return kind;
+    }
+}
+
+static inline
+const char* _Nonnull
+ci_op_name(CiOpKind kind){
+    switch(kind){
+#define CI_NAME_CASE(name, ...) case CI_OP_##name: return #name;
+        CI_CONST_OPS(CI_NAME_CASE)
+        CI_LOAD_OPS(CI_NAME_CASE)
+        CI_STORE_OPS(CI_NAME_CASE)
+        CI_STORE_IMM_OPS(CI_NAME_CASE)
+        CI_ZERO_OPS(CI_NAME_CASE)
+        CI_COPY_OPS(CI_NAME_CASE)
+        CI_MEMCOPY_OPS(CI_NAME_CASE)
+        CI_EXTEND_OPS(CI_NAME_CASE)
+        CI_OVERFLOW_OPS(CI_NAME_CASE)
+        CI_CHECKED_OPS(CI_NAME_CASE)
+        CI_TRUTH_OPS(CI_NAME_CASE)
+        CI_ITOF_OPS(CI_NAME_CASE)
+        CI_FTOI_OPS(CI_NAME_CASE)
+        CI_FTOF_OPS(CI_NAME_CASE)
+        CI_ABI_MOVE_OPS(CI_NAME_CASE)
+        CI_ABI_TRANSFER_OPS(CI_NAME_CASE)
+        CI_JUMP_FALSE_OPS(CI_NAME_CASE)
+        CI_JUMP_TRUE_OPS(CI_NAME_CASE)
+        CI_BSWAP_OPS(CI_NAME_CASE)
+        CI_BOUNDS_OPS(CI_NAME_CASE)
+        CI_INDEX_OPS(CI_NAME_CASE)
+        CI_LOAD_BITFIELD_OPS(CI_NAME_CASE)
+        CI_LOAD_BITFIELD_128_OPS(CI_NAME_CASE)
+        CI_LOAD_BITFIELD_BYTES_OPS(CI_NAME_CASE)
+        CI_LOAD_BITFIELD_BYTES_128_OPS(CI_NAME_CASE)
+        CI_STORE_BITFIELD_OPS(CI_NAME_CASE)
+        CI_STORE_BITFIELD_128_OPS(CI_NAME_CASE)
+        CI_STORE_BITFIELD_BYTES_OPS(CI_NAME_CASE)
+        CI_STORE_BITFIELD_BYTES_128_OPS(CI_NAME_CASE)
+        CI_CALL_OPS(CI_NAME_CASE)
+        CI_SWITCH_DENSE_OPS(CI_NAME_CASE)
+        CI_SWITCH_RANGE_OPS(CI_NAME_CASE)
+        CI_BUILTIN_OPS(CI_NAME_CASE)
+        CI_ALLOCA_OPS(CI_NAME_CASE)
+        CI_FENCE_OPS(CI_NAME_CASE)
+        CI_BIT_COUNT_OPS(CI_NAME_CASE)
+        CI_SINGLE_BIT_OPS(CI_NAME_CASE)
+        CI_BIT_CEIL_OPS(CI_NAME_CASE)
+        CI_BIT_FLOOR_OPS(CI_NAME_CASE)
+        CI_ROTATE_OPS(CI_NAME_CASE)
+        CI_CRC_OPS(CI_NAME_CASE)
+        CI_ATOMIC_LOAD_OPS(CI_NAME_CASE)
+        CI_ATOMIC_STORE_OPS(CI_NAME_CASE)
+        CI_ATOMIC_RMW_OPS(CI_NAME_CASE)
+        CI_ATOMIC_CAS_OPS(CI_NAME_CASE)
+        CI_VA_SYSV_OPS(CI_NAME_CASE)
+        CI_VA_ARM_OPS(CI_NAME_CASE)
+        CI_VA_ARM_INDIRECT_OPS(CI_NAME_CASE)
+        CI_VA_STACK_OPS(CI_NAME_CASE)
+#undef CI_NAME_CASE
+        default: return "";
+    }
+}
 
 // Indirect calls store the callee pointer immediately before argument storage.
 enum { CI_INDIRECT_CALL_PREFIX_SIZE = 8 };
@@ -235,12 +509,11 @@ typedef struct CiOp CiOp;
 struct CiOp {
     union {
         struct {
-            CiOpKind kind:            8; // CI_OP_ABI_TRANSFER
+            CiOpKind kind:            16; // Concrete ABI transfer
             CiAbiTransfer operation:  3;
             CiAbiAddress source:      4,
                          destination: 4;
-            uint32_t source_size:     5, // extension input width; otherwise size
-                     _pad:            8;
+            uint32_t source_size:     5; // extension input width; otherwise size
             union {
                 uint32_t src,
                          immediate;
@@ -262,12 +535,12 @@ struct CiOp {
             SrcLoc loc;
         } abi_transfer;
         struct {
-            CiOpKind kind: 8; // CI_OP_ABI_MOVE
+            CiOpKind kind: 16; // CI_OP_ABI_MOVE
             uint32_t write: 1,
                      incoming: 1,
                      size: 5,
                      source_size: 5,
-                     _pad: 9;
+                     _pad: 1;
             CiAbiTransfer operation: 3; // COPY, SIGN_EXTEND, ZERO_EXTEND
             uint32_t slot;
             CiAbiRegister reg;
@@ -275,53 +548,53 @@ struct CiOp {
             SrcLoc loc;
         } abi_move;
         struct {
-            CiOpKind kind: 8;
-            uint32_t _bitpad: 24;
+            CiOpKind kind: 16;
+            uint32_t _bitpad: 16;
             uint32_t _pad;
             uint64_t pad[2];
             SrcLoc loc;
         };
         struct {
-            CiOpKind kind: 8; // CI_OP_CAPTURE_BACKTRACE
-            uint32_t _pad: 24;
+            CiOpKind kind: 16; // CI_OP_CAPTURE_BACKTRACE
+            uint32_t _pad: 16;
             uint32_t slot, slot_size, buffer, capacity;
             uint32_t _padding;
             SrcLoc loc;
         } capture_backtrace;
         struct {
-            CiOpKind kind: 8; // CI_OP_CONST
+            CiOpKind kind: 16; // CI_OP_CONST
             uint32_t bt_kind: 7; // for pretty printing
             uint32_t is_anon_array: 1; // for pretty printing
-            uint32_t immsize: 16;
+            uint32_t immsize: 8;
             uint32_t slot;
             uint64_t immediate[2];
             SrcLoc loc;
         } constant;
         struct {
-            CiOpKind kind: 8; // CI_OP_COPY
+            CiOpKind kind: 16; // CI_OP_COPY
             uint32_t is_volatile: 1,
-                     _bitpad: 23;
+                     _bitpad: 15;
             uint32_t _pad;
             uint32_t slot, slot_size,
                      src, src_size;
             SrcLoc loc;
         } copy;
         struct {
-            CiOpKind kind: 8; // Immediate integer arithmetic
-            uint32_t _bitpad: 24;
+            CiOpKind kind: 16; // Immediate integer arithmetic
+            uint32_t _bitpad: 16;
             uint32_t slot, src, _pad;
             uint64_t immediate;
             SrcLoc loc;
         } alu_imm;
         struct {
-            CiOpKind kind: 8; // CI_OP_INDEX
-            uint32_t ptr_size: 4, index_size: 4, index_unsigned: 1, _bitpad: 15;
+            CiOpKind kind: 16; // CI_OP_INDEX
+            uint32_t ptr_size: 4, index_size: 4, index_unsigned: 1, _bitpad: 7;
             uint32_t slot, base, index, scale, _pad;
             SrcLoc loc;
         } index;
         struct {
-            CiOpKind kind: 8; // Integer arithmetic
-            uint32_t _bitpad: 24;
+            CiOpKind kind: 16; // Integer arithmetic
+            uint32_t _bitpad: 16;
             uint32_t slot,
                      src,
                      src2;
@@ -329,8 +602,8 @@ struct CiOp {
             SrcLoc loc;
         } alu;
         struct {
-            CiOpKind kind: 8; // Integer comparisons
-            uint32_t _bitpad: 24;
+            CiOpKind kind: 16; // Integer comparisons
+            uint32_t _bitpad: 16;
             uint32_t slot,
                      slot_size,
                      src,
@@ -339,14 +612,14 @@ struct CiOp {
             SrcLoc loc;
         } cmp;
         struct {
-            CiOpKind kind: 8; // Fused integer comparison and branch
-            uint32_t when_true: 1, _bitpad: 23;
+            CiOpKind kind: 16; // Fused integer comparison and branch
+            uint32_t when_true: 1, _bitpad: 15;
             uint32_t jump, _pad, src, src2, _pad2;
             SrcLoc loc;
         } cmp_jump;
         struct {
-            CiOpKind kind: 8; // Floating-point arithmetic
-            uint32_t is_brian_float: 1, _bitpad: 23;
+            CiOpKind kind: 16; // Floating-point arithmetic
+            uint32_t is_brian_float: 1, _bitpad: 15;
             uint32_t slot,
                      slot_size,
                      src,
@@ -355,8 +628,8 @@ struct CiOp {
             SrcLoc loc;
         } falu32, falu64;
         struct {
-            CiOpKind kind: 8; // Floating-point comparisons
-            uint32_t is_brian_float: 1, _bitpad: 23;
+            CiOpKind kind: 16; // Floating-point comparisons
+            uint32_t is_brian_float: 1, _bitpad: 15;
             uint32_t slot,
                      slot_size,
                      src,
@@ -365,98 +638,95 @@ struct CiOp {
             SrcLoc loc;
         } fcmp32, fcmp64;
         struct {
-            CiOpKind kind: 8; // CI_OP_CHECKED
-            CiCheckedOp op: 8;
+            CiOpKind kind: 16; // CI_OP_CHECKED
+            CiCheckedOp op: 2;
             uint32_t src_size: 4,
                      src2_size: 4,
                      res_size: 4,
                      src_unsigned: 1,
-                     src2_unsigned: 1,
-                     res_unsigned: 1;
+                     src2_unsigned: 1;
             uint32_t result,
                      overflow,
                      src,
                      src2;
-            uint32_t pad;
+            uint32_t res_unsigned: 1, _padding: 31;
             SrcLoc loc;
         } checked;
         struct {
-            CiOpKind kind: 8; // CI_OP_CHECK: fail if the one-byte boolean is false.
-            uint32_t _bitpad: 24;
+            CiOpKind kind: 16; // CI_OP_CHECK: fail if the one-byte boolean is false.
+            uint32_t _bitpad: 16;
             uint32_t src;
             const char* _Nonnull message;
             uint64_t pad;
             SrcLoc loc;
         } check;
         struct {
-            CiOpKind kind: 8; // CI_OP_PROPAGATE_ERROR: return a nonzero int error.
-            uint32_t _bitpad: 24;
+            CiOpKind kind: 16; // CI_OP_PROPAGATE_ERROR: return a nonzero int error.
+            uint32_t _bitpad: 16;
             uint32_t src;
             uint64_t pad[2];
             SrcLoc loc;
         } propagate_error;
         struct {
-            CiOpKind kind: 8;
-            CcBitBuiltinOp op: 8;
-            uint32_t src_size: 8, src2_size: 8;
+            CiOpKind kind: 16;
+            CcBitBuiltinOp op: 6;
+            uint32_t src_size: 5, src2_size: 5;
             uint32_t slot, slot_size, src, src2;
             uint32_t pad;
             SrcLoc loc;
         } bit_builtin;
         struct {
-            CiOpKind kind: 8; // CI_OP_CONVERT, CI_OP_ITOF, CI_OP_FTOI, CI_OP_FTOF
+            CiOpKind kind: 16; // CI_OP_CONVERT, CI_OP_ITOF, CI_OP_FTOI, CI_OP_FTOF
             uint32_t is_unsigned: 1,
-                     src_float: 8,
-                     dst_float: 8,
                      checked_index: 1,
                      checked_bound: 1,
                      src_is_brian_float: 1,
                      dst_is_brian_float: 1,
-                     _bitpad: 3;
-            uint32_t pad;
+                     _bitpad: 11;
+            uint32_t src_float: 8, dst_float: 8, _padding: 16;
             uint32_t slot, slot_size,
                      src, src_size;
             SrcLoc loc;
         } convert, itof, ftoi, ftof;
         struct {
-            CiOpKind kind: 8; // CI_OP_SLOT_ADDR
-            uint32_t _bitpad: 24;
+            CiOpKind kind: 16; // CI_OP_SLOT_ADDR
+            uint32_t _bitpad: 16;
             uint32_t slot, slot_size, src;
             uint64_t pad[1];
             SrcLoc loc;
         } slot_addr;
         struct {
-            CiOpKind kind: 8; // CI_OP_VAR_ADDR / CI_OP_TLS_ADDR
-            uint32_t _bitpad: 24;
+            CiOpKind kind: 16; // CI_OP_VAR_ADDR / CI_OP_TLS_ADDR
+            uint32_t _bitpad: 16;
             uint32_t pad;
             uint32_t slot, slot_size;
             CcVariable*_Nonnull var;
             SrcLoc loc;
         } var_addr;
         struct {
-            CiOpKind kind: 8; // CI_OP_FUNC_ADDR
-            uint32_t _bitpad: 24;
+            CiOpKind kind: 16; // CI_OP_FUNC_ADDR
+            uint32_t _bitpad: 16;
             uint32_t pad;
             uint32_t slot, slot_size;
             CcFunc*_Nonnull func;
             SrcLoc loc;
         } func_addr;
         struct {
-            CiOpKind kind: 8; // CI_OP_BOUNDS
+            CiOpKind kind: 16; // CI_OP_BOUNDS
             uint32_t inclusive: 1,
                      index_signed: 1,
-                     _bitpad: 22;
+                     _bitpad: 14;
             uint32_t pad;
             uint32_t src, src_size,
                      src2, src2_size;
             SrcLoc loc;
         } bounds;
         struct {
-            CiOpKind kind: 8; // CI_OP_STORE
+            CiOpKind kind: 16; // CI_OP_STORE
             // Guaranteed alignment of the effective address: 1u << align_log2.
             uint32_t align_log2: 5,
                      is_volatile: 1,
-                     _bitpad: 18;
+                     _bitpad: 10;
             uint32_t pad;
             uint32_t slot,
                      src,
@@ -465,20 +735,20 @@ struct CiOp {
             SrcLoc loc;
         } store;
         struct {
-            CiOpKind kind: 8; // CI_OP_STORE_IMM
+            CiOpKind kind: 16; // CI_OP_STORE_IMM
             uint32_t size: 8,
                      align_log2: 5,
                      is_volatile: 1,
-                     _bitpad: 10;
+                     _bitpad: 2;
             uint32_t slot, offset, _pad;
             uint64_t immediate;
             SrcLoc loc;
         } store_imm;
         struct {
-            CiOpKind kind: 8; // CI_OP_LOAD
+            CiOpKind kind: 16; // CI_OP_LOAD
             uint32_t align_log2: 5,
                      is_volatile: 1,
-                     _bitpad: 18;
+                     _bitpad: 10;
             uint32_t pad;
             uint32_t slot,
                      slot_size,
@@ -487,12 +757,12 @@ struct CiOp {
             SrcLoc loc;
         } load;
         struct {
-            CiOpKind kind: 8; // CI_OP_MEMCOPY
+            CiOpKind kind: 16; // CI_OP_MEMCOPY
             uint32_t dst_align_log2: 5,
                      src_align_log2: 5,
                      is_volatile: 1,
                      dynamic_size: 1,
-                     _bitpad: 12;
+                     _bitpad: 4;
             uint32_t size; // byte count, or size_t slot when dynamic_size
             uint32_t slot,
                      offset,
@@ -501,24 +771,20 @@ struct CiOp {
             SrcLoc loc;
         } memcopy;
         struct {
-            CiOpKind kind: 8; // CI_OP_ZERO
+            CiOpKind kind: 16; // CI_OP_ZERO
             uint32_t align_log2: 5,
                      is_volatile: 1,
-                     _bitpad: 18;
+                     _bitpad: 10;
             uint32_t size;
             uint32_t slot, offset;
             uint64_t pad;
             SrcLoc loc;
         } zero;
         struct {
-            CiOpKind kind: 8; // CI_OP_STORE_BITFIELD[_BYTES]
+            CiOpKind kind: 16; // CI_OP_STORE_BITFIELD[_BYTES]
             uint32_t bit_offset: 8,
-                     bit_width: 8,
-                     is_signed: 1,
-                     align_log2: 5,
-                     is_volatile: 1,
-                     _bitpad: 1;
-            uint32_t pad;
+                     bit_width: 8;
+            uint32_t is_signed: 1, align_log2: 5, is_volatile: 1, _padding: 25;
             uint32_t slot,
                      src,
                      src_size,
@@ -526,24 +792,20 @@ struct CiOp {
             SrcLoc loc;
         } store_bf;
         struct {
-            CiOpKind kind: 8; // CI_OP_LOAD_BITFIELD[_BYTES]
+            CiOpKind kind: 16; // CI_OP_LOAD_BITFIELD[_BYTES]
             uint32_t bit_offset: 8,
-                     bit_width: 8,
-                     is_signed: 1,
-                     align_log2: 5,
-                     is_volatile: 1,
-                     _bitpad: 1;
-            uint32_t pad;
+                     bit_width: 8;
+            uint32_t is_signed: 1, align_log2: 5, is_volatile: 1, _padding: 25;
             uint32_t slot, slot_size,
                      src,
                      offset;
             SrcLoc loc;
         } load_bf;
         struct {
-            CiOpKind kind: 8; // CI_OP_ATOMIC_LOAD
+            CiOpKind kind: 16; // CI_OP_ATOMIC_LOAD
             CcMemoryOrder memorder: 4;
             uint32_t is_volatile: 1,
-                     _bitpad: 19;
+                     _bitpad: 11;
             uint32_t pad;
             uint32_t slot, slot_size,
                      src,
@@ -551,10 +813,10 @@ struct CiOp {
             SrcLoc loc;
         } atomic_load;
         struct {
-            CiOpKind kind: 8; // CI_OP_ATOMIC_STORE
+            CiOpKind kind: 16; // CI_OP_ATOMIC_STORE
             CcMemoryOrder memorder: 4;
             uint32_t is_volatile: 1,
-                     _bitpad: 19;
+                     _bitpad: 11;
             uint32_t pad;
             uint32_t slot,
                      src,
@@ -563,12 +825,12 @@ struct CiOp {
             SrcLoc loc;
         } atomic_store;
         struct {
-            CiOpKind kind: 8; // CI_OP_ATOMIC_RMW
+            CiOpKind kind: 16; // CI_OP_ATOMIC_RMW
             CiAtomicRmwOp op: 8;
             CcMemoryOrder memorder: 4;
             uint32_t discard: 1,
                      is_volatile: 1,
-                     _bitpad: 10;
+                     _bitpad: 2;
             uint32_t offset;
             uint32_t slot, slot_size,
                      src,
@@ -576,13 +838,13 @@ struct CiOp {
             SrcLoc loc;
         } atomic_rmw;
         struct {
-            CiOpKind kind: 8; // CI_OP_ATOMIC_CAS
+            CiOpKind kind: 16; // CI_OP_ATOMIC_CAS
             CcMemoryOrder memorder: 4;
             CcMemoryOrder fail_memorder: 4;
             uint32_t weak: 1,
                      size: 5,
                      is_volatile: 1,
-                     _bitpad: 9;
+                     _bitpad: 1;
             uint32_t offset;
             uint32_t slot,
                      src,
@@ -591,25 +853,25 @@ struct CiOp {
             SrcLoc loc;
         } atomic_cas;
         struct {
-            CiOpKind kind: 8; // CI_OP_FENCE
+            CiOpKind kind: 16; // CI_OP_FENCE
             CcMemoryOrder memorder: 4;
             uint32_t is_signal: 1,
-                     _bitpad: 19;
+                     _bitpad: 11;
             uint32_t _pad;
             uint64_t pad[2];
             SrcLoc loc;
         } fence;
         struct {
-            CiOpKind kind: 8; // CI_OP_CLEAR_CACHE
-            uint32_t _bitpad: 24;
+            CiOpKind kind: 16; // CI_OP_CLEAR_CACHE
+            uint32_t _bitpad: 16;
             uint32_t _pad;
             uint32_t begin, end;
             uint64_t pad;
             SrcLoc loc;
         } clear_cache;
         struct {
-            CiOpKind kind: 8; // CI_OP_CALL
-            uint32_t is_indirect: 1, _pad:23;
+            CiOpKind kind: 16; // CI_OP_CALL
+            uint32_t is_indirect: 1, _pad:15;
             uint32_t ret_slot,
                      ret_size,
                      args_slot;
@@ -617,8 +879,8 @@ struct CiOp {
             SrcLoc loc;
         } call;
         struct {
-            CiOpKind kind: 8; // CI_OP_ISTRUE
-            uint32_t float_width: 16,
+            CiOpKind kind: 16; // CI_OP_ISTRUE
+            uint32_t float_width: 8,
                      negate: 1,
                      _bitpad: 7;
             uint32_t pad;
@@ -627,78 +889,75 @@ struct CiOp {
             SrcLoc loc;
         } istrue;
         struct {
-            CiOpKind kind: 8; // CI_OP_JUMP
-            uint32_t _bitpad: 24;
+            CiOpKind kind: 16; // CI_OP_JUMP
+            uint32_t _bitpad: 16;
             uint32_t jump;
             uint64_t pad[2];
             SrcLoc loc;
         } jump;
         struct {
-            CiOpKind kind: 8; // CI_OP_JUMP_FALSE, CI_OP_JUMP_TRUE
-            uint32_t _bitpad: 24;
+            CiOpKind kind: 16; // CI_OP_JUMP_FALSE, CI_OP_JUMP_TRUE
+            uint32_t _bitpad: 16;
             uint32_t jump;
             uint32_t slot, slot_size;
             uint64_t pad[1];
             SrcLoc loc;
         } jump_false, jump_true;
         struct {
-            CiOpKind kind: 8; // CI_OP_RETURN_SLOT
-            uint32_t _bitpad: 24;
+            CiOpKind kind: 16; // CI_OP_RETURN_SLOT
+            uint32_t _bitpad: 16;
             uint32_t _pad;
             uint32_t src, src_size;
             uint64_t pad[1];
             SrcLoc loc;
         } return_slot;
         struct {
-            CiOpKind kind: 8; // CI_OP_SWITCH
+            CiOpKind kind: 16; // CI_OP_SWITCH
             uint32_t is_unsigned: 1,
                      is_dense: 1,
-                     _bitpad: 22;
+                     _bitpad: 14;
             uint32_t jump;
             uint32_t slot, slot_size;
             CiSwitchTable*_Null_unspecified table;
             SrcLoc loc;
         } switch_;
         struct {
-            CiOpKind kind: 8; // CI_OP_ALLOCA
+            CiOpKind kind: 16; // CI_OP_ALLOCA
             uint32_t zero_initialize: 1,
-                     _bitpad: 23;
+                     _bitpad: 15;
             uint32_t alignment;
             uint32_t slot, src;
             uint64_t pad;
             SrcLoc loc;
         } alloca;
         struct {
-            CiOpKind kind: 8; // CI_OP_STACK_SAVE, CI_OP_STACK_RESTORE
-            uint32_t _bitpad: 24;
+            CiOpKind kind: 16; // CI_OP_STACK_SAVE, CI_OP_STACK_RESTORE
+            uint32_t _bitpad: 16;
             uint32_t slot;
             uint64_t _pad[2];
             SrcLoc loc;
         } stack_save, stack_restore;
         struct {
-            CiOpKind kind: 8; // CI_OP_BSWAP
-            uint32_t _bitpad: 24;
+            CiOpKind kind: 16; // CI_OP_BSWAP
+            uint32_t _bitpad: 16;
             uint32_t size;
             uint32_t slot, src;
             uint64_t pad;
             SrcLoc loc;
         } bswap;
         struct {
-            CiOpKind kind: 8; // CI_OP_BUILTIN
+            CiOpKind kind: 16; // CI_OP_BUILTIN
             CcBuiltinOp op: 8;
-            uint32_t _bitpad: 16;
+            uint32_t _bitpad: 8;
             uint32_t slot; // readcyclecounter result or UINT32_MAX
             uint64_t pad[2];
             SrcLoc loc;
         } builtin;
         struct {
-            CiOpKind kind: 8; // CI_OP_VA_ARG
-            uint32_t target : 8, align_log2 : 5, count : 3;
-            NcAbiMode mode : 2;
-            uint32_t _bitpad : 6;
-            uint32_t slot, size,
-                     src;
-            NcAbiPiece pieces[4];
+            CiOpKind kind: 16; // CI_OP_VA_ARG
+            uint32_t count: 8, gp: 4, fp: 4;
+            uint32_t pointers; // Output slots for GP/stack and FP source pointers.
+            uint32_t size, src, stack_mask, stack_stride;
             SrcLoc loc;
         } va_arg_;
     };

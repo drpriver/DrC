@@ -4,6 +4,7 @@
 // Copyright © 2026-2026, David Priver <david@davidpriver.com>
 //
 #include "../Drp/ckdint.h"
+#include "../Drp/bit_util.h"
 #include "cc_type_check.h"
 #include "cc_expr.h"
 #include "cc_var.h"
@@ -520,8 +521,103 @@ cc_plan9_base(CcQualType from, CcQualType to){
 }
 
 static
+uint32_t
+cc_type_alignment_requirement(const CcTargetConfig* target, CcQualType type){
+    if(type.is_atomic){
+        type.is_atomic = 0;
+        uint32_t alignment = cc_type_alignment_requirement(target, type), size;
+        if(!cc_type_sizeof_complete(target, type, &size, NULL)
+        && size && size <= 16
+        && !(size & (size - 1))
+        && size > alignment)
+            alignment = size;
+        return alignment;
+    }
+    if(ccqt_raw_kind(type) == CC_ALIGNED) return ccqt_as_aligned(type)->alignment;
+    switch(ccqt_kind(type)){
+        case CC_BASIC: return target->alignof_[ccqt_basic_kind(type)];
+        case CC_POINTER:
+        case CC_BLOCK_POINTER:
+        case CC_SLICE:
+            return target->alignof_[CCBT_nullptr_t];
+        case CC_ARRAY:
+            return cc_type_alignment_requirement(target, ccqt_as_array(type)->element);
+        case CC_VLA:
+            return cc_type_alignment_requirement(target, ccqt_as_vla(type)->element);
+        case CC_STRUCT:
+        case CC_UNION:
+            return ccqt_as_struct(type)->is_incomplete ? 0 : ccqt_as_struct(type)->alignment;
+        case CC_ENUM:
+            return ccqt_as_enum(type)->is_incomplete ? 0 : cc_type_alignment_requirement(target, ccqt_as_enum(type)->underlying);
+        case CC_VECTOR: {
+            uint32_t size = ccqt_as_vector(type)->vector_size;
+            return size < target->max_align ? size : target->max_align;
+        }
+        case CC_FUNCTION: return 0;
+        case CC_ALIGNED: cc_unsafe_unreachable();
+    }
+    cc_unsafe_unreachable();
+}
+
+static
 _Bool
-cc_pointer_pointee_convertible(CcQualType from, CcQualType to){
+cc_pointer_alignment_convertible(const CcTargetConfig* target, CcQualType from, CcQualType to, unsigned depth){
+    if(from.bits == to.bits) return 1;
+    if(depth >= 256) return 0;
+    uint32_t source = cc_type_alignment_requirement(target, from);
+    uint32_t destination = cc_type_alignment_requirement(target, to);
+    if(source && destination && (depth ? source != destination : source < destination))
+        return 0;
+    CcTypeKind fk = ccqt_kind(from), tk = ccqt_kind(to);
+    if(fk != tk) return 1;
+    if(fk == CC_SLICE)
+        return cc_pointer_alignment_convertible(target, ccqt_as_slice(from)->pointee, ccqt_as_slice(to)->pointee, depth + 1);
+    if(fk == CC_POINTER || fk == CC_BLOCK_POINTER)
+        return cc_pointer_alignment_convertible(target, ccqt_as_ptr(from)->pointee, ccqt_as_ptr(to)->pointee, depth + 1);
+    if(ccqt_is_array(from))
+        return cc_pointer_alignment_convertible(target, ccqt_qualified_array_element(from), ccqt_qualified_array_element(to), depth);
+    if(fk == CC_FUNCTION){
+        CcFunction* a = ccqt_as_function(from);
+        CcFunction* b = ccqt_as_function(to);
+        if(!cc_pointer_alignment_convertible(target, cc_parameter_value_type(a->return_type), cc_parameter_value_type(b->return_type), depth + 1))
+            return 0;
+        if(a->param_count != b->param_count)
+            return a->no_prototype || b->no_prototype;
+        for(uint32_t i = 0; i < a->param_count; i++)
+            if(!cc_pointer_alignment_convertible(target, cc_parameter_value_type(a->params[i]), cc_parameter_value_type(b->params[i]), depth + 1))
+                return 0;
+    }
+    return 1;
+}
+
+static
+_Bool
+cc_base_pointer_alignment_convertible(const CcTargetConfig* target, CcQualType from, CcQualType to, uint32_t alignment){
+    if(cc_qualification_convertible(from, to)){
+        uint32_t required = cc_type_alignment_requirement(target, to);
+        return !required || (alignment && alignment >= required);
+    }
+    if(ccqt_kind(from) != CC_STRUCT && ccqt_kind(from) != CC_UNION)
+        return 0;
+    CcStruct* record = ccqt_as_struct(from);
+    for(uint32_t i = 0; i < record->field_count; i++){
+        CcField* field = &record->fields[i];
+        if(field->name || field->is_bitfield)
+            continue;
+        CcQualType sub = field->type;
+        sub.quals |= from.quals;
+        if(!cc_plan9_base(sub, to))
+            continue;
+        if(alignment)
+            alignment = 1u << ctz_32(alignment | field->offset);
+        return cc_base_pointer_alignment_convertible(target, sub, to, alignment);
+    }
+    return 0;
+}
+
+static
+_Bool
+cc_pointer_pointee_convertible(const CcTargetConfig* target_config, CcQualType from, CcQualType to){
     if(ccqt_bt_eq(from, CCBT_void) || ccqt_bt_eq(to, CCBT_void)){
         CcQualType source = ccqt_array_object_type(from),
                    target = ccqt_array_object_type(to);
@@ -529,8 +625,10 @@ cc_pointer_pointee_convertible(CcQualType from, CcQualType to){
         return (source.quals & ~target.quals) == 0;
     }
     if(cc_qualification_convertible(from, to))
-        return 1;
-    return from.is_atomic == to.is_atomic && cc_plan9_base(from, to);
+        return cc_pointer_alignment_convertible(target_config, from, to, 0);
+    return from.is_atomic == to.is_atomic
+        && cc_plan9_base(from, to)
+        && cc_base_pointer_alignment_convertible(target_config, from, to, cc_type_alignment_requirement(target_config, from));
 }
 
 static
@@ -559,26 +657,26 @@ cc_implicit_convertible(const CcTargetConfig* target, CcQualType from, CcQualTyp
     if(fk == CC_POINTER && tk == CC_POINTER){
         CcQualType fp = ccqt_as_ptr(from)->pointee;
         CcQualType tp = ccqt_as_ptr(to)->pointee;
-        return cc_pointer_pointee_convertible(fp, tp);
+        return cc_pointer_pointee_convertible(target, fp, tp);
     }
     if(fk == CC_SLICE && tk == CC_SLICE){
         CcQualType fp = ccqt_as_slice(from)->pointee;
         CcQualType tp = ccqt_as_slice(to)->pointee;
-        return cc_qualification_convertible(fp, tp);
+        return cc_qualification_convertible(fp, tp) && cc_pointer_alignment_convertible(target, fp, tp, 0);
     }
     if(ccqt_is_array(from) && tk == CC_SLICE){
         if(fk == CC_ARRAY && ccqt_as_array(from)->is_incomplete) return 0;
         CcQualType ep = ccqt_qualified_array_element(from);
         CcQualType tp = ccqt_as_slice(to)->pointee;
-        return cc_qualification_convertible(ep, tp);
+        return cc_qualification_convertible(ep, tp) && cc_pointer_alignment_convertible(target, ep, tp, 0);
     }
     if(ccqt_is_array(from) && tk == CC_POINTER){
         CcQualType ep = ccqt_qualified_array_element(from);
         CcQualType tp = ccqt_as_ptr(to)->pointee;
-        return cc_pointer_pointee_convertible(ep, tp);
+        return cc_pointer_pointee_convertible(target, ep, tp);
     }
     if(fk == CC_FUNCTION && tk == CC_POINTER)
-        return cc_pointer_pointee_convertible(from, ccqt_as_ptr(to)->pointee);
+        return cc_pointer_pointee_convertible(target, from, ccqt_as_ptr(to)->pointee);
     if(fk == CC_BASIC && ccqt_basic_kind(from) == CCBT_nullptr_t && tk == CC_POINTER)
         return 1;
     if(fk == CC_BASIC && ccqt_basic_kind(from) == CCBT_nullptr_t

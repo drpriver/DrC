@@ -186,7 +186,8 @@ nc_abi_type(const CcTargetConfig* tc, CcQualType qt, NcAbiRole role, NcAbiType* 
     else {
         if(record){
             const CcArm64Aggregate* a = &record->arm64;
-            alignment = a->copy_alignment;
+            if(role != NC_ABI_RETURN)
+                alignment = a->copy_alignment;
             if(target == CC_TARGET_AARCH64_MACOS && a->is_empty){
                 t.mode = NC_ABI_IGNORED;
                 goto finish;

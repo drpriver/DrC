@@ -685,6 +685,44 @@ cc_is_null_pointer_constant(CcParser* p, CcExpr* e, _Bool* out){
 
 static
 int
+cc_reduce_type_alignment(CcParser* p, CcQualType type, uint32_t alignment, CcQualType* out){
+    *out = type;
+    if(!alignment || alignment >= cc_type_alignment_requirement(cc_target(p), type)) return 0;
+    type = ccqt_unaligned(type);
+    CcAligned* aligned = cc_intern_aligned(&p->type_cache, cc_allocator(p), type, alignment);
+    if(!aligned) return CC_OOM_ERROR;
+    *out = (CcQualType){.bits=(uintptr_t)aligned | type.quals};
+    return 0;
+}
+
+static
+int
+cc_address_type(CcParser* p, const CcExpr* e, CcQualType* out){
+    CcQualType type = e->type;
+    if(cc_type_alignment_requirement(cc_target(p), type)){
+        uint32_t alignment;
+        int err = cc_lvalue_alignment(p, e, &alignment);
+        if(err) return err;
+        err = cc_reduce_type_alignment(p, type, 1u << alignment, &type);
+        if(err) return err;
+    }
+    return cc_pointer_of(p, type, out);
+}
+
+static
+int
+cc_array_pointer_type(CcParser* p, const CcExpr* e, CcQualType* out){
+    uint32_t alignment;
+    int err = cc_lvalue_alignment(p, e, &alignment);
+    if(err) return err;
+    CcQualType element;
+    err = cc_reduce_type_alignment(p, ccqt_qualified_array_element(e->type), 1u << alignment, &element);
+    if(err) return err;
+    return cc_pointer_of(p, element, out);
+}
+
+static
+int
 cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _Nonnull out){
     int err = cc_check_atomic_object_access(p, e, e->loc);
     if(err) return err;
@@ -704,7 +742,16 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
         err = cc_is_null_pointer_constant(p, e, &is_null_pointer_constant);
         if(err) return err;
     }
-    if(!is_null_pointer_constant && !cc_implicit_convertible(cc_target(p), e->type, target)){
+    CcQualType source = e->type;
+    _Bool array_alignment_ok = 1;
+    if(ccqt_is_array(source) && (ccqt_kind(target) == CC_POINTER || ccqt_kind(target) == CC_SLICE)){
+        CcQualType pointer;
+        err = cc_array_pointer_type(p, e, &pointer);
+        if(err) return err;
+        CcQualType to = ccqt_kind(target) == CC_SLICE ? ccqt_as_slice(target)->pointee : ccqt_as_ptr(target)->pointee;
+        array_alignment_ok = cc_pointer_pointee_convertible(cc_target(p), ccqt_as_ptr(pointer)->pointee, to);
+    }
+    if(!is_null_pointer_constant && (!array_alignment_ok || !cc_implicit_convertible(cc_target(p), source, target))){
         MStringBuilder* sb = cc_start_error(p, e->loc, "cannot implicitly convert from '");
         cc_print_type(sb, e->type);
         msb_write_literal(sb, "' to '");
@@ -805,7 +852,7 @@ cc_decay_array(CcParser* p, CcExpr*_Nullable*_Nonnull expr){
     CcQualType type = e->type;
     if(!ccqt_is_array(type)) return 0;
     CcQualType pointer;
-    int err = cc_pointer_of(p, ccqt_qualified_array_element(type), &pointer);
+    int err = cc_array_pointer_type(p, e, &pointer);
     if(err) return err;
     return cc_implicit_cast(p, e, pointer, expr);
 }
@@ -1665,7 +1712,11 @@ cc_merge_qualified_types(CcParser* p, CcQualType a, CcQualType b, CcQualType* ou
     if(err) return err;
     err = cc_qualify_object_type(p, b, quals, &b);
     if(err) return err;
-    return cc_merge_compatible_decl_types(p, a, b, out);
+    err = cc_merge_compatible_decl_types(p, a, b, out);
+    if(err) return err;
+    uint32_t aa = cc_type_alignment_requirement(cc_target(p), a);
+    uint32_t ba = cc_type_alignment_requirement(cc_target(p), b);
+    return cc_reduce_type_alignment(p, *out, aa < ba ? aa : ba, out);
 }
 
 static
@@ -2446,7 +2497,7 @@ cc_parse_ternary_tail(CcParser* p, CcParseFlags flags, CcExpr* cond, CcExpr* _Nu
                 else {
                     CcQualType target = epointee;
                     target.quals |= tpointee.quals;
-                    if(cc_pointer_pointee_convertible(tpointee, target))
+                    if(cc_pointer_pointee_convertible(cc_target(p), tpointee, target))
                         pointee = target;
                     else {
                         pointee = tpointee;
@@ -2667,7 +2718,7 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                         if(err) return err;
                     }
                     if(ccqt_is_array((*ptr_operand)->type)){
-                        err = cc_pointer_of(p, ccqt_qualified_array_element((*ptr_operand)->type), &result_type);
+                        err = cc_array_pointer_type(p, *ptr_operand, &result_type);
                         if(err) return err;
                         err = cc_implicit_cast(p, *ptr_operand, result_type, ptr_operand);
                         if(err) return err;
@@ -2704,14 +2755,14 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                         return cc_types_error(p, tok.loc, left->type, right->type, "pointer subtraction with incompatible types");
                     if(ccqt_is_array(left->type)){
                         CcQualType ptr_type;
-                        err = cc_pointer_of(p, ccqt_qualified_array_element(left->type), &ptr_type);
+                        err = cc_array_pointer_type(p, left, &ptr_type);
                         if(err) return err;
                         err = cc_implicit_cast(p, left, ptr_type, &left);
                         if(err) return err;
                     }
                     if(ccqt_is_array(right->type)){
                         CcQualType ptr_type;
-                        err = cc_pointer_of(p, ccqt_qualified_array_element(right->type), &ptr_type);
+                        err = cc_array_pointer_type(p, right, &ptr_type);
                         if(err) return err;
                         err = cc_implicit_cast(p, right, ptr_type, &right);
                         if(err) return err;
@@ -2740,7 +2791,7 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
                     err = cc_implicit_cast_to_index(p, right, &right);
                     if(err) return err;
                     if(ccqt_is_array(left->type)){
-                        err = cc_pointer_of(p, ccqt_qualified_array_element(left->type), &result_type);
+                        err = cc_array_pointer_type(p, left, &result_type);
                         if(err) return err;
                         err = cc_implicit_cast(p, left, result_type, &left);
                         if(err) return err;
@@ -3011,7 +3062,7 @@ cc_adapt_receiver(CcParser* p, const CcFunction* function, CcExpr* operand,
     if(wants_pointer && !is_pointer && operand->is_lvalue){
         err = cc_check_addressable(p, operand, loc);
         if(err) return err;
-        err = cc_pointer_of(p, operand->type, &type);
+        err = cc_address_type(p, operand, &type);
         kind = CC_EXPR_ADDR;
     }
     else if(!wants_pointer && is_pointer){
@@ -3222,7 +3273,7 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
                     }
                     if(ccqt_is_array(operand->type)){
                         CcQualType ptr_type;
-                        err = cc_pointer_of(p, ccqt_qualified_array_element(operand->type), &ptr_type);
+                        err = cc_array_pointer_type(p, operand, &ptr_type);
                         if(err) return err;
                         err = cc_implicit_cast(p, operand, ptr_type, &operand);
                         if(err) return err;
@@ -3261,7 +3312,7 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
                         return cc_error(p, tok.loc, "cannot take address of rvalue");
                     if(flags.vc >= CC_LINKTIME_VALUE && operand->kind == CC_EXPR_VARIABLE && operand->var->automatic)
                         return cc_error(p, tok.loc, "address of automatic variable in constant expression");
-                    err = cc_pointer_of(p, operand->type, &result_type);
+                    err = cc_address_type(p, operand, &result_type);
                     if(err) return err;
                     break;
                 }

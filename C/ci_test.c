@@ -59,6 +59,110 @@ TestFunction(test_interpreter){
         const CcTargetConfig*_Nullable target;
     } testcases[] = {
         {
+            "packed array decay preserves reduced alignment", __LINE__,
+            SVI("typedef int Low __attribute__((aligned(1)));"
+                "struct __attribute__((packed)) P {char tag; int x[2];} p={7,{23,41}};"
+                "__attribute__((noinline)) int update(Low* x){return ++x[1];}"
+                "Low* a=p.x;typeof(p.x+0) b=p.x+0;"
+                "static_assert(typeof(b)==Low*);"
+                "return update(a)!=42||update(b)!=43||p.tag!=7;"),
+        },
+        {
+            "packed addresses preserve pointee alignment through calls and conditionals", __LINE__,
+            SVI("typedef int Low __attribute__((aligned(1)));"
+                "struct __attribute__((packed)) P {char tag; int x;} p={7,23};"
+                "__attribute__((noinline)) int update(Low* x){return ++*x;}"
+                "static_assert(typeof(&p.x)==Low*);"
+                "Low* a=&p.x; int normal=31; int* b=&normal;"
+                "volatile int choose=1;typeof(choose?a:b) q=choose?a:b;"
+                "static_assert(typeof(q)==Low*);"
+                "if(update(q)!=24||p.tag!=7)return 1;"
+                "q=b;if(update(q)!=32)return 2;"
+                "int* explicit_p=(int*)q;return *explicit_p!=32;"),
+        },
+        {
+            "packed anonymous base pointer retains unaligned access", __LINE__,
+            SVI("struct Base { int x; };"
+                "typedef struct Base LowBase __attribute__((aligned(1)));"
+                "struct Packed { char tag; __attribute__((packed)) struct Base; };"
+                "__attribute__((noinline)) int update(LowBase* p){p->x+=1;return p->x;}"
+                "struct Packed p={.tag=11,.x=23};LowBase* base=&p;"
+                "return update(base)!=24||p.tag!=11||p.x!=24;"),
+        },
+        {
+            "indirect result can target a packed member", __LINE__,
+            SVI("struct Value { long long words[3]; };"
+                "struct __attribute__((packed)) Box { char prefix; struct Value value; char suffix; };"
+                "__attribute__((noinline)) struct Value identity(struct Value x){return x;}"
+                "struct Value a={{11,22,33}};struct Box b={0};"
+                "b.prefix=7;b.suffix=9;b.value=identity(a);"
+                "return b.prefix!=7||b.suffix!=9||b.value.words[0]!=11||b.value.words[2]!=33;"),
+        },
+        {
+            "indirect aggregate result uses object alignment, not ABI copy alignment", __LINE__,
+            SVI("struct Odd { unsigned char bytes[37]; };"
+                "struct __attribute__((packed)) Box { char prefix; struct Odd value; char suffix; };"
+                "__attribute__((noinline)) struct Odd identity(struct Odd x){return x;}"
+                "struct Odd a={0};a.bytes[0]=19;a.bytes[36]=73;"
+                "struct Box b={0};b.prefix=3;b.suffix=4;b.value=identity(a);"
+                "return b.prefix!=3||b.suffix!=4||b.value.bytes[0]!=19||b.value.bytes[36]!=73;"),
+        },
+        {
+            "varargs preserve alignment across register and stack copies", __LINE__,
+            SVI("struct Pair { long long a,b; };"
+                "struct __attribute__((packed)) Packed { char tag; long long value; };"
+                "struct __attribute__((aligned(16))) Block { unsigned char bytes[37]; };"
+                "__attribute__((noinline)) int check(int n,...){"
+                "__builtin_va_list ap;__builtin_va_start(ap,n);"
+                "for(int i=0;i<n;i++)if(__builtin_va_arg(ap,int)!=i)return 1;"
+                "struct Pair p=__builtin_va_arg(ap,struct Pair);"
+                "struct Packed q=__builtin_va_arg(ap,struct Packed);"
+                "struct Block b=__builtin_va_arg(ap,struct Block);"
+                "long long tail=__builtin_va_arg(ap,long long);"
+                "__builtin_va_end(ap);"
+                "return p.a!=11||p.b!=22||q.tag!=3||q.value!=44"
+                "||b.bytes[0]!=55||b.bytes[36]!=66||tail!=77;}"
+                "struct Pair p={11,22};struct Packed q={3,44};"
+                "struct Block b={0};b.bytes[0]=55;b.bytes[36]=66;"
+                "if(check(0,p,q,b,77LL))return 1;"
+                "return check(8,0,1,2,3,4,5,6,7,p,q,b,77LL);"),
+        },
+        {
+            "bfloat compound arithmetic keeps its format", __LINE__,
+            SVI("__attribute__((noinline)) int f(__bf16 a, __bf16 b){"
+                "a+=b;if(a!=5.0bf16)return 1;"
+                "a-=b;if(a!=2.0bf16)return 2;"
+                "a*=b;if(a!=6.0bf16)return 3;"
+                "a/=b;if(a!=2.0bf16)return 4;"
+                "_Atomic __bf16 x=a;x+=b;if(x!=5.0bf16)return 5;"
+                "x-=b;x*=b;x/=b;return x!=2.0bf16;}"
+                "return f(2.0bf16,3.0bf16);"),
+        },
+        {
+            .name = "flattened memory and conversion shapes", .line = __LINE__,
+            .program = SV(
+                "struct Odd { unsigned char bytes[37]; };\n"
+                "__attribute__((noinline)) unsigned long long widen(signed char x) { return x; }\n"
+                "__attribute__((noinline)) unsigned char narrow(unsigned __int128 x) { return x; }\n"
+                "__attribute__((noinline)) struct Odd copy(struct Odd x) { return x; }\n"
+                "__attribute__((noinline)) void copy_bytes(void* d, void* s, __SIZE_TYPE__ n) { typedef unsigned char Row[n]; Row* dst = d; Row* src = s; *dst = *src; }\n"
+                "int main(void) {\n"
+                "  struct Odd a = {0}; a.bytes[0] = 19; a.bytes[36] = 73;\n"
+                "  struct Odd b = copy(a);\n"
+                "  if (b.bytes[0] != 19 || b.bytes[36] != 73) return 1;\n"
+                "  if (widen(-3) != (unsigned long long)-3) return 2;\n"
+                "  if (narrow(((unsigned __int128)1 << 100) | 231) != 231) return 3;\n"
+                "  unsigned char buffer[48] = {0};\n"
+                "  __builtin_memcpy(buffer + 1, &b, sizeof b);\n"
+                "  struct Odd c; __builtin_memcpy(&c, buffer + 1, sizeof c);\n"
+                "  copy_bytes(buffer + 2, &b, 37);\n"
+                "  copy_bytes(buffer + 2, &a, 7);\n"
+                "  if (buffer[2] != 19 || buffer[38] != 73) return 4;\n"
+                "  return c.bytes[0] != 19 || c.bytes[36] != 73;\n"
+                "}\nreturn main();\n"
+            ),
+        },
+        {
             "integer arithmetic preserves signedness in register and immediate forms", __LINE__,
             SVI(
                 "#define CHECK(T, U) do { \\\n"
@@ -14923,10 +15027,11 @@ TestFunction(test_interpreter){
         {
             "anonymous member attributes reach base pointer conversions", __LINE__,
             SVI("struct B{int x;};"
+                "typedef struct B LowB __attribute__((aligned(1)));"
                 "struct A{char tag;_Alignas(32) struct B;};"
                 "struct P{char tag;__attribute__((packed)) struct B;};"
                 "struct A a={.tag=7,.x=19};struct P p={.tag=11,.x=23};"
-                "struct B*ap=&a;struct B*pp=&p;ap->x++;pp->x++;"
+                "struct B*ap=&a;LowB*pp=&p;ap->x++;pp->x++;"
                 "return (char*)ap==(char*)&a+32 && (char*)pp==(char*)&p+1"
                 " && a.tag==7 && p.tag==11 && a.x==20 && p.x==24;"),
             .exit_code=1,
@@ -20901,6 +21006,21 @@ TestFunction(test_ci_call_by_name){
             .func_name = SVI("compact"),
             .expected_ret = 42,
             .target = &cc_target_aarch64_macos,
+        },
+        {
+            "compact argv omits zero-sized ABI parameters on every target", __LINE__,
+            SVI("struct E {};int compact(struct E p,int a,struct E q,int b){return 10*a+b;}\n"),
+            .func_name = SVI("compact"),
+            .args = {{CCBT_int, .i=3}, {CCBT_int, .i=4}},
+            .expected_ret = 34,
+        },
+        {
+            "compact argv omits macOS SysV padding-only parameters", __LINE__,
+            SVI("struct E {unsigned:7;};int compact(struct E p,int a,struct E q,int b){return 10*a+b;}\n"),
+            .func_name = SVI("compact"),
+            .args = {{CCBT_int, .i=3}, {CCBT_int, .i=4}},
+            .expected_ret = 34,
+            .target = &cc_target_x86_64_macos,
         },
         {
             "compact argv rejects extra arguments", __LINE__,

@@ -48,7 +48,7 @@ _Static_assert(NC_ABI_X87 < 4, "ABI bank fits in two bits");
 typedef struct NcAbiType NcAbiType;
 struct NcAbiType {
     uint32_t  size,
-              align_log2:  5; // Alignment is UINT32_C(1) << align_log2.
+              align_log2:  5; // Log2 alignment: ABI argument storage or C result object.
     NcAbiMode mode:        2; // NcAbiMode.
     uint32_t  count:       3, // 0-4 register pieces.
               sign_extend: 1,

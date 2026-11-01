@@ -74,8 +74,10 @@ ci_op_print_family(CiOpKind kind){
             return CI_OP_EQ_JUMP32;
         CI_CMP_OPS(CI_OPCODE_CASE, _JUMP64)
             return CI_OP_EQ_JUMP64;
+        CI_FALU_OPS(CI_OPCODE_CASE, _BF16)
         CI_FALU_OPS(CI_OPCODE_CASE, 16)
             return CI_OP_FADD16;
+        CI_FCMP_OPS(CI_OPCODE_CASE, _BF16)
         CI_FCMP_OPS(CI_OPCODE_CASE, 16)
             return CI_OP_FEQ16;
         CI_FALU_OPS(CI_OPCODE_CASE, 32)
@@ -94,7 +96,7 @@ ci_op_print_family(CiOpKind kind){
             return CI_OP_FADD128;
         CI_FCMP_OPS(CI_OPCODE_CASE, 128)
             return CI_OP_FEQ128;
-        default: return kind;
+        default: return ci_op_family(kind);
     }
 }
 
@@ -109,6 +111,7 @@ ci_op_numeric_sym(CiOpKind kind){
         case CI_OP_ADD128:
         case CI_OP_ADD_IMM32:
         case CI_OP_ADD_IMM64:
+        case CI_OP_FADD_BF16:
         case CI_OP_FADD16:
         case CI_OP_FADD32:
         case CI_OP_FADD64:
@@ -122,6 +125,7 @@ ci_op_numeric_sym(CiOpKind kind){
         case CI_OP_SUB128: case CI_OP_NEG128:
         case CI_OP_SUB_IMM32:
         case CI_OP_SUB_IMM64:
+        case CI_OP_FSUB_BF16:
         case CI_OP_FSUB16: case CI_OP_FNEG16:
         case CI_OP_FSUB32: case CI_OP_FNEG32:
         case CI_OP_FSUB64: case CI_OP_FNEG64:
@@ -135,6 +139,7 @@ ci_op_numeric_sym(CiOpKind kind){
         case CI_OP_MUL128:
         case CI_OP_MUL_IMM32:
         case CI_OP_MUL_IMM64:
+        case CI_OP_FMUL_BF16:
         case CI_OP_FMUL16:
         case CI_OP_FMUL32:
         case CI_OP_FMUL64:
@@ -148,6 +153,7 @@ ci_op_numeric_sym(CiOpKind kind){
         case CI_OP_SDIV128: case CI_OP_UDIV128:
         case CI_OP_SDIV_IMM32: case CI_OP_UDIV_IMM32:
         case CI_OP_SDIV_IMM64: case CI_OP_UDIV_IMM64:
+        case CI_OP_FDIV_BF16:
         case CI_OP_FDIV16:
         case CI_OP_FDIV32:
         case CI_OP_FDIV64:
@@ -213,6 +219,7 @@ ci_op_numeric_sym(CiOpKind kind){
         case CI_OP_EQ128:
         case CI_OP_EQ_JUMP32:
         case CI_OP_EQ_JUMP64:
+        case CI_OP_FEQ_BF16:
         case CI_OP_FEQ16:
         case CI_OP_FEQ32:
         case CI_OP_FEQ64:
@@ -224,6 +231,7 @@ ci_op_numeric_sym(CiOpKind kind){
         case CI_OP_NE128:
         case CI_OP_NE_JUMP32:
         case CI_OP_NE_JUMP64:
+        case CI_OP_FNE_BF16:
         case CI_OP_FNE16:
         case CI_OP_FNE32:
         case CI_OP_FNE64:
@@ -235,6 +243,7 @@ ci_op_numeric_sym(CiOpKind kind){
         case CI_OP_SLT128: case CI_OP_ULT128:
         case CI_OP_SLT_JUMP32: case CI_OP_ULT_JUMP32:
         case CI_OP_SLT_JUMP64: case CI_OP_ULT_JUMP64:
+        case CI_OP_FLT_BF16:
         case CI_OP_FLT16:
         case CI_OP_FLT32:
         case CI_OP_FLT64:
@@ -246,6 +255,7 @@ ci_op_numeric_sym(CiOpKind kind){
         case CI_OP_SGT128: case CI_OP_UGT128:
         case CI_OP_SGT_JUMP32: case CI_OP_UGT_JUMP32:
         case CI_OP_SGT_JUMP64: case CI_OP_UGT_JUMP64:
+        case CI_OP_FGT_BF16:
         case CI_OP_FGT16:
         case CI_OP_FGT32:
         case CI_OP_FGT64:
@@ -257,6 +267,7 @@ ci_op_numeric_sym(CiOpKind kind){
         case CI_OP_SLE128: case CI_OP_ULE128:
         case CI_OP_SLE_JUMP32: case CI_OP_ULE_JUMP32:
         case CI_OP_SLE_JUMP64: case CI_OP_ULE_JUMP64:
+        case CI_OP_FLE_BF16:
         case CI_OP_FLE16:
         case CI_OP_FLE32:
         case CI_OP_FLE64:
@@ -268,6 +279,7 @@ ci_op_numeric_sym(CiOpKind kind){
         case CI_OP_SGE128: case CI_OP_UGE128:
         case CI_OP_SGE_JUMP32: case CI_OP_UGE_JUMP32:
         case CI_OP_SGE_JUMP64: case CI_OP_UGE_JUMP64:
+        case CI_OP_FGE_BF16:
         case CI_OP_FGE16:
         case CI_OP_FGE32:
         case CI_OP_FGE64:
@@ -308,6 +320,7 @@ ci_op_numeric_unary(CiOpKind kind){
         case CI_OP_NEG32: case CI_OP_NOT32:
         case CI_OP_NEG64: case CI_OP_NOT64:
         case CI_OP_NEG128: case CI_OP_NOT128:
+        case CI_OP_FNEG_BF16:
         case CI_OP_FNEG16:
         case CI_OP_FNEG32:
         case CI_OP_FNEG64:
@@ -415,40 +428,27 @@ ci_op_print_abi_address(MStringBuilder* out, CiAbiAddress mode, uint32_t pointer
 static
 void
 ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
+    if(ci_op_name(op->kind)[0]) msb_sprintf(out, "%s ", ci_op_name(op->kind));
     uint32_t family = ci_op_print_family(op->kind);
     switch(family){
-        case CI_OP_ABI_TRANSFER: {
-            static const char* const actions[]={
-                "copy",
-                "address",
-                "zero",
-                "constant",
-                "zero-extend",
-                "sign-extend",
-            };
-            msb_sprintf(out, "abi.%s ", actions[op->abi_transfer.operation]);
-            ci_op_print_abi_address(out, op->abi_transfer.destination, op->abi_transfer.dst_pointer, op->abi_transfer.dst, op->abi_transfer.size);
-            if(op->abi_transfer.operation != CI_ABI_ZERO){
-                msb_write_literal(out, " = ");
-                if(op->abi_transfer.operation == CI_ABI_CONSTANT)
-                    msb_sprintf(out, "%u", op->abi_transfer.immediate);
-                else {
-                    if(op->abi_transfer.operation == CI_ABI_ADDRESS)
-                        msb_write_char(out, '&');
-                    ci_op_print_abi_address(
-                        out,
-                        op->abi_transfer.source, op->abi_transfer.src_pointer,
-                        op->abi_transfer.src,
-                        op->abi_transfer.source_size? op->abi_transfer.source_size : op->abi_transfer.size
-                    );
-                }
+        case CI_F_ABI_TRANSFER: {
+            ci_op_print_abi_address(out, op->abi_transfer.destination, op->abi_transfer.dst_pointer,
+                op->abi_transfer.dst, op->abi_transfer.size);
+            if(op->abi_transfer.operation == CI_ABI_CONSTANT)
+                msb_sprintf(out, " = %u", op->abi_transfer.immediate);
+            else if(op->abi_transfer.operation != CI_ABI_ZERO){
+                if(op->abi_transfer.operation == CI_ABI_ADDRESS)
+                    msb_write_literal(out, " = &");
+                else
+                    msb_write_literal(out, " <- ");
+                ci_op_print_abi_address(out, op->abi_transfer.source, op->abi_transfer.src_pointer,
+                    op->abi_transfer.src, op->abi_transfer.source_size ? op->abi_transfer.source_size : op->abi_transfer.size);
             }
-            msb_sprintf(out, " size=%u", op->abi_transfer.size);
             if(op->abi_transfer.source_size)
                 msb_sprintf(out, " source_size=%u", op->abi_transfer.source_size);
             break;
         }
-        case CI_OP_ABI_MOVE:
+        case CI_F_ABI_MOVE:
             msb_write_literal(out, "abi.move ");
             if(!op->abi_move.write){
                 ci_op_print_range(out, op->abi_move.slot, op->abi_move.size);
@@ -477,7 +477,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             msb_sprintf(out, "%%%u, %%%u", op->capture_backtrace.buffer, op->capture_backtrace.capacity);
             msb_write_literal(out, ")");
             break;
-        case CI_OP_CONST:
+        case CI_F_CONST:
             ci_op_print_range(out, op->constant.slot, op->constant.immsize);
             uint64_t v = op->constant.immediate[0];
             if(op->constant.is_anon_array){
@@ -629,10 +629,10 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                 if(v > 9) msb_sprintf(out, " (0x%llx)", (unsigned long long)v);
             }
             break;
-        case CI_OP_COPY:
+        case CI_F_COPY:
             ci_op_print_range(out, op->copy.slot, op->copy.slot_size);
             msb_write_literal(out, " = ");
-            ci_op_print_range(out, op->copy.src, op->copy.src_size);
+            ci_op_print_range(out, op->copy.src, op->copy.slot_size);
             break;
         case CI_OP_ADD8:{
             uint32_t sz;
@@ -675,7 +675,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                         (unsigned long long)(sz == 4 ? (uint32_t)op->alu_imm.immediate : op->alu_imm.immediate));
             break;
         }
-        case CI_OP_INDEX:
+        case CI_F_INDEX:
             ci_op_print_range(out, op->index.slot, op->index.ptr_size);
             msb_write_literal(out, " = index ");
             ci_op_print_range(out, op->index.base, op->index.ptr_size);
@@ -711,6 +711,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_range(out, op->cmp.src2, sz);
             break;
         }
+        case CI_OP_FADD_BF16:
         case CI_OP_FADD16:
         case CI_OP_FADD32:
         case CI_OP_FADD64:
@@ -730,6 +731,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                 ci_op_print_range(out, op->falu32.src2, width);
             }
         } break;
+        case CI_OP_FEQ_BF16:
         case CI_OP_FEQ16:
         case CI_OP_FEQ32:
         case CI_OP_FEQ64:
@@ -743,17 +745,18 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             msb_sprintf(out, " %s%s ", ci_op_numeric_sym(op->kind), suffix);
             ci_op_print_range(out, op->fcmp32.src2, width);
         } break;
-        case CI_OP_CHECKED:{
-            const char* sym = op->checked.op == CI_CHK_ADD? "+"
-                            : op->checked.op == CI_CHK_SUB? "-" : "*";
-            ci_op_print_range(out, op->checked.result, op->checked.res_size);
-            msb_write_literal(out, ", ");
+        case CI_F_CHECKED:
             ci_op_print_range(out, op->checked.overflow, 1);
-            msb_sprintf(out, " = checked %s ", sym);
-            ci_op_print_range(out, op->checked.src, op->checked.src_size);
+            msb_sprintf(out, " = outside.%s%u ", op->checked.res_unsigned ? "u" : "s", op->checked.res_size * 8);
+            ci_op_print_range(out, op->checked.src, 16);
+            break;
+        case CI_F_CHECKED_ARITH:
+            ci_op_print_range(out, op->checked.result, op->checked.res_size);
+            msb_sprintf(out, ", overflow=[%u] <- ", op->checked.overflow);
+            ci_op_print_range(out, op->checked.src, op->checked.res_size);
             msb_write_literal(out, ", ");
-            ci_op_print_range(out, op->checked.src2, op->checked.src2_size);
-        } break;
+            ci_op_print_range(out, op->checked.src2, op->checked.res_size);
+            break;
         case CI_OP_PROPAGATE_ERROR:
             msb_sprintf(out, "propagate_error %%%u", op->propagate_error.src);
             break;
@@ -762,7 +765,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_range(out, op->check.src, 1);
             msb_sprintf(out, " else error \"%s\"", op->check.message);
             break;
-        case CI_OP_BIT_BUILTIN:
+        case CI_F_BIT_BUILTIN:
             ci_op_print_range(out, op->bit_builtin.slot, op->bit_builtin.slot_size);
             msb_sprintf(out, " = %s ", cc_bit_builtin_name(op->bit_builtin.op));
             ci_op_print_range(out, op->bit_builtin.src, op->bit_builtin.src_size);
@@ -771,24 +774,24 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                 ci_op_print_range(out, op->bit_builtin.src2, op->bit_builtin.src2_size);
             }
             break;
-        case CI_OP_CONVERT:
+        case CI_F_CONVERT:
             ci_op_print_range(out, op->convert.slot, op->convert.slot_size);
             msb_sprintf(out, " = %s ", op->convert.is_unsigned?"zext":"sext");
             ci_op_print_range(out, op->convert.src, op->convert.src_size);
             if(op->convert.checked_index) msb_write_literal(out, " (checked index)");
             if(op->convert.checked_bound) msb_write_literal(out, " (checked VLA bound)");
             break;
-        case CI_OP_ITOF:
+        case CI_F_ITOF:
             ci_op_print_range(out, op->itof.slot, op->itof.slot_size);
             msb_sprintf(out, " = itof%s ", op->itof.is_unsigned?".u":".s");
             ci_op_print_range(out, op->itof.src, op->itof.src_size);
             break;
-        case CI_OP_FTOI:
+        case CI_F_FTOI:
             ci_op_print_range(out, op->ftoi.slot, op->ftoi.slot_size);
             msb_sprintf(out, " = ftoi%s ", op->ftoi.is_unsigned?".u":".s");
             ci_op_print_range(out, op->ftoi.src, op->ftoi.src_size);
             break;
-        case CI_OP_FTOF:
+        case CI_F_FTOF:
             ci_op_print_range(out, op->ftof.slot, op->ftof.slot_size);
             msb_write_literal(out, " = ftof ");
             ci_op_print_range(out, op->ftof.src, op->ftof.src_size);
@@ -809,30 +812,30 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_range(out, op->func_addr.slot, op->func_addr.slot_size);
             msb_sprintf(out, " = &%s", s);
         } break;
-        case CI_OP_BOUNDS:
+        case CI_F_BOUNDS:
             msb_sprintf(out, "bounds%s ", op->bounds.index_signed?".s":"");
             ci_op_print_range(out, op->bounds.src, op->bounds.src_size);
             msb_sprintf(out, " %s ", op->bounds.inclusive?"<=":"<");
             ci_op_print_range(out, op->bounds.src2, op->bounds.src2_size);
             break;
-        case CI_OP_LOAD:
+        case CI_F_LOAD:
             ci_op_print_range(out, op->load.slot, op->load.slot_size);
             msb_write_literal(out, " = ");
             ci_op_print_deref(out, op->load.src, op->load.offset);
             msb_sprintf(out, " (align %u)", 1u << op->load.align_log2);
             break;
-        case CI_OP_STORE_IMM:
+        case CI_F_STORE_IMM:
             ci_op_print_deref(out, op->store_imm.slot, op->store_imm.offset);
             msb_sprintf(out, " = 0x%llx (%u bytes)", (unsigned long long)op->store_imm.immediate, op->store_imm.size);
             msb_sprintf(out, " (align %u)", 1u << op->store_imm.align_log2);
             break;
-        case CI_OP_STORE:
+        case CI_F_STORE:
             ci_op_print_deref(out, op->store.slot, op->store.offset);
             msb_write_literal(out, " = ");
             ci_op_print_range(out, op->store.src, op->store.src_size);
             msb_sprintf(out, " (align %u)", 1u << op->store.align_log2);
             break;
-        case CI_OP_MEMCOPY:
+        case CI_F_MEMCOPY:
             ci_op_print_deref(out, op->memcopy.slot, op->memcopy.offset);
             msb_write_literal(out, " = ");
             ci_op_print_deref(out, op->memcopy.src, op->memcopy.src_offset);
@@ -844,26 +847,26 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             else msb_sprintf(out, " (%u bytes)", op->memcopy.size);
             msb_sprintf(out, " (dst align %u, src align %u)", 1u << op->memcopy.dst_align_log2, 1u << op->memcopy.src_align_log2);
             break;
-        case CI_OP_ZERO:
+        case CI_F_ZERO:
             msb_write_literal(out, "zero ");
             ci_op_print_deref(out, op->zero.slot, op->zero.offset);
             msb_sprintf(out, " (%u bytes)", op->zero.size);
             msb_sprintf(out, " (align %u)", 1u << op->zero.align_log2);
             break;
-        case CI_OP_LOAD_BITFIELD:
-        case CI_OP_LOAD_BITFIELD_BYTES:
+        case CI_F_LOAD_BITFIELD:
+        case CI_F_LOAD_BITFIELD_BYTES:
             ci_op_print_range(out, op->load_bf.slot, op->load_bf.slot_size);
             msb_sprintf(out, " = bits%s%s[%u:%u] of ",
-                op->kind == CI_OP_LOAD_BITFIELD_BYTES ? ".bytes" : "",
+                ci_op_family(op->kind) == CI_F_LOAD_BITFIELD_BYTES ? ".bytes" : "",
                 op->load_bf.is_signed?".s":".u",
                 op->load_bf.bit_offset, op->load_bf.bit_offset+op->load_bf.bit_width);
             ci_op_print_deref(out, op->load_bf.src, op->load_bf.offset);
             msb_sprintf(out, " (align %u)", 1u << op->load_bf.align_log2);
             break;
-        case CI_OP_STORE_BITFIELD:
-        case CI_OP_STORE_BITFIELD_BYTES:
+        case CI_F_STORE_BITFIELD:
+        case CI_F_STORE_BITFIELD_BYTES:
             msb_sprintf(out, "bits%s%s[%u:%u] of ",
-                op->kind == CI_OP_STORE_BITFIELD_BYTES ? ".bytes" : "",
+                ci_op_family(op->kind) == CI_F_STORE_BITFIELD_BYTES ? ".bytes" : "",
                 op->store_bf.is_signed?".s":".u",
                 op->store_bf.bit_offset, op->store_bf.bit_offset+op->store_bf.bit_width);
             ci_op_print_deref(out, op->store_bf.slot, op->store_bf.offset);
@@ -871,7 +874,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_range(out, op->store_bf.src, op->store_bf.src_size);
             msb_sprintf(out, " (align %u)", 1u << op->store_bf.align_log2);
             break;
-        case CI_OP_CALL:{
+        case CI_F_CALL:{
             CiCallDescriptor* d = op->call.descrip;
             if(op->call.is_indirect){
                 msb_sprintf(out, "call *[%u](", op->call.args_slot - CI_INDIRECT_CALL_PREFIX_SIZE);
@@ -884,7 +887,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                 msb_sprintf(out, "stack @%u", op->call.args_slot);
             msb_write_char(out,  ')');
         } break;
-        case CI_OP_ISTRUE:
+        case CI_F_ISTRUE:
             ci_op_print_range(out, op->istrue.slot, op->istrue.slot_size);
             msb_sprintf(out, " = %s%s ",
                 op->istrue.negate?"isfalse":"istrue",
@@ -894,12 +897,12 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
         case CI_OP_JUMP:
             msb_sprintf(out, "jump 0x%x", op->jump.jump);
             break;
-        case CI_OP_JUMP_FALSE:
+        case CI_F_JUMP_FALSE:
             msb_write_literal(out, "if !");
             ci_op_print_range(out, op->jump_false.slot, op->jump_false.slot_size);
             msb_sprintf(out, " jump 0x%x", op->jump_false.jump);
             break;
-        case CI_OP_JUMP_TRUE:
+        case CI_F_JUMP_TRUE:
             msb_write_literal(out, "if ");
             ci_op_print_range(out, op->jump_true.slot, op->jump_true.slot_size);
             msb_sprintf(out, " jump 0x%x", op->jump_true.jump);
@@ -911,7 +914,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             msb_write_literal(out, "return ");
             ci_op_print_range(out, op->return_slot.src, op->return_slot.src_size);
             break;
-        case CI_OP_SWITCH:
+        case CI_F_SWITCH:
             msb_sprintf(out, "switch%s%s ", op->switch_.is_unsigned?".u":"", op->switch_.is_dense?".dense":"");
             ci_op_print_range(out, op->switch_.slot, op->switch_.slot_size);
             msb_write_literal(out, " {");
@@ -931,19 +934,19 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             }
             msb_sprintf(out, "default=>0x%x}", op->switch_.jump);
             break;
-        case CI_OP_ATOMIC_LOAD:
+        case CI_F_ATOMIC_LOAD:
             ci_op_print_range(out, op->atomic_load.slot, op->atomic_load.slot_size);
             msb_write_literal(out, " = ");
             ci_op_print_deref(out, op->atomic_load.src, op->atomic_load.offset);
             msb_sprintf(out, " (atomic %s)", ci_op_memory_order(op->atomic_load.memorder));
             break;
-        case CI_OP_ATOMIC_STORE:
+        case CI_F_ATOMIC_STORE:
             ci_op_print_deref(out, op->atomic_store.slot, op->atomic_store.offset);
             msb_write_literal(out, " = ");
             ci_op_print_range(out, op->atomic_store.src, op->atomic_store.src_size);
             msb_sprintf(out, " (atomic %s)", ci_op_memory_order(op->atomic_store.memorder));
             break;
-        case CI_OP_ATOMIC_RMW:
+        case CI_F_ATOMIC_RMW:
             ci_op_print_range(out, op->atomic_rmw.slot, op->atomic_rmw.slot_size);
             msb_sprintf(out, " = %s ", ci_op_armw_name(op->atomic_rmw.op));
             ci_op_print_deref(out, op->atomic_rmw.src, op->atomic_rmw.offset);
@@ -951,7 +954,7 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_range(out, op->atomic_rmw.src2, op->atomic_rmw.slot_size);
             msb_sprintf(out, " (atomic %s)%s", ci_op_memory_order(op->atomic_rmw.memorder), op->atomic_rmw.discard?" (discard)":"");
             break;
-        case CI_OP_ATOMIC_CAS:
+        case CI_F_ATOMIC_CAS:
             ci_op_print_range(out, op->atomic_cas.slot, 1);
             msb_sprintf(out, " = cas%s ", op->atomic_cas.weak?".weak":"");
             ci_op_print_deref(out, op->atomic_cas.src, op->atomic_cas.offset);
@@ -961,13 +964,13 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_range(out, op->atomic_cas.desired, op->atomic_cas.size);
             msb_sprintf(out, " (atomic %s, fail %s)", ci_op_memory_order(op->atomic_cas.memorder), ci_op_memory_order(op->atomic_cas.fail_memorder));
             break;
-        case CI_OP_FENCE:
+        case CI_F_FENCE:
             msb_sprintf(out, "%s fence %s", op->fence.is_signal?"signal":"atomic", ci_op_memory_order(op->fence.memorder));
             break;
         case CI_OP_CLEAR_CACHE:
             msb_sprintf(out, "clear_cache([%u], [%u])", op->clear_cache.begin, op->clear_cache.end);
             break;
-        case CI_OP_ALLOCA:
+        case CI_F_ALLOCA:
             msb_sprintf(out, "[%u] = alloca([%u], align=%u, zero=%u)", op->alloca.slot, op->alloca.src, op->alloca.alignment, op->alloca.zero_initialize);
             break;
         case CI_OP_STACK_SAVE:
@@ -976,10 +979,10 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
         case CI_OP_STACK_RESTORE:
             msb_sprintf(out, "stack_restore([%u])", op->stack_restore.slot);
             break;
-        case CI_OP_BSWAP:
+        case CI_F_BSWAP:
             msb_sprintf(out, "[%u] = bswap%u([%u])", op->bswap.slot, op->bswap.size*8, op->bswap.src);
             break;
-        case CI_OP_BUILTIN:
+        case CI_F_BUILTIN:
             switch((uint32_t)op->builtin.op){
                 case CC_BUILTIN_UNREACHABLE: msb_write_literal(out, "unreachable"); break;
                 case CC_BUILTIN_TRAP: msb_write_literal(out, "trap"); break;
@@ -994,9 +997,9 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                 default: msb_write_literal(out, "?invalid builtinop"); break;
             }
             break;
-        case CI_OP_VA_ARG:
-            ci_op_print_range(out, op->va_arg_.slot, op->va_arg_.size);
-            msb_sprintf(out, " = va_arg(*[%u])", op->va_arg_.src);
+        case CI_F_VA_ARG:
+            ci_op_print_range(out, op->va_arg_.pointers, 2 * sizeof(void*));
+            msb_sprintf(out, " = va_arg addresses(*[%u], size=%u)", op->va_arg_.src, op->va_arg_.size);
             break;
     }
 }

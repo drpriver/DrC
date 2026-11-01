@@ -7046,7 +7046,7 @@ TestFunction(test_parse_decls){
                 "typedef int B __attribute__((aligned(32)));\n"
                 "void f(A *a,B *b){\n"
                 "_Static_assert(__builtin_types_compatible_p(typeof(1?a:b),typeof(1?b:a)));\n"
-                "_Static_assert(typeof(1?a:b).pointee.alignof_==32);\n"
+                "_Static_assert(typeof(1?a:b).pointee.alignof_==16);\n"
                 "}\n"
                 "struct S { A *x; B *y; }; typedef struct S Outer;\n"
                 "void g(void){ struct S { B *x; A *y; }; Outer *a; struct S *b;\n"
@@ -7834,6 +7834,36 @@ TestFunction(test_parse_errors){
         _Bool both_modes;
         StringView target_expect[CC_TARGET_COUNT];
     } cases[] = {
+        {
+            "implicit pointer conversion cannot strengthen pointee alignment", __LINE__,
+            SVI("typedef int Low __attribute__((aligned(1))); Low* p;\nint* q=p;\n"),
+            SVI("(test):2:8: error: cannot implicitly convert from 'int __attribute__((aligned(1))) *' to 'int *'\n"),
+        },
+        {
+            "ordinary pointer cannot implicitly promise over-alignment", __LINE__,
+            SVI("typedef int High __attribute__((aligned(16))); int* p;\nHigh* q=p;\n"),
+            SVI("(test):2:9: error: cannot implicitly convert from 'int *' to 'int __attribute__((aligned(16))) *'\n"),
+        },
+        {
+            "packed member address cannot implicitly lose alignment", __LINE__,
+            SVI("struct __attribute__((packed)) S {char tag; int x;} s;\nint* p=&s.x;\n"),
+            SVI("(test):2:8: error: cannot implicitly convert from 'int __attribute__((aligned(1))) *' to 'int *'\n"),
+        },
+        {
+            "packed anonymous base cannot implicitly promise natural alignment", __LINE__,
+            SVI("struct B {int x;};\nstruct P {char tag; __attribute__((packed)) struct B;} p;\nstruct B* b=&p;\n"),
+            SVI("(test):3:13: error: cannot implicitly convert from 'struct P *' to 'struct B *'\n"),
+        },
+        {
+            "nested pointers cannot weaken writable pointee alignment", __LINE__,
+            SVI("typedef int Low __attribute__((aligned(1))); int** p;\nLow** q=p;\n"),
+            SVI("(test):2:9: error: cannot implicitly convert from 'int * *' to 'int __attribute__((aligned(1))) * *'\n"),
+        },
+        {
+            "packed array decay cannot promise natural alignment", __LINE__,
+            SVI("struct __attribute__((packed)) S {char tag; int x[2];} s;\nint* p=s.x;\n"),
+            SVI("(test):2:9: error: cannot implicitly convert from 'int[2]' to 'int *'\n"),
+        },
         {
             "unexpected punctuator in expression", __LINE__,
             SVI("int x = ;"),

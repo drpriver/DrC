@@ -237,13 +237,29 @@ static _Bool cc_plan9_base(CcQualType from, CcQualType to);
 // to: The type to convert to
 //
 
-static _Bool cc_pointer_pointee_convertible(CcQualType from, CcQualType to);
+static uint32_t cc_type_alignment_requirement(const CcTargetConfig* target, CcQualType type);
+// cc_type_alignment_requirement()
+// --------------------------------
+// Gets the alignment required by a type on the target.
+//
+// Returns:
+// --------
+// Alignment in bytes, or zero if the type supplies no requirement.
+//
+// Arguments:
+// ----------
+// target: Target configuration.
+// type: The type to query.
+//
+
+static _Bool cc_pointer_pointee_convertible(const CcTargetConfig*, CcQualType from, CcQualType to);
 // cc_pointer_pointee_convertible()
 // --------------------------------
 // Call this function with the `pointee`s of two pointers.
 // Given that these two types are being pointed to, is the pointer type
 // allowed to be convertible.
-// Allows compatible qualificatin, void pointer conversion, Plan9 conversion.
+// Allows compatible qualification, void pointer conversion, and Plan9 conversion.
+// Typed conversions may weaken pointee alignment, but cannot strengthen it.
 //
 // Returns:
 // --------
