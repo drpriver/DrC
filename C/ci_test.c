@@ -64,6 +64,46 @@ TestFunction(test_interpreter){
         const CcTargetConfig*_Nullable target;
     } testcases[] = {
         {
+            "GNU auto type initialization reads the outer variable", __LINE__,
+            SVI("int x=7;int run(void){__auto_type x=x+1;"
+                "{__auto_type x=x+2;if(x!=10)return 1;}return x!=8;}"
+                "return run()||x!=7;"),
+        },
+        {
+            "partial designated override preserves string initializer characters", __LINE__,
+            SVI("struct S{char a[4];};"
+                "static struct S s={.a=\"abc\",.a[1]='X'};"
+                "int run(void){struct S t={.a=\"abc\",.a[1]='Y'};"
+                "return s.a[0]!='a'||s.a[1]!='X'||s.a[2]!='c'||s.a[3]"
+                "||t.a[0]!='a'||t.a[1]!='Y'||t.a[2]!='c'||t.a[3];}return run();"),
+        },
+        {
+            "selection header VLA scope ends before following label", __LINE__,
+            SVI("int run(int n){int total=0;goto after;"
+                "again:if(int a[n];1){a[0]=3;total+=a[0];}"
+                "switch(int b[n];1){case 1:b[0]=4;total+=b[0];break;}"
+                "after:if(!total)goto again;return total!=7;}return run(4);"),
+        },
+        {
+            "sizeof does not execute scalar statement expression declarations", __LINE__,
+            SVI("int run(void){int effects=0;"
+                "int size=sizeof(({int a[++effects];1;}));"
+                "return effects!=0||size!=sizeof(int);}return run();"),
+        },
+        {
+            "VLA for initializer scope ends before following label", __LINE__,
+            SVI("int run(int n){int total=0;goto after;"
+                "again:for(int a[n],i=0;i<3;i++){a[i]=i;"
+                "if(i==0)continue;total+=a[i];if(i==2)break;}"
+                "after:if(!total)goto again;return total!=3;}return run(4);"),
+        },
+        {
+            "predefined function name array address retains contents", __LINE__,
+            SVI("int sample(void){const char (*name)[7]=&__func__;"
+                "return (*name)[0]!='s'||(*name)[5]!='e'||(*name)[6]!=0;}"
+                "return sample();"),
+        },
+        {
             "packed array decay preserves reduced alignment", __LINE__,
             SVI("typedef int Low __attribute__((aligned(1)));"
                 "struct __attribute__((packed)) P {char tag; int x[2];} p={7,{23,41}};"
@@ -18369,9 +18409,10 @@ TestFunction(test_interpreter){
             .exit_code = 0,
         },
         {
-            "prototype scope extends to end of declarator", __LINE__,
-            SVI("int (*foo(int x))[sizeof x];\n"
-                "int (*foo(int x))[sizeof(int)];\n"
+            "prototype parameter does not hide outer name in return declarator", __LINE__,
+            SVI("char x;\n"
+                "int (*foo(int x))[sizeof x];\n"
+                "int (*foo(int x))[sizeof(char)];\n"
                 "return 0;\n"),
             .exit_code = 0,
         },
@@ -20509,6 +20550,8 @@ TestFunction(test_interpreter){
 
         err = cc_parse_all(&interp.parser);
         if(err){TestPrintf("%s:%d: failed to parse\n", __FILE__, tc->line); goto finally;}
+        err = cc_finalize_tentative_definitions(&interp.parser);
+        if(err) goto finally;
         err = ci_resolve_refs(&interp);
         if(err){TestPrintf("%s:%d: failed to link: %s\n", __FILE__, tc->line, _cc_error_names[err]); goto finally;}
 

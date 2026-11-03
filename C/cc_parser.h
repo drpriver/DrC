@@ -66,7 +66,8 @@ struct CcParseFlags {
                      parameter_type: 1,
                      generic_association: 1,
                      unevaluated: 1, // suppress VLA bound captures and typeof operand effects
-                     _padding: 24; // free real estate
+                     require_declarator_name: 1,
+                     _padding: 23; // free real estate
         };
     };
 };
@@ -308,6 +309,7 @@ struct CcParser {
 
 
 static int cc_parse_all(CcParser*);
+static int cc_finalize_tentative_definitions(CcParser*);
 static void cc_parser_discard_input(CcParser*);
 static int cc_push_scope(CcParser*);
 static void cc_pop_scope(CcParser*);

@@ -116,6 +116,7 @@ TestFunction(test_parse_decls){
             _Bool eval_bytes;
             int eval_status;
             StringView eval_repr;
+            enum { UNCHECKED, EXTERNAL, INTERNAL} linkage;
         } vars[N];
         struct {
             StringView name;
@@ -136,7 +137,172 @@ TestFunction(test_parse_decls){
         _Bool skip;
         const CcTargetConfig* _Nullable target;
         _Bool both_modes;
+        StringView next_input;
     } testcases[] = {
+        {
+            "array bound can be completed in a later input batch", __LINE__,
+            SVI("int x[];"),
+            .next_input = SVI("int x[3];"),
+            .vars = {{SVI("x"), SVI("int[3]")}},
+            .both_modes = 1,
+        },
+        {
+            "tentative record can be completed in a later input batch", __LINE__,
+            SVI("struct S object;"),
+            .next_input = SVI("struct S { int member; }; static_assert(sizeof object == sizeof(int));"),
+            .both_modes = 1,
+        },
+        {
+            "file scope constexpr objects have internal linkage", __LINE__,
+            SVI("constexpr int value=1; const int ordinary=2; static const int local=3;"),
+            .vars = {
+                {SVI("value"), SVI("const int"), .linkage=INTERNAL},
+                {SVI("ordinary"), SVI("const int"), .linkage=EXTERNAL},
+                {SVI("local"), SVI("const int"), .linkage=INTERNAL},
+            },
+            .both_modes = 1,
+        },
+        {
+            "bitfield assignment results have ordinary object size", __LINE__,
+            SVI("struct S { unsigned bits:3; }; void f(struct S s){"
+                "static_assert(sizeof(s.bits=1)==sizeof(unsigned));"
+                "static_assert(sizeof(s.bits+=1)==sizeof(unsigned));"
+                "static_assert(sizeof(s.bits++)==sizeof(unsigned));}"),
+            .both_modes = 1,
+        },
+        {
+            "offsetof subscript accepts a full comma expression", __LINE__,
+            SVI("struct S { int a[3]; };"
+                "static_assert(__builtin_offsetof(struct S,a[(0,2)])==2*sizeof(int));"
+                "static_assert(__builtin_offsetof(struct S,a[0,2])==2*sizeof(int));"),
+            .both_modes = 1,
+        },
+        {
+            "goto can skip a completed block with an inferred VM declaration", __LINE__,
+            SVI("void f(int n){int a[n];goto after;{auto p=&a;}after:;}"),
+            .both_modes = 1,
+        },
+        {
+            "GNU auto type initializer can refer to an outer same-name variable", __LINE__,
+            SVI("int x=7;void f(void){__auto_type x=x+1;static_assert(typeof(x)==int);}"),
+            .both_modes = 1,
+        },
+        {
+            "function pointer initializer remains valid", __LINE__,
+            SVI("int f(void);int (*g)(void)=f;"),
+            .both_modes = 1,
+        },
+        {
+            "nested prototype scope ends before enclosing array declarator", __LINE__,
+            SVI("enum{n=3};int (*(*g)(int n))[n];"
+                "static_assert(sizeof(*g(0))==3*sizeof(int));"),
+            .both_modes = 1,
+        },
+        {
+            "sizeof non-VLA types remains constant with unevaluated nested expressions", __LINE__,
+            SVI("int effect(void);void f(void){"
+                "enum { A=sizeof((int){effect()}), B=sizeof(int (*[1])[effect()]) };"
+                "static_assert(A==sizeof(int));static_assert(B==sizeof(int*));}"),
+            .both_modes = 1,
+        },
+        {
+            "goto may skip a selection with a VLA header declaration", __LINE__,
+            SVI("void f(int n){goto after; if(int a[n];0){} after:;}"
+                "void g(int n){goto after; switch(int a[n];0){} after:;}"),
+            .both_modes = 1,
+        },
+        {
+            "parenthesized abstract array declarator", __LINE__,
+            SVI("static_assert(sizeof(int ([3]))==3*sizeof(int));"
+                "static_assert(sizeof(int (([2]))[3])==6*sizeof(int));"
+                "void f(int ([3]));void f(int*);"),
+            .both_modes = 1,
+        },
+        {
+            "goto may skip a for loop with a VLA initializer", __LINE__,
+            SVI("void f(int n){goto after; for(int a[n];0;){} after:;}"),
+            .both_modes = 1,
+        },
+        {
+            "predefined function name has const character array type", __LINE__,
+            SVI("void sample(void){static_assert(typeof(__func__)==const char[7]);}"),
+            .both_modes = 1,
+        },
+        {
+            "predefined function name is an addressable array", __LINE__,
+            SVI("void sample(void){const char (*name)[7]=&__func__; (void)name;}"),
+            .both_modes = 1,
+        },
+        {
+            "enum in function return declarator belongs to enclosing scope", __LINE__,
+            SVI("int (*f(void))[sizeof(enum { width = 3 })]; int array[width];"),
+            .vars = {{SVI("array"), SVI("int[3]")}},
+            .both_modes = 1,
+        },
+        {
+            "direct prototype scope ends before enclosing array declarator", __LINE__,
+            SVI("enum { width = 5 };int (*f(enum { width = 3 } value))[width];"
+                "static_assert(sizeof(*f(0))==5*sizeof(int));"),
+            .both_modes = 1,
+        },
+        {
+            "definition parameter names retain function body scope", __LINE__,
+            SVI("int f(enum { width = 3 } value){enum { other = width };return value + other;}"),
+            .both_modes = 1,
+        },
+        {
+            "tentative incomplete array acquires one element at end of unit", __LINE__,
+            SVI("int array[];"),
+            .vars = {{SVI("array"), SVI("int[1]")}},
+            .both_modes = 1,
+        },
+        {
+            "external incomplete array declaration remains incomplete", __LINE__,
+            SVI("extern int array[];"),
+            .vars = {{SVI("array"), SVI("int[]")}},
+            .both_modes = 1,
+        },
+        {
+            "tentative array retains a later explicit bound", __LINE__,
+            SVI("int array[]; int array[7];"),
+            .vars = {{SVI("array"), SVI("int[7]")}},
+            .both_modes = 1,
+        },
+        {
+            "tentative record definition can be completed later", __LINE__,
+            SVI("struct S object; struct S { int member; };"
+                "_Static_assert(sizeof object == sizeof(int));"),
+            .both_modes = 1,
+        },
+        {
+            "tentative union definition can be completed later", __LINE__,
+            SVI("union U object; union U { int member; };"
+                "_Static_assert(sizeof object == sizeof(int));"),
+            .both_modes = 1,
+        },
+        {
+            "while condition declarations do not escape the loop scope", __LINE__,
+            SVI("void f(void){while(sizeof(enum { local = 1 }) == 0) {}"
+                "enum { local = 2 }; _Static_assert(local == 2);}"),
+            .both_modes = 1,
+        },
+        {
+            "do condition declarations do not escape the loop scope", __LINE__,
+            SVI("void f(void){do {} while(sizeof(enum { local = 1 }) == 0);"
+                "enum { local = 2 }; _Static_assert(local == 2);}"),
+            .both_modes = 1,
+        },
+        {
+            "selection substatements have independent enumeration scopes", __LINE__,
+            SVI("void f(int c){if(c) (void)sizeof(enum { local = 1 });"
+                "else (void)sizeof(enum { local = 2 });}"),
+            .both_modes = 1,
+        },
+        {
+            "parameter may shadow an enumerator from an enclosing scope", __LINE__,
+            SVI("enum { value = 1 }; void f(int value){(void)value;}"),
+            .both_modes = 1,
+        },
         {
             "linkage: file extern object inherits prior internal linkage", __LINE__,
             SVI("static int x=3;\nextern int x;\n"
@@ -1743,7 +1909,7 @@ TestFunction(test_parse_decls){
                 { SVI("b"), SVI("int[3][4]") },
                 { SVI("c"), SVI("int *[10]") },
                 { SVI("d"), SVI("int (*)[10]") },
-                { SVI("e"), SVI("int[]") },
+                { SVI("e"), SVI("int[1]") },
             },
         },
         {
@@ -7590,6 +7756,61 @@ TestFunction(test_parse_decls){
                 "}\n"
             ),
         },
+        {
+            "parenthesized declarators shadow outer typedef", __LINE__,
+            SVI("typedef int T;\n"
+                "int f(void){int (T) = 3; return T-3;}\n"
+                "int g(void){int ((T))[2] = {3,4}; return T[0]-3;}\n"
+                "int h(void){int x = 3; int *(T)=&x; return *T-3;}\n"),
+            .both_modes = 1,
+        },
+        {
+            "grouped declarators retain leading attributes", __LINE__,
+            SVI("int __attribute__((aligned(32))) (__attribute__((aligned(8))) x);\n"
+                "static_assert(__alignof__(x) == 32);\n"
+                "typedef int (__attribute__((vector_size(16))) V);\n"
+                "static_assert(sizeof(V) == 16);\n"
+                "typedef int T; struct S {int (T);};\n"
+                "static_assert(sizeof(struct S) == sizeof(int));\n"
+                "static_assert(__builtin_types_compatible_p(int (T), int (int)));\n"),
+            .both_modes = 1,
+        },
+        {
+            "abstract function first parameter retains attributes", __LINE__,
+            SVI("typedef int V __attribute__((vector_size(16)));\n"
+                "static_assert(__builtin_types_compatible_p(\n"
+                "int (__attribute__((vector_size(16))) int, int), int (V, int)));\n"),
+            .both_modes = 1,
+        },
+        {
+            "sysv union zero-width fields do not increase size or alignment", __LINE__,
+            SVI("union U {char x; unsigned long long:0;};\n"
+                "union V {unsigned char x:1; unsigned long long:0;};\n"
+                "static_assert(sizeof(union U) == 1 && _Alignof(union U) == 1);\n"
+                "static_assert(sizeof(union V) == 1 && _Alignof(union V) == 1);\n"),
+            .target = &cc_target_x86_64_linux,
+        },
+        {
+            "aarch64 union zero-width fields preserve natural alignment when packed", __LINE__,
+            SVI("union U {char x; unsigned:0;};\n"
+                "union __attribute__((packed)) V {char x; unsigned:0;};\n"
+                "#pragma pack(1)\n"
+                "union W {char x; unsigned:0;};\n"
+                "static_assert(sizeof(union U) == 4 && _Alignof(union U) == 4);\n"
+                "static_assert(sizeof(union V) == 4 && _Alignof(union V) == 4);\n"
+                "static_assert(sizeof(union W) == 4 && _Alignof(union W) == 4);\n"),
+            .target = &cc_target_aarch64_linux,
+        },
+        {
+            "msvc union zero-width storage depends on preceding bitfield", __LINE__,
+            SVI("union U {char x; unsigned:0;};\n"
+                "union V {unsigned char x:1; unsigned:0;};\n"
+                "union W {unsigned:0; char x;};\n"
+                "static_assert(sizeof(union U) == 1 && _Alignof(union U) == 1);\n"
+                "static_assert(sizeof(union V) == 4 && _Alignof(union V) == 1);\n"
+                "static_assert(sizeof(union W) == 1 && _Alignof(union W) == 1);\n"),
+            .target = &cc_target_x86_64_windows_msvc,
+        },
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < 2*countof(testcases); i = test_atomic_increment(&idx)){
@@ -7634,6 +7855,16 @@ TestFunction(test_parse_decls){
         err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
         if(err) {TestPrintf("%s:%d: failed to include\n", __FILE__, c->line); goto finally;}
         err = cc_parse_all(&cc);
+        if(!err && c->next_input.length){
+            cc_parser_discard_input(&cc);
+            fc_write_path(fc, "(next)", 6);
+            err = fc_cache_file(fc, c->next_input);
+            if(err) {TestPrintf("%s:%d: failed to cache\n", __FILE__, c->line); goto finally;}
+            err = cpp_include_file_via_file_cache(&cc.cpp, SV("(next)"));
+            if(err) {TestPrintf("%s:%d: failed to include\n", __FILE__, c->line); goto finally;}
+             err = cc_parse_all(&cc);
+        }
+        if(!err) err = cc_finalize_tentative_definitions(&cc);
         if(!err && !eager){
             AtomMapItems funcs = AM_items(&cc.root->scope.functions);
             for(size_t f = 0; f < funcs.count; f++){
@@ -7662,6 +7893,10 @@ TestFunction(test_parse_decls){
             if(sb.errored) { err = 1; TestPrintf("%s:%d: allocation failure", __FILE__, c->line); goto finally; }
             StringView r = msb_borrow_sv(&sb);
             test_expect_equals_sv(c->vars[n].repr, r, "expected", "actual", &TEST_stats, __FILE__, __func__, c->line);
+            if(c->vars[n].linkage){
+                unsigned linkage = var->has_linkage ? (var->static_ ? INTERNAL : EXTERNAL) : UNCHECKED;
+                TestExpectEquals(unsigned, linkage, c->vars[n].linkage);
+            }
             if(c->vars[n].init.length){
                 TestExpectTrue(void*, var->initializer);
                 if(var->initializer){
@@ -7807,7 +8042,7 @@ TestFunction(test_parse_decls){
             TestExpectEquals(unsigned, loc.column, c->tags[n].loc_col);
         }
         finally:
-        if(log_sb.cursor && ! log_sb.errored){
+        if(err && log_sb.cursor && ! log_sb.errored){
             StringView sv = msb_borrow_sv(&log_sb);
             TestPrintf("%s:%d: %s %.*s\n", __FILE__, c->line, c->test, sv_p(sv));
         }
@@ -7834,6 +8069,30 @@ TestFunction(test_parse_errors){
         _Bool both_modes;
         StringView target_expect[CC_TARGET_COUNT];
     } cases[] = {
+        {
+            "prototype enum does not leak out of parameter list", __LINE__,
+            SVI("int f(enum { width = 3 } value);\nint array[width];"),
+            SVI("(test):2:11: error: undeclared identifier 'width'\n"),
+            .both_modes = 1,
+        },
+        {
+            "if requires a statement before end of input", __LINE__,
+            SVI("if(1)"),
+            SVI("(test):1:6: error: expected statement before end of input\n"),
+            .both_modes = 1,
+        },
+        {
+            "parameter cannot redeclare enumerator in its prototype scope", __LINE__,
+            SVI("void f(enum { value = 1 } value);\n"),
+            SVI("(test):1:8: error: Redefinition of 'value' as a different kind of symbol\n"),
+            .both_modes = 1,
+        },
+        {
+            "grouped declarator propagates attribute error", __LINE__,
+            SVI("int (__attribute__((aligned(3))) x);\n"),
+            SVI("(test):1:21: error: alignment must be a positive power of 2\n"),
+            .both_modes = 1,
+        },
         {
             "implicit pointer conversion cannot strengthen pointee alignment", __LINE__,
             SVI("typedef int Low __attribute__((aligned(1))); Low* p;\nint* q=p;\n"),
@@ -8848,8 +9107,9 @@ TestFunction(test_parse_errors){
         {
             "nested function rejects enclosing automatic variable [EXTENSIONS.md Nested functions]", __LINE__,
             SVI("int outer(void){int x=3; int inner(void){return x;} return inner();}"),
-            SVI(""),
+            SVI("(test):1:46: error: nested function cannot capture automatic variable 'x'\n"),
             .skip = 1, // Deferred
+            .both_modes = 1,
         },
         {
             "nested array of functions", __LINE__,
@@ -8934,8 +9194,9 @@ TestFunction(test_parse_errors){
         {
             "constexpr narrowing changes value", __LINE__,
             SVI("constexpr unsigned char x = 256;"),
-            SVI(""),
+            SVI("(test):1:29: error: constexpr initializer is not representable in the object type\n"),
             .skip = 1, // Deferred
+            .both_modes = 1,
         },
         {
             "constexpr volatile object", __LINE__,
@@ -11479,7 +11740,7 @@ TestFunction(test_parse_errors){
             "init list for function type", __LINE__,
             SVI("typedef void fn(void);\n"
                "fn f = {1};"),
-            SVI("(test):2:8: error: initializer requires a complete object type or an array of unknown bound. The type is 'void(void)'\n"),
+            SVI("(test):2:6: error: function declaration cannot have an initializer\n"),
         },
         {
             "unterminated union init", __LINE__,
@@ -11935,12 +12196,12 @@ TestFunction(test_parse_errors){
         {
             "method-only struct remains incomplete", __LINE__,
             SVI("struct O { void f(_Self*); };\nstruct O o;\n"),
-            SVI("(test):2:11: error: variable has incomplete type 'struct O'\n"),
+            SVI("(test):2:10: error: variable has incomplete type 'struct O'\n"),
         },
         {
             "method definition does not complete layout", __LINE__,
             SVI("struct O { void f(_Self* self) {} };\nstruct O o;\n"),
-            SVI("(test):2:11: error: variable has incomplete type 'struct O'\n"),
+            SVI("(test):2:10: error: variable has incomplete type 'struct O'\n"),
         },
         {
             "method block rejects conflicting signature", __LINE__,
@@ -12077,22 +12338,82 @@ TestFunction(test_parse_errors){
         {
             "self sizeof auto var", __LINE__,
             SVI("auto x = sizeof x;"),
-            SVI("(test):1:10: error: cannot take sizeof incomplete type\n"),
+            SVI("(test):1:17: error: cannot infer type from self reference\n"),
         },
         {
             "self sizeof const var", __LINE__,
             SVI("const x = sizeof x;"),
-            SVI("(test):1:11: error: cannot take sizeof incomplete type\n"),
+            SVI("(test):1:18: error: cannot infer type from self reference\n"),
+        },
+        {
+            "typedef without a type is a source error", __LINE__,
+            SVI("typedef Missing;"),
+            SVI("(test):1:9: error: typedef requires a type\n"),
+            .both_modes = 1,
+        },
+        {
+            "goto cannot enter an inferred variably modified pointer scope", __LINE__,
+            SVI("void f(int n){int a[n];\ngoto after;auto p=&a;after:;}"),
+            SVI("(test):2:1: error: jump enters the scope of a variably modified declaration\n"),
+            .both_modes = 1,
+        },
+        {
+            "function declaration cannot have an initializer", __LINE__,
+            SVI("int f(void);int g(void)=f;"),
+            SVI("(test):1:24: error: function declaration cannot have an initializer\n"),
+            .both_modes = 1,
+        },
+        {
+            "inferred incomplete record object is rejected", __LINE__,
+            SVI("struct S;void f(struct S*p){auto x=*p;}"),
+            SVI("(test):1:34: error: variable has incomplete type. The type is 'struct S'\n"),
+            .both_modes = 1,
+        },
+        {
+            "initialized void object is rejected", __LINE__,
+            SVI("void f(void){void x=(void)0;}"),
+            SVI("(test):1:19: error: variable has incomplete type 'void'\n"),
+            .both_modes = 1,
+        },
+        {
+            "inferred void object is rejected", __LINE__,
+            SVI("void f(void){auto x=(void)0;}"),
+            SVI("(test):1:19: error: variable has incomplete type 'void'\n"),
+            .both_modes = 1,
+        },
+        {
+            "C23 auto cannot use an outer same-name variable in its initializer", __LINE__,
+            SVI("int x=7;void f(void){auto x=x+1;}"),
+            SVI("(test):1:29: error: cannot infer type from self reference\n"),
+            .both_modes = 1,
+        },
+        {
+            "self reference cannot determine an inferred variable type", __LINE__,
+            SVI("void f(void){auto x=x;}"),
+            SVI("(test):1:21: error: cannot infer type from self reference\n"),
+            .both_modes = 1,
+        },
+        {
+            "inferred initializer cannot take its own address", __LINE__,
+            SVI("void f(void){auto x=&x;}"),
+            SVI("(test):1:22: error: cannot infer type from self reference\n"),
+            .both_modes = 1,
+        },
+        {
+            "inferred initializer cannot discard its own untyped value", __LINE__,
+            SVI("void f(void){auto x=(x,1);}"),
+            SVI("(test):1:22: error: cannot infer type from self reference\n"),
+            .both_modes = 1,
         },
         {
             "self sizeof constexpr var", __LINE__,
             SVI("constexpr x = sizeof x;"),
-            SVI("(test):1:15: error: cannot take sizeof incomplete type\n"),
+            SVI("(test):1:22: error: cannot infer type from self reference\n"),
         },
         {
             "self sizeof __auto_type var", __LINE__,
             SVI("__auto_type x = sizeof x;"),
-            SVI("(test):1:17: error: cannot take sizeof incomplete type\n"),
+            SVI("(test):1:24: error: undeclared identifier 'x'\n"),
         },
         {
             "self sizeof inferred array", __LINE__,
@@ -12405,7 +12726,7 @@ TestFunction(test_parse_errors){
         {
             "incomplete struct var", __LINE__,
             SVI("struct S; struct S x;\n"),
-            SVI("(test):1:21: error: variable has incomplete type 'struct S'\n"),
+            SVI("(test):1:20: error: variable has incomplete type 'struct S'\n"),
         },
         {
             "array of void", __LINE__,
@@ -14885,6 +15206,7 @@ TestFunction(test_parse_errors){
         err = cpp_include_file_via_file_cache(&cc.cpp, SV("(test)"));
         if(err) {TestPrintf("%s:%d: failed to include\n", __FILE__, c->line); goto fin;}
         err = cc_parse_all(&cc);
+        if(!err) err = cc_finalize_tentative_definitions(&cc);
         if(!err && !eager){
             AtomMapItems funcs = AM_items(&cc.root->scope.functions);
             for(size_t f = 0; f < funcs.count; f++){

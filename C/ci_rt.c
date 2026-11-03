@@ -1085,6 +1085,8 @@ ci_compile_module(CiInterpreter* ci, CcModule* parent, StringView source, String
     p->eager_parsing = 1;
     err = cc_parse_all(p);
     if(err) goto done;
+    err = cc_finalize_tentative_definitions(p);
+    if(err) goto done;
 
     err = PM_put(&ci->modules, ci_allocator(ci), module, module);
     if(err){

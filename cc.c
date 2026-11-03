@@ -486,6 +486,10 @@ int main(int argc, char** argv, char** envp){
     }
     err = cc_parse_all(&cc_interp.parser);
     if(err) goto stringify_error;
+    if(!repl){
+        err = cc_finalize_tentative_definitions(&cc_interp.parser);
+        if(err) goto stringify_error;
+    }
     if(!syntax_only){
         err = ci_resolve_refs(&cc_interp);
         if(err) goto stringify_error;

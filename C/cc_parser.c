@@ -200,6 +200,7 @@ static const CcTargetConfig* cc_target(const CcParser*);
 static int cc_handle_static_assert(CcParser*, CcParseFlags);
 static CcStmtNode*_Nullable cc_stmt_node(CcParser*, CcStmtKind, SrcLoc, uint32_t count);
 static int cc_stmt_scope_vars(CcParser*, CcStmtNode*);
+static int cc_complete_array_type(CcParser*, CcQualType, size_t, CcQualType*);
 static void cc_free_stmt_tree(CcParser*, CcStmtNode*_Nullable);
 static CcStmtSink*_Nullable cc_push_stmt_sink(CcParser*);
 static void cc_pop_stmt_sink(CcParser*, CcStmtSink*);
@@ -1062,6 +1063,7 @@ cc_apply_vector_type(CcParser* p, CcQualType* type, uint32_t size, SrcLoc loc){
 static
 int
 cc_parse_type_syntax_inner(CcParser* p, CcParseFlags flags, CcQualType* out, CcParsedParams* _Nullable param_names, CcDeclBase* _Nullable storage, _Bool type_expression){
+    flags.require_declarator_name = 0;
     CcDeclBase base = {0};
     int err = cc_parse_declaration_specifier(p, flags, &base);
     if(err) return err;
@@ -3928,7 +3930,7 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                             if(!ccqt_is_fixed_sequence(cur))
                                 return cc_type_error(p, next.loc, cur, "subscript in __builtin_offsetof requires array type");
                             CcExpr* idx_expr = NULL;
-                            err = cc_parse_assignment_expr(p, operand_flags, &idx_expr, CCQT_NONE);
+                            err = cc_parse_expr(p, operand_flags, &idx_expr, CCQT_NONE);
                             if(err) return err;
                             int64_t idx;
                             err = cc_eval_integer(&(CcEvalCtx){p}, idx_expr, &idx);
@@ -4025,13 +4027,16 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     Atom name = p->current_func ? p->current_func->name : NULL;
                     const char* s = name ? name->data : "";
                     uint32_t len = name ? name->length : 0;
-                    CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), ccqt_basic(CCBT_char), len + 1, 0);
+                    CcQualType element = ccqt_basic(CCBT_char);
+                    element.is_const = 1;
+                    CcArray* sa = cc_intern_array(&p->type_cache, cc_allocator(p), element, len + 1, 0);
                     if(!sa) return CC_OOM_ERROR;
                     CcQualType type = {.bits = (uintptr_t)sa};
                     CcExpr* node = cc_value_expr(p, tok.loc, type);
                     if(!node) return CC_OOM_ERROR;
                     node->str.length = len + 1;
                     node->text = s;
+                    node->is_lvalue = 1;
                     *out = node;
                     return 0;
                 }
@@ -4850,6 +4855,8 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
             }
             switch(sym.kind){
                 case CC_SYM_VAR:{
+                    if(!sym.var->type.unqual)
+                        return cc_error(p, tok.loc, "cannot infer type from self reference");
                     if(flags.vc == CC_CONSTEXPR_VALUE && !flags.static_rebind && !sym.var->constexpr_ && !ccqt_is_fixed_sequence(sym.var->type))
                         return cc_error(p, tok.loc, "expression '%s' is not a constant expression", tok.ident.ident->data);
                     if(flags.vc == CC_LINKTIME_VALUE && sym.var->automatic && !sym.var->constexpr_)
@@ -7951,6 +7958,31 @@ cc_parse_one_inner(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullable lab
 
 static
 int
+cc_finalize_tentative_definitions(CcParser* p){
+    AtomMapItems variables = CcAnonAM_items(&p->module->scope.variables);
+    for(size_t i = 0; i < variables.count; i++){
+        CcVariable* var = variables.data[i].p;
+        if(!var || var->extern_ || var->initializer) continue;
+        CcTypeKind kind = ccqt_kind(var->type);
+        if(kind == CC_ARRAY && ccqt_as_array(var->type)->is_incomplete){
+            int err = cc_complete_array_type(p, var->type, 1, &var->type);
+            if(err) return err;
+            cc_warn(p, var->loc, "Tentative array without a definition and not declared extern. We would error here, but C standard requires us to instead treat it as length 1, which is almost certainly not what you want.");
+        }
+        if(kind == CC_STRUCT && ccqt_as_struct(var->type)->is_incomplete){
+            CcStruct* record = ccqt_as_struct(var->type);
+            return cc_error(p, var->loc, "variable has incomplete type 'struct %s'", record->name ? record->name->data : "(anonymous)");
+        }
+        if(kind == CC_UNION && ccqt_as_union(var->type)->is_incomplete){
+            CcUnion* record = ccqt_as_union(var->type);
+            return cc_error(p, var->loc, "variable has incomplete type 'union %s'", record->name ? record->name->data : "(anonymous)");
+        }
+    }
+    return 0;
+}
+
+static
+int
 cc_parse_all(CcParser* p){
     DRP_PROFILE_BEGIN(profile, "parser.translation_unit");
     int err = 0;
@@ -10222,7 +10254,21 @@ cc_compute_union_layout(CcParser* p, CcUnion* u, uint16_t pack_value){
         f->offset = 0;
         if(f->is_bitfield){
             f->bitoffset = 0;
-            if((u->packed || f->packed || pack_value) && cc_target(p)->bitfield_abi == CC_BITFIELD_SYSV)
+            const CcTargetConfig* target = cc_target(p);
+            if(!f->bitwidth){
+                if(target->bitfield_abi == CC_BITFIELD_MSVC){
+                    if(i && u->fields[i-1].is_bitfield && u->fields[i-1].bitwidth && field_size > max_size)
+                        max_size = field_size;
+                }
+                else if(target->target == CC_TARGET_AARCH64_LINUX){
+                    err = cc_alignof_as_uint(p, f->type, f->loc, &field_align);
+                    if(err) return err;
+                    if(f->alignment > field_align) field_align = f->alignment;
+                    if(field_align > max_align) max_align = field_align;
+                }
+                continue;
+            }
+            if((u->packed || f->packed || pack_value) && target->bitfield_abi == CC_BITFIELD_SYSV)
                 field_size = (f->bitwidth + 7)/8;
         }
         if(field_size > max_size) max_size = field_size;
@@ -12216,7 +12262,9 @@ cc_parse_struct_or_union(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool is_u
                     CcQualType* tail = &head;
                     CcParsedParams param_names = {0};
                     SrcLoc name_loc = {0};
-                    err = cc_parse_declarator(p, flags, &head, &tail, &member_name, &name_loc, &param_names);
+                    CcParseFlags decl_flags = flags;
+                    decl_flags.require_declarator_name = 1;
+                    err = cc_parse_declarator(p, decl_flags, &head, &tail, &member_name, &name_loc, &param_names);
                     if(err){
                         ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
                         goto struct_err;
@@ -13934,15 +13982,25 @@ static int cc_parse_statement_inner(CcParser*, CcParseFlags, CcControlLabel*_Nul
 static
 int
 cc_parse_scoped_statement(CcParser* p, CcParseFlags flags, _Bool unlabeled, CcStmtNode*_Nullable*_Nonnull out){
+    CcToken first;
+    int err = cc_peek(p, &first);
+    if(err) return err;
+    if(first.type == CC_EOF)
+        return cc_error(p, first.loc, "expected statement before end of input");
+    _Bool implicit_scope = !unlabeled && !(first.type == CC_PUNCTUATOR && first.punct.punct == '{');
+    if(implicit_scope){
+        err = cc_push_scope(p);
+        if(err) return err;
+    }
     CcDeferContext saved = p->defer_context;
     CcStmtNode* stmt = NULL;
-    int err = cc_parse_statement(p, flags, NULL, &stmt);
+    err = cc_parse_statement(p, flags, NULL, &stmt);
     if(err) goto cleanup;
     if(unlabeled && (stmt->kind == CC_STMT_LABEL || stmt->kind == CC_STMT_CASE || stmt->kind == CC_STMT_DEFAULT)){
         err = cc_error(p, stmt->loc, "expected unlabeled statement after _Defer");
         goto cleanup;
     }
-    if(p->defer_context.active == saved.active)
+    if(p->defer_context.active == saved.active && (!implicit_scope || !p->current->variables.count))
         goto success;
     CcStmtNode* wrapper = cc_stmt_node(p, CC_STMT_COMPOUND, stmt->loc, 1);
     if(!wrapper){
@@ -13954,6 +14012,10 @@ cc_parse_scoped_statement(CcParser* p, CcParseFlags flags, _Bool unlabeled, CcSt
     wrapper->cleanup = (CcCleanupRange){p->defer_context.active, saved.active};
     cc_stmt_summarize_flow(wrapper);
     stmt = wrapper;
+    if(implicit_scope){
+        err = cc_stmt_scope_vars(p, wrapper);
+        if(err) goto cleanup;
+    }
 
     success:
     *out = stmt;
@@ -13962,6 +14024,7 @@ cc_parse_scoped_statement(CcParser* p, CcParseFlags flags, _Bool unlabeled, CcSt
     cleanup:
     cc_free_stmt_tree(p, stmt);
     p->defer_context = saved;
+    if(implicit_scope) cc_pop_scope(p);
     return err;
 }
 
@@ -14365,20 +14428,39 @@ cc_parse_statement(CcParser* p, CcParseFlags flags, CcControlLabel*_Nullable lab
         || tok.kw.kw == CC_while
         || tok.kw.kw == CC_do
         || tok.kw.kw == CC__Defer);
-    // Include the whole statement, including conditions and both if branches.
-    // A nested `static for` records this depth and can use its own controls.
+    _Bool loop_scope = tok.type == CC_KEYWORD && (tok.kw.kw == CC_while || tok.kw.kw == CC_do);
+    if(loop_scope){
+        err = cc_push_scope(p);
+        if(err) return err;
+    }
     p->runtime_control_depth += runtime_boundary;
     CcDeferContext saved_defer_context = p->defer_context;
     _Bool compound = tok.type == CC_PUNCTUATOR && tok.punct.punct == '{';
+    _Bool cleanup_scope = compound || (runtime_boundary && tok.kw.kw != CC__Defer);
     CcStmtNode* stmt = NULL;
     err = cc_parse_statement_inner(p, flags, labels, &stmt);
+    if(loop_scope){
+        if(!err && stmt) err = cc_stmt_scope_vars(p, stmt);
+        cc_pop_scope(p);
+        if(err) cc_free_stmt_tree(p, stmt);
+    }
     CcDefer* active = p->defer_context.active;
-    if(compound)
+    if(cleanup_scope)
         p->defer_context = saved_defer_context;
     p->runtime_control_depth -= runtime_boundary;
     if(err) return err;
     if(stmt){
-        if(compound)
+        if(cleanup_scope && !compound && active != saved_defer_context.active){
+            CcStmtNode* wrapper = cc_stmt_node(p, CC_STMT_COMPOUND, stmt->loc, 1);
+            if(!wrapper){
+                cc_free_stmt_tree(p, stmt);
+                return CC_OOM_ERROR;
+            }
+            wrapper->stmts[0] = stmt;
+            wrapper->has_jump_target = stmt->has_jump_target;
+            stmt = wrapper;
+        }
+        if(compound || (cleanup_scope && active != saved_defer_context.active))
             stmt->cleanup = (CcCleanupRange){active, saved_defer_context.active};
         stmt->has_jump_target |= p->stmt_jump_targets != jump_targets;
         cc_stmt_summarize_flow(stmt);
@@ -15139,6 +15221,7 @@ static
 int
 cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head, CcQualType*_Nonnull*_Nonnull out_tail, Atom _Nullable * _Nullable out_name, SrcLoc* _Nullable out_name_loc, CcParsedParams *_Nullable out_param_names){
     int err = 0;
+    CcAttributes leading_param_attributes = {0};
     CcToken tok;
     err = cc_next_token(p, &tok);
     if(err) return err;
@@ -15180,19 +15263,28 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
     }
     if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '('){
         // Disambiguate: grouped declarator vs function parameter list.
-        // '(' followed by '*', '^', '(' or non-typedef identifier -> grouped declarator.
-        // '(' followed by type keyword, ')', '...', or typedef name -> function params.
+        err = cc_parse_attributes(p, flags, &leading_param_attributes);
+        if(err) return err;
         CcToken peek;
         err = cc_peek(p, &peek);
         if(err) return err;
-        _Bool grouped = peek.type == CC_PUNCTUATOR && (peek.punct.punct == '*' || peek.punct.punct == '^' || peek.punct.punct == '(');
+        _Bool grouped = peek.type == CC_PUNCTUATOR && (peek.punct.punct == '*' || peek.punct.punct == '^' || peek.punct.punct == '(' || peek.punct.punct == '[');
         if(!grouped && peek.type == CC_IDENTIFIER){
-            // Identifier after '(' — grouped declarator unless it's a typedef
-            // (not shadowed by a var/func in a closer scope).
             CcSymbol sym;
-            grouped = !cc_scope_lookup_symbol(p->current, peek.ident.ident, CC_SCOPE_WALK_CHAIN, &sym) || sym.kind != CC_SYM_TYPEDEF;
+            grouped = flags.require_declarator_name
+                || !cc_scope_lookup_symbol(p->current, peek.ident.ident, CC_SCOPE_WALK_CHAIN, &sym)
+                || sym.kind != CC_SYM_TYPEDEF;
         }
         if(grouped){
+            if(leading_param_attributes.vector_size)
+                p->attributes.vector_size = leading_param_attributes.vector_size;
+            if(leading_param_attributes.has_aligned)
+                cc_add_alignment_attribute(&p->attributes, leading_param_attributes.aligned);
+            leading_param_attributes.vector_size = leading_param_attributes.aligned = 0;
+            p->attributes.bits |= leading_param_attributes.bits;
+            err = cc_merge_printf_formats(p, leading_param_attributes.printf_formats, &p->attributes.printf_formats);
+            if(err) return err;
+            cc_clear_attributes(&leading_param_attributes);
             err = cc_parse_declarator_inner(p, flags, out_head, out_tail, out_name, out_name_loc, out_param_names);
             if(err) return err;
             err = cc_expect_punct(p, CC_rparen);
@@ -15404,9 +15496,11 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                     break;
                 }
                 // Parse parameter: declaration-specifiers [declarator]
-                cc_clear_attributes(&p->attributes);
+                p->attributes = leading_param_attributes;
+                cc_clear_attributes(&leading_param_attributes);
                 CcDeclBase param_base = {0};
                 CcParseFlags param_flags = flags;
+                param_flags.require_declarator_name = 0;
                 param_flags.parameter_type = 1;
                 param_flags.unevaluated |= prototype_only;
                 err = cc_parse_declaration_specifier(p, param_flags, &param_base);
@@ -15535,8 +15629,12 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                 }
 
                 if(param_name){
-                    if(cc_scope_lookup_var(cc_scope_declarations(p->current), param_name, CC_SCOPE_NO_WALK)){
-                        err = cc_error(p, param_loc, "duplicate parameter name '%.*s'", param_name->length, param_name->data);
+                    CcSymbol previous;
+                    if(cc_scope_lookup_symbol(cc_scope_declarations(p->current), param_name, CC_SCOPE_NO_WALK, &previous)){
+                        if(previous.kind == CC_SYM_VAR)
+                            err = cc_error(p, param_loc, "duplicate parameter name '%.*s'", param_name->length, param_name->data);
+                        else
+                            err = cc_error(p, param_loc, "Redefinition of '%s' as a different kind of symbol", param_name->data);
                         goto param_err;
                     }
                 }
@@ -15640,7 +15738,13 @@ cc_parse_declarator_inner(CcParser* p, CcParseFlags flags, CcQualType* out_head,
                 for(size_t i = 0; i < bounds_sink.stmts.count; i++)
                     cc_free_stmt_tree(p, bounds_sink.stmts.data[i]);
                 pa_cleanup(&bounds_sink.stmts, cc_allocator(p));
-                // Only collect param names for the first (outermost) function.
+                if(out_param_names)
+                    p->current = p->current->parent;
+                else {
+                    err = cc_parse_local_methods(p);
+                    if(err) return err;
+                    cc_pop_scope(p);
+                }
                 out_param_names = NULL;
                 continue;
             }
@@ -15909,6 +16013,23 @@ cc_check_pack_decl(CcParser* p, CcFunc* func, CcParsedParams* params, CcQualType
 
 static
 int
+cc_handle_vm_decl(CcParser* p, CcQualType type, CcSpecifier spec, SrcLoc loc){
+    if(!ccqt_is_vm(type)) return 0;
+    if(spec.sp_extern)
+        return cc_type_error(p, loc, type, "variably modified declaration cannot have external linkage");
+    if(ccqt_kind(type) == CC_VLA && !spec.sp_typedef
+    && (spec.sp_static || spec.sp_thread_local || spec.sp_constexpr))
+        return cc_type_error(p, loc, type, "VLA object requires automatic storage duration");
+    CcDefer* marker = Allocator_zalloc(cc_allocator(p), 1, sizeof *marker, _Alignof(CcDefer));
+    if(!marker) return CC_OOM_ERROR;
+    marker->prev = p->defer_context.active;
+    marker->vm_scope = 1;
+    p->defer_context.active = marker;
+    return 0;
+}
+
+static
+int
 cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcParsedDecls* out){
     DRP_PROFILE_BEGIN(profile, "parser.declarations");
     *out = (CcParsedDecls){0};
@@ -15962,7 +16083,9 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
         else {
             CcQualType head = {0};
             CcQualType* tail = &head;
-            err = cc_parse_declarator(p, flags, &head, &tail, &name, &name_loc, &param_names);
+            CcParseFlags decl_flags = flags;
+            decl_flags.require_declarator_name = 1;
+            err = cc_parse_declarator(p, decl_flags, &head, &tail, &name, &name_loc, &param_names);
             if(err){
                 ma_cleanup(CcFuncParam)(&param_names.names, cc_allocator(p));
                 return err;
@@ -16193,18 +16316,9 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
         && !declbase->spec.sp_typedef
         && (declbase->spec.sp_register || declbase->spec.sp_auto))
             return cc_error(p, name_loc, "invalid storage class in block-scope function declaration");
-        if(ccqt_is_vm(type)){
-            if(declbase->spec.sp_extern)
-                return cc_type_error(p, name_loc, type, "variably modified declaration cannot have external linkage");
-            if(ccqt_kind(type) == CC_VLA
-            && !declbase->spec.sp_typedef
-            && (declbase->spec.sp_static || declbase->spec.sp_thread_local || declbase->spec.sp_constexpr))
-                return cc_type_error(p, name_loc, type, "VLA object requires automatic storage duration");
-            CcDefer* marker = Allocator_zalloc(cc_allocator(p), 1, sizeof *marker, _Alignof(CcDefer));
-            if(!marker) return CC_OOM_ERROR;
-            marker->prev = p->defer_context.active;
-            marker->vm_scope = 1;
-            p->defer_context.active = marker;
+        if(!declbase->spec.sp_infer_type){
+            err = cc_handle_vm_decl(p, type, declbase->spec, name_loc);
+            if(err) return err;
         }
         if(declbase->spec.sp_thread_local && (is_func_decl || declbase->spec.sp_typedef))
             return cc_error(p, name_loc, "thread_local is only valid on variables");
@@ -16218,7 +16332,8 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             CcSymbol sym;
             _Bool found = cc_scope_lookup_symbol(cc_scope_declarations(p->current), name, CC_SCOPE_NO_WALK, &sym);
             _Bool root_declaration = cc_scope_declarations(p->current) == &p->module->scope;
-            if(!found && !declbase->spec.sp_static && (root_declaration || declbase->spec.sp_extern)){
+            _Bool static_ = declbase->spec.sp_static || (root_declaration && declbase->spec.sp_constexpr);
+            if(!found && !static_ && (root_declaration || declbase->spec.sp_extern)){
                 if(declbase->spec.sp_extern)
                     found = cc_lookup_visible_linked_symbol(p->current, NULL, name, &sym);
                 if(!found)
@@ -16234,9 +16349,9 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                         redecl = 1;
                         if(var->thread_local_ != declbase->spec.sp_thread_local)
                             return cc_error(p, name_loc, "conflicting thread-local storage for '%s'", name->data);
-                        if((declbase->spec.sp_static && !var->static_) || (var->static_ && !declbase->spec.sp_static && !declbase->spec.sp_extern)){
+                        if((static_ && !var->static_) || (var->static_ && !static_ && !declbase->spec.sp_extern)){
                             return cc_error(p, tok.loc, "conflicting storage class for '%s': %s; previous declaration has %s",
-                                name->data, declbase->spec.sp_static ? "'static'" : "no storage class",
+                                name->data, declbase->spec.sp_static ? "'static'" : declbase->spec.sp_constexpr ? "'constexpr'" : "no storage class",
                                 var->static_ ? "'static'" : var->extern_ ? "'extern'" : "no storage class"
                             );
                         }
@@ -16265,17 +16380,20 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 .type = type,
                 .alignment = decl_alignment,
                 .extern_ = declbase->spec.sp_extern,
-                .static_ = declbase->spec.sp_static,
+                .static_ = static_,
                 .constexpr_ = declbase->spec.sp_constexpr,
                 .thread_local_ = declbase->spec.sp_thread_local,
                 .register_ = declbase->spec.sp_register,
-                .automatic = p->current_func != NULL && !declbase->spec.sp_static && !declbase->spec.sp_extern,
+                .automatic = p->current_func != NULL && !static_ && !declbase->spec.sp_extern,
                 .has_linkage = root_declaration || declbase->spec.sp_extern,
             };
-            err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), name, var);
-            if(err) return err;
+            // GNU __auto_type is weird
+            if(!declbase->spec.sp___auto_type){
+                err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), name, var);
+                if(err) return err;
+            }
             skip_var_alloc:;
-            if(var->has_linkage && !var->static_){
+            if(!declbase->spec.sp___auto_type && var->has_linkage && !var->static_){
                 err = cc_record_extern(p, name, (CcSymbol){.kind=CC_SYM_VAR, .var=var}, declbase->spec.sp_extern);
                 if(err) return err;
             }
@@ -16283,6 +16401,8 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
         if(tok.type == CC_PUNCTUATOR && tok.punct.punct == '='){
             if(declbase->spec.sp_typedef)
                 return cc_error(p, tok.loc, "typedef cannot have an initializer");
+            if(is_func_decl)
+                return cc_error(p, tok.loc, "function declaration cannot have an initializer");
             if(declbase->spec.sp_extern && p->current_func)
                 return cc_error(p, tok.loc, "block-scope extern declaration cannot have an initializer");
             CcParseFlags init_flags = flags;
@@ -16362,6 +16482,8 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
         }
         if(declbase->spec.sp_infer_type){
             err = cc_check_decl_type_qualifiers(p, type, declbase->spec, declbase->loc);
+            if(err) return err;
+            err = cc_handle_vm_decl(p, type, declbase->spec, name_loc);
             if(err) return err;
         }
         if(declbase->spec.sp_constexpr){
@@ -16486,15 +16608,20 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             if(err) return err;
         }
         else {
+            if(initializer && ccqt_bt_eq(type, CCBT_void))
+                return cc_error(p, name_loc, "variable has incomplete type 'void'");
+            if(initializer && !ccqt_is_complete_object(type))
+                return cc_type_error(p, name_loc, type, "variable has incomplete type");
             if(!initializer && !declbase->spec.sp_extern){
                 CcTypeKind tk = ccqt_kind(type);
+                _Bool tentative = cc_scope_declarations(p->current) == &p->module->scope && !declbase->spec.sp_static && !declbase->spec.sp_thread_local;
                 if(tk == CC_BASIC && ccqt_basic_kind(type) == CCBT_void)
                     return cc_error(p, tok.loc, "variable has incomplete type 'void'");
                 if(tk == CC_ARRAY && ccqt_as_array(type)->is_incomplete && p->current_func)
                     return cc_type_error(p, tok.loc, type, "variable '%.*s' has incomplete array type", name->length, name->data);
-                if(tk == CC_STRUCT && ccqt_as_struct(type)->is_incomplete)
+                if(!tentative && tk == CC_STRUCT && ccqt_as_struct(type)->is_incomplete)
                     return cc_error(p, tok.loc, "variable has incomplete type 'struct %s'", ccqt_as_struct(type)->name ? ccqt_as_struct(type)->name->data : "(anonymous)");
-                if(tk == CC_UNION && ccqt_as_union(type)->is_incomplete)
+                if(!tentative && tk == CC_UNION && ccqt_as_union(type)->is_incomplete)
                     return cc_error(p, tok.loc, "variable has incomplete type 'union %s'", ccqt_as_union(type)->name ? ccqt_as_union(type)->name->data : "(anonymous)");
                 if(tk == CC_ENUM && ccqt_as_enum(type)->is_incomplete)
                     return cc_type_error(p, tok.loc, type, "variable has incomplete enum type");
@@ -16515,6 +16642,15 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
                 var->type = type;
                 if(initializer)
                     var->initializer = initializer;
+                // unlike other decls, __auto_type is inserted later
+                if(declbase->spec.sp___auto_type){
+                    err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), name, var);
+                    if(err) return err;
+                    if(var->has_linkage && !var->static_){
+                        err = cc_record_extern(p, name, (CcSymbol){.kind=CC_SYM_VAR, .var=var}, declbase->spec.sp_extern);
+                        if(err) return err;
+                    }
+                }
                 if(initializer && !var->constexpr_ && ccqt_kind(type) != CC_VLA){
                     CcQualType object_type = ccqt_array_object_type(type);
                     if(object_type.is_const && !object_type.is_volatile && !object_type.is_atomic){
