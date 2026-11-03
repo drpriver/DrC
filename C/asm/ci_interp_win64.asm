@@ -56,7 +56,7 @@ CI_ASM_switch_count EQU 0
 CI_ASM_switch_data EQU 8
 CI_ASM_entry_size EQU 24
 CI_ASM_entry_target EQU 16
-CI_ASM_op_count EQU 1152
+CI_ASM_op_count EQU 1157
 CI_ASM_func_code EQU 80
 CI_ASM_func_hotswap EQU 168
 CI_ASM_plan_stack_size EQU 48
@@ -713,15 +713,7 @@ CI_SHIFT MACRO p_name, p_bytes, p_operation, p_sign:=<0>, p_immediate:=<0>
         ENDIF
     ELSE
         mov ecx, DWORD PTR [r13 + 12]
-        IF (p_bytes EQ 1)
-            movzx ecx, BYTE PTR [r12 + rcx]
-        ELSEIF (p_bytes EQ 2)
-            movzx ecx, WORD PTR [r12 + rcx]
-        ELSEIF (p_bytes EQ 4)
-            mov ecx, DWORD PTR [r12 + rcx]
-        ELSE
-            mov rcx, QWORD PTR [r12 + rcx]
-        ENDIF
+        mov ecx, DWORD PTR [r12 + rcx]
     ENDIF
     CI_LOAD_SLOT 8, p_bytes, p_sign
     p_operation rax, cl
@@ -1246,6 +1238,24 @@ ENDM
 CI_WIDE_BIT AND128, vpand
 CI_WIDE_BIT OR128, vpor
 CI_WIDE_BIT XOR128, vpxor
+CI_LABEL UMUL32_64
+    CI_SLOT r10, r10d, 8
+    CI_SLOT r11, r11d, 12
+    mov eax, DWORD PTR [r10]
+    mov ecx, DWORD PTR [r11]
+    imul rax, rcx
+    CI_SLOT r10, r10d, 4
+    mov QWORD PTR [r10], rax
+    CI_NEXT
+CI_LABEL UMUL64_128
+    CI_SLOT r10, r10d, 8
+    CI_SLOT r11, r11d, 12
+    mov rax, QWORD PTR [r10]
+    mul QWORD PTR [r11]
+    CI_SLOT r10, r10d, 4
+    mov QWORD PTR [r10], rax
+    mov QWORD PTR [r10 + 8], rdx
+    CI_NEXT
 CI_LABEL MUL128
 CI_SLOT r10, r10d, 8
 CI_SLOT r11, r11d, 12
@@ -1341,14 +1351,18 @@ CI_WIDE_COMPARE ULE128, be
 CI_WIDE_COMPARE UGT128, a
 CI_WIDE_COMPARE UGE128, ae
 
-CI_WIDE_SHIFT MACRO p_name, p_right, p_sign
+CI_WIDE_SHIFT MACRO p_name, p_right, p_sign, p_immediate:=<0>
     LOCAL branch_1, branch_3
     CI_LABEL p_name
     mov r10d, DWORD PTR [r13 + 8]
     mov rax, QWORD PTR [r12 + r10]
     mov rdx, QWORD PTR [r12 + r10 + 8]
-    mov r10d, DWORD PTR [r13 + 12]
-    mov rcx, QWORD PTR [r12 + r10]
+    IF p_immediate
+        mov ecx, DWORD PTR [r13 + 16]
+    ELSE
+        mov r10d, DWORD PTR [r13 + 12]
+        mov ecx, DWORD PTR [r12 + r10]
+    ENDIF
     cmp ecx, 64
     jae branch_1
     IF p_right
@@ -1388,6 +1402,9 @@ ENDM
 CI_WIDE_SHIFT SHL128, 0, 0
 CI_WIDE_SHIFT LSR128, 1, 0
 CI_WIDE_SHIFT ASR128, 1, 1
+CI_WIDE_SHIFT SHL_IMM128, 0, 0, 1
+CI_WIDE_SHIFT ASR_IMM128, 1, 1, 1
+CI_WIDE_SHIFT LSR_IMM128, 1, 0, 1
 
 CI_COND_JUMP MACRO p_name, p_bytes, p_nonzero
     CI_LABEL p_name
@@ -4491,6 +4508,11 @@ CI_ENTRY MACRO p_name
     ENDIF
     DD Lci_handler_&p_name - Lci_dispatch_table
 ENDM
+CI_ENTRY UMUL32_64
+CI_ENTRY UMUL64_128
+CI_ENTRY SHL_IMM128
+CI_ENTRY ASR_IMM128
+CI_ENTRY LSR_IMM128
 CI_ENTRY ADD_IMM32
 CI_ENTRY SUB_IMM32
 CI_ENTRY MUL_IMM32

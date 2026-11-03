@@ -8506,7 +8506,7 @@
 {
     CI_OP_BEGIN(CI_OP_SHL8);
     uint32_t a = (uint32_t)ci_read_uint((char*)(frame + 1) + op->alu.src, 1);
-    uint32_t b = (uint32_t)(ci_read_uint((char*)(frame + 1) + op->alu.src2, 1));
+    uint32_t b = (uint32_t)(ci_read_uint((char*)(frame + 1) + op->alu.src2, 4));
     uint64_t result = ci_lsl64(a, b);
     ci_write_uint((char*)(frame + 1) + op->alu.slot, 1, result);
     pc++;
@@ -8515,7 +8515,7 @@
 {
     CI_OP_BEGIN(CI_OP_ASR8);
     uint32_t a = (uint32_t)ci_read_uint((char*)(frame + 1) + op->alu.src, 1);
-    uint32_t b = (uint32_t)(ci_read_uint((char*)(frame + 1) + op->alu.src2, 1));
+    uint32_t b = (uint32_t)(ci_read_uint((char*)(frame + 1) + op->alu.src2, 4));
     uint64_t result = ci_asr64((int8_t)a, b);
     ci_write_uint((char*)(frame + 1) + op->alu.slot, 1, result);
     pc++;
@@ -8524,7 +8524,7 @@
 {
     CI_OP_BEGIN(CI_OP_LSR8);
     uint32_t a = (uint32_t)ci_read_uint((char*)(frame + 1) + op->alu.src, 1);
-    uint32_t b = (uint32_t)(ci_read_uint((char*)(frame + 1) + op->alu.src2, 1));
+    uint32_t b = (uint32_t)(ci_read_uint((char*)(frame + 1) + op->alu.src2, 4));
     uint64_t result = ci_lsr64(a, b);
     ci_write_uint((char*)(frame + 1) + op->alu.slot, 1, result);
     pc++;
@@ -8639,7 +8639,7 @@
 {
     CI_OP_BEGIN(CI_OP_SHL16);
     uint32_t a = (uint32_t)ci_read_uint((char*)(frame + 1) + op->alu.src, 2);
-    uint32_t b = (uint32_t)(ci_read_uint((char*)(frame + 1) + op->alu.src2, 2));
+    uint32_t b = (uint32_t)(ci_read_uint((char*)(frame + 1) + op->alu.src2, 4));
     uint64_t result = ci_lsl64(a, b);
     ci_write_uint((char*)(frame + 1) + op->alu.slot, 2, result);
     pc++;
@@ -8648,7 +8648,7 @@
 {
     CI_OP_BEGIN(CI_OP_ASR16);
     uint32_t a = (uint32_t)ci_read_uint((char*)(frame + 1) + op->alu.src, 2);
-    uint32_t b = (uint32_t)(ci_read_uint((char*)(frame + 1) + op->alu.src2, 2));
+    uint32_t b = (uint32_t)(ci_read_uint((char*)(frame + 1) + op->alu.src2, 4));
     uint64_t result = ci_asr64((int16_t)a, b);
     ci_write_uint((char*)(frame + 1) + op->alu.slot, 2, result);
     pc++;
@@ -8657,7 +8657,7 @@
 {
     CI_OP_BEGIN(CI_OP_LSR16);
     uint32_t a = (uint32_t)ci_read_uint((char*)(frame + 1) + op->alu.src, 2);
-    uint32_t b = (uint32_t)(ci_read_uint((char*)(frame + 1) + op->alu.src2, 2));
+    uint32_t b = (uint32_t)(ci_read_uint((char*)(frame + 1) + op->alu.src2, 4));
     uint64_t result = ci_lsr64(a, b);
     ci_write_uint((char*)(frame + 1) + op->alu.slot, 2, result);
     pc++;
@@ -8905,7 +8905,7 @@
 {
     CI_OP_BEGIN(CI_OP_SHL64);
     uint64_t a = ci_read_uint((char*)(frame + 1) + op->alu.src, 8);
-    uint64_t b = ci_read_uint((char*)(frame + 1) + op->alu.src2, 8);
+    uint64_t b = ci_read_uint((char*)(frame + 1) + op->alu.src2, 4);
     uint64_t result = ci_lsl64(a, b);
     ci_write_uint((char*)(frame + 1) + op->alu.slot, 8, result);
     pc++;
@@ -8914,7 +8914,7 @@
 {
     CI_OP_BEGIN(CI_OP_ASR64);
     uint64_t a = ci_read_uint((char*)(frame + 1) + op->alu.src, 8);
-    uint64_t b = ci_read_uint((char*)(frame + 1) + op->alu.src2, 8);
+    uint64_t b = ci_read_uint((char*)(frame + 1) + op->alu.src2, 4);
     uint64_t result = ci_asr64((int64_t)a, b);
     ci_write_uint((char*)(frame + 1) + op->alu.slot, 8, result);
     pc++;
@@ -8923,7 +8923,7 @@
 {
     CI_OP_BEGIN(CI_OP_LSR64);
     uint64_t a = ci_read_uint((char*)(frame + 1) + op->alu.src, 8);
-    uint64_t b = ci_read_uint((char*)(frame + 1) + op->alu.src2, 8);
+    uint64_t b = ci_read_uint((char*)(frame + 1) + op->alu.src2, 4);
     uint64_t result = ci_lsr64(a, b);
     ci_write_uint((char*)(frame + 1) + op->alu.slot, 8, result);
     pc++;
@@ -9200,6 +9200,22 @@
     CI_OP_END(CI_OP_SUB128);
 }
 {
+    CI_OP_BEGIN(CI_OP_UMUL32_64);
+    uint64_t a = ci_read_uint((char*)(frame + 1) + op->alu.src, 4);
+    uint64_t b = ci_read_uint((char*)(frame + 1) + op->alu.src2, 4);
+    ci_write_uint((char*)(frame + 1) + op->alu.slot, 8, a * b);
+    pc++;
+    CI_OP_END(CI_OP_UMUL32_64);
+}
+{
+    CI_OP_BEGIN(CI_OP_UMUL64_128);
+    CiUint128 a = ci_uint128_from_uint64(ci_read_uint((char*)(frame + 1) + op->alu.src, 8));
+    CiUint128 b = ci_uint128_from_uint64(ci_read_uint((char*)(frame + 1) + op->alu.src2, 8));
+    ci_uint128_write((char*)(frame + 1) + op->alu.slot, 16, ci_uint128_mul(a, b));
+    pc++;
+    CI_OP_END(CI_OP_UMUL64_128);
+}
+{
     CI_OP_BEGIN(CI_OP_MUL128);
     CiUint128 a, b;
     ci_uint128_read(&a, (char*)(frame + 1) + op->alu.src, 16);
@@ -9280,31 +9296,61 @@
     CI_OP_END(CI_OP_XOR128);
 }
 {
+    CI_OP_BEGIN(CI_OP_SHL_IMM128);
+    CiUint128 a;
+    ci_uint128_read(&a, (char*)(frame + 1) + op->alu_imm.src, 16);
+    uint32_t b = (uint32_t)op->alu_imm.immediate;
+    CiUint128 result = ci_uint128_shl(a, b);
+    ci_uint128_write((char*)(frame + 1) + op->alu_imm.slot, 16, result);
+    pc++;
+    CI_OP_END(CI_OP_SHL_IMM128);
+}
+{
+    CI_OP_BEGIN(CI_OP_LSR_IMM128);
+    CiUint128 a;
+    ci_uint128_read(&a, (char*)(frame + 1) + op->alu_imm.src, 16);
+    uint32_t b = (uint32_t)op->alu_imm.immediate;
+    CiUint128 result = ci_uint128_shr(a, b);
+    ci_uint128_write((char*)(frame + 1) + op->alu_imm.slot, 16, result);
+    pc++;
+    CI_OP_END(CI_OP_LSR_IMM128);
+}
+{
+    CI_OP_BEGIN(CI_OP_ASR_IMM128);
+    CiUint128 a;
+    ci_uint128_read(&a, (char*)(frame + 1) + op->alu_imm.src, 16);
+    uint32_t b = (uint32_t)op->alu_imm.immediate;
+    CiUint128 result = ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(a), b));
+    ci_uint128_write((char*)(frame + 1) + op->alu_imm.slot, 16, result);
+    pc++;
+    CI_OP_END(CI_OP_ASR_IMM128);
+}
+{
     CI_OP_BEGIN(CI_OP_SHL128);
-    CiUint128 a, b;
+    CiUint128 a;
     ci_uint128_read(&a, (char*)(frame + 1) + op->alu.src, 16);
-    ci_uint128_read(&b, (char*)(frame + 1) + op->alu.src2, 16);
-    CiUint128 result = ci_uint128_shl(a, ci_uint128_hi(b) ? UINT64_MAX : ci_uint128_lo(b));
+    uint32_t b = (uint32_t)ci_read_uint((char*)(frame + 1) + op->alu.src2, 4);
+    CiUint128 result = ci_uint128_shl(a, b);
     ci_uint128_write((char*)(frame + 1) + op->alu.slot, 16, result);
     pc++;
     CI_OP_END(CI_OP_SHL128);
 }
 {
     CI_OP_BEGIN(CI_OP_ASR128);
-    CiUint128 a, b;
+    CiUint128 a;
     ci_uint128_read(&a, (char*)(frame + 1) + op->alu.src, 16);
-    ci_uint128_read(&b, (char*)(frame + 1) + op->alu.src2, 16);
-    CiUint128 result = ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(a), ci_uint128_hi(b) ? UINT64_MAX : ci_uint128_lo(b)));
+    uint32_t b = (uint32_t)ci_read_uint((char*)(frame + 1) + op->alu.src2, 4);
+    CiUint128 result = ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(a), b));
     ci_uint128_write((char*)(frame + 1) + op->alu.slot, 16, result);
     pc++;
     CI_OP_END(CI_OP_ASR128);
 }
 {
     CI_OP_BEGIN(CI_OP_LSR128);
-    CiUint128 a, b;
+    CiUint128 a;
     ci_uint128_read(&a, (char*)(frame + 1) + op->alu.src, 16);
-    ci_uint128_read(&b, (char*)(frame + 1) + op->alu.src2, 16);
-    CiUint128 result = ci_uint128_shr(a, ci_uint128_hi(b) ? UINT64_MAX : ci_uint128_lo(b));
+    uint32_t b = (uint32_t)ci_read_uint((char*)(frame + 1) + op->alu.src2, 4);
+    CiUint128 result = ci_uint128_shr(a, b);
     ci_uint128_write((char*)(frame + 1) + op->alu.slot, 16, result);
     pc++;
     CI_OP_END(CI_OP_LSR128);

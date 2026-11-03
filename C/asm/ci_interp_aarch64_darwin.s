@@ -2013,7 +2013,7 @@ Lci_SHL8:
     ldr w9, [x24, #8]
     ldrb w1, [x23, x9]
     ldr w9, [x24, #12]
-    ldrb w2, [x23, x9]
+    ldr w2, [x23, x9]
     lsl x1, x1, x2
     strb w1, [x23, x0]
     CI_NEXT
@@ -2023,7 +2023,7 @@ Lci_ASR8:
     ldr w9, [x24, #8]
     ldrsb x1, [x23, x9]
     ldr w9, [x24, #12]
-    ldrb w2, [x23, x9]
+    ldr w2, [x23, x9]
     asr x1, x1, x2
     strb w1, [x23, x0]
     CI_NEXT
@@ -2033,7 +2033,7 @@ Lci_LSR8:
     ldr w9, [x24, #8]
     ldrb w1, [x23, x9]
     ldr w9, [x24, #12]
-    ldrb w2, [x23, x9]
+    ldr w2, [x23, x9]
     lsr x1, x1, x2
     strb w1, [x23, x0]
     CI_NEXT
@@ -2161,7 +2161,7 @@ Lci_SHL16:
     ldr w9, [x24, #8]
     ldrh w1, [x23, x9]
     ldr w9, [x24, #12]
-    ldrh w2, [x23, x9]
+    ldr w2, [x23, x9]
     lsl x1, x1, x2
     strh w1, [x23, x0]
     CI_NEXT
@@ -2171,7 +2171,7 @@ Lci_ASR16:
     ldr w9, [x24, #8]
     ldrsh x1, [x23, x9]
     ldr w9, [x24, #12]
-    ldrh w2, [x23, x9]
+    ldr w2, [x23, x9]
     asr x1, x1, x2
     strh w1, [x23, x0]
     CI_NEXT
@@ -2181,7 +2181,7 @@ Lci_LSR16:
     ldr w9, [x24, #8]
     ldrh w1, [x23, x9]
     ldr w9, [x24, #12]
-    ldrh w2, [x23, x9]
+    ldr w2, [x23, x9]
     lsr x1, x1, x2
     strh w1, [x23, x0]
     CI_NEXT
@@ -2441,7 +2441,7 @@ Lci_SHL64:
     ldr w9, [x24, #8]
     ldr x1, [x23, x9]
     ldr w9, [x24, #12]
-    ldr x2, [x23, x9]
+    ldr w2, [x23, x9]
     lsl x1, x1, x2
     str x1, [x23, x0]
     CI_NEXT
@@ -2451,7 +2451,7 @@ Lci_ASR64:
     ldr w9, [x24, #8]
     ldr x1, [x23, x9]
     ldr w9, [x24, #12]
-    ldr x2, [x23, x9]
+    ldr w2, [x23, x9]
     asr x1, x1, x2
     str x1, [x23, x0]
     CI_NEXT
@@ -2461,7 +2461,7 @@ Lci_LSR64:
     ldr w9, [x24, #8]
     ldr x1, [x23, x9]
     ldr w9, [x24, #12]
-    ldr x2, [x23, x9]
+    ldr w2, [x23, x9]
     lsr x1, x1, x2
     str x1, [x23, x0]
     CI_NEXT
@@ -3865,6 +3865,28 @@ Lci_FGE64:
     ldr w9, [x24, #4]
     strb w1, [x23, x9]
     CI_NEXT
+Lci_UMUL32_64:
+    bti j
+    ldr w9, [x24, #8]
+    ldr w1, [x23, x9]
+    ldr w9, [x24, #12]
+    ldr w2, [x23, x9]
+    umull x1, w1, w2
+    ldr w9, [x24, #4]
+    str x1, [x23, x9]
+    CI_NEXT
+Lci_UMUL64_128:
+    bti j
+    ldr w9, [x24, #8]
+    ldr x1, [x23, x9]
+    ldr w9, [x24, #12]
+    ldr x2, [x23, x9]
+    umulh x3, x1, x2
+    mul x1, x1, x2
+    ldr w9, [x24, #4]
+    add x9, x23, x9
+    stp x1, x3, [x9]
+    CI_NEXT
 Lci_MUL128:
     bti j
     ldr w9, [x24, #4]
@@ -3881,6 +3903,15 @@ Lci_MUL128:
     mul x1, x1, x3
     stp x1, x2, [x0]
     CI_NEXT
+Lci_LSR_IMM128:
+    bti j
+    ldr w9, [x24, #4]
+    add x0, x23, x9
+    ldr w9, [x24, #8]
+    add x9, x23, x9
+    ldp x1, x2, [x9]
+    ldr w3, [x24, #16]
+    b Lci_LSR128_count
 Lci_LSR128:
     bti j
     ldr w9, [x24, #4]
@@ -3890,7 +3921,8 @@ Lci_LSR128:
     ldp x1, x2, [x9]
     ldr w9, [x24, #12]
     add x9, x23, x9
-    ldr x3, [x9]
+    ldr w3, [x9]
+Lci_LSR128_count:
     cbz x3, Lci_shift_done_LSR
     cmp x3, #64
     b.hs Lci_shift_upper_LSR
@@ -4004,6 +4036,15 @@ Lci_NOT128:
     mvn x2, x2
     stp x1, x2, [x0]
     CI_NEXT
+Lci_SHL_IMM128:
+    bti j
+    ldr w9, [x24, #4]
+    add x0, x23, x9
+    ldr w9, [x24, #8]
+    add x9, x23, x9
+    ldp x1, x2, [x9]
+    ldr w3, [x24, #16]
+    b Lci_SHL128_count
 Lci_SHL128:
     bti j
     ldr w9, [x24, #4]
@@ -4013,10 +4054,8 @@ Lci_SHL128:
     ldp x1, x2, [x9]
     ldr w9, [x24, #12]
     add x9, x23, x9
-    ldp x3, x4, [x9]
-    cbnz x4, Lci_shl128_zero
-    cmp x3, #128
-    b.hs Lci_shl128_zero
+    ldr w3, [x9]
+Lci_SHL128_count:
     cbz x3, Lci_shl128_done
     cmp x3, #64
     b.hs Lci_shl128_upper
@@ -4029,10 +4068,6 @@ Lci_SHL128:
 Lci_shl128_upper:
     lsl x2, x1, x3
     mov x1, #0
-    b Lci_shl128_done
-Lci_shl128_zero:
-    mov x1, #0
-    mov x2, #0
 Lci_shl128_done:
     stp x1, x2, [x0]
     CI_NEXT
@@ -4196,6 +4231,15 @@ Lci_UGE128:
     ldr w9, [x24, #4]
     strb w1, [x23, x9]
     CI_NEXT
+Lci_ASR_IMM128:
+    bti j
+    ldr w9, [x24, #4]
+    add x0, x23, x9
+    ldr w9, [x24, #8]
+    add x9, x23, x9
+    ldp x1, x2, [x9]
+    ldr w3, [x24, #16]
+    b Lci_ASR128_count
 Lci_ASR128:
     bti j
     ldr w9, [x24, #4]
@@ -4205,7 +4249,8 @@ Lci_ASR128:
     ldp x1, x2, [x9]
     ldr w9, [x24, #12]
     add x9, x23, x9
-    ldr x3, [x9]
+    ldr w3, [x9]
+Lci_ASR128_count:
     cbz x3, Lci_shift_done_ASR
     cmp x3, #64
     b.hs Lci_shift_upper_ASR

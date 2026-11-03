@@ -65,6 +65,8 @@ ci_op_print_family(CiOpKind kind){
         CI_ALU_BINARY_OPS(CI_OPCODE_CASE, 128)
         CI_ALU_UNARY_OPS(CI_OPCODE_CASE, 128)
             return CI_OP_ADD128;
+        case CI_OP_SHL_IMM128: case CI_OP_ASR_IMM128: case CI_OP_LSR_IMM128:
+            return CI_OP_SHL_IMM128;
         CI_ALU_BINARY_OPS(CI_OPCODE_CASE, _IMM32)
             return CI_OP_ADD_IMM32;
         CI_ALU_BINARY_OPS(CI_OPCODE_CASE, _IMM64)
@@ -203,6 +205,7 @@ ci_op_numeric_sym(CiOpKind kind){
         case CI_OP_SHL64:
         case CI_OP_SHL128:
         case CI_OP_SHL_IMM32:
+        case CI_OP_SHL_IMM128:
         case CI_OP_SHL_IMM64:
             return "<<";
         case CI_OP_ASR8: case CI_OP_LSR8:
@@ -211,6 +214,7 @@ ci_op_numeric_sym(CiOpKind kind){
         case CI_OP_ASR64: case CI_OP_LSR64:
         case CI_OP_ASR128: case CI_OP_LSR128:
         case CI_OP_ASR_IMM32: case CI_OP_LSR_IMM32:
+        case CI_OP_ASR_IMM128: case CI_OP_LSR_IMM128:
         case CI_OP_ASR_IMM64: case CI_OP_LSR_IMM64:
             return ">>";
         case CI_OP_NOT8:
@@ -303,6 +307,7 @@ ci_op_numeric_unsigned(CiOpKind kind){
         case CI_OP_UDIV16: case CI_OP_UMOD16: case CI_OP_LSR16:
         case CI_OP_UDIV32: case CI_OP_UMOD32: case CI_OP_LSR32:
         case CI_OP_UDIV64: case CI_OP_UMOD64: case CI_OP_LSR64:
+        case CI_OP_LSR_IMM128:
         case CI_OP_UDIV128: case CI_OP_UMOD128: case CI_OP_LSR128:
         case CI_OP_UDIV_IMM32: case CI_OP_UMOD_IMM32: case CI_OP_LSR_IMM32:
         case CI_OP_UDIV_IMM64: case CI_OP_UMOD_IMM64: case CI_OP_LSR_IMM64:
@@ -675,13 +680,25 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             else {
                 ci_op_print_range(out, op->alu.src, sz);
                 msb_sprintf(out, " %s%s ", ci_op_numeric_sym(op->kind), ci_op_numeric_unsigned(op->kind)?"u":"");
-                ci_op_print_range(out, op->alu.src2, sz);
+                const char* sym = ci_op_numeric_sym(op->kind);
+                ci_op_print_range(out, op->alu.src2, sym[0] == '<' || sym[0] == '>'? 4 : sz);
             }
             break;
         }
+        case CI_OP_UMUL32_64:
+        case CI_OP_UMUL64_128:{
+            uint32_t sz = family == CI_OP_UMUL32_64? 4 : 8;
+            ci_op_print_range(out, op->alu.slot, sz * 2);
+            msb_write_literal(out, " = widening_mul ");
+            ci_op_print_range(out, op->alu.src, sz);
+            msb_write_literal(out, " *u ");
+            ci_op_print_range(out, op->alu.src2, sz);
+            break;
+        }
+        case CI_OP_SHL_IMM128:
         case CI_OP_ADD_IMM32:
         case CI_OP_ADD_IMM64:{
-            uint32_t sz = family == CI_OP_ADD_IMM32 ? 4 : 8;
+            uint32_t sz = family == CI_OP_SHL_IMM128? 16 : family == CI_OP_ADD_IMM32? 4 : 8;
             ci_op_print_range(out, op->alu_imm.slot, sz);
             msb_write_literal(out, " = ");
             ci_op_print_range(out, op->alu_imm.src, sz);

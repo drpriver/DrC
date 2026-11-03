@@ -21,7 +21,7 @@
 #define CI_ASM_switch_data 8
 #define CI_ASM_entry_size 24
 #define CI_ASM_entry_target 16
-#define CI_ASM_op_count 1152
+#define CI_ASM_op_count 1157
 #define CI_ASM_func_code 80
 #define CI_ASM_func_hotswap 168
 #define CI_ASM_plan_stack_size 48

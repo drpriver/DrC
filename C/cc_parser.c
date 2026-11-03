@@ -2403,12 +2403,18 @@ cc_parse_assignment_tail(CcParser* p, CcParseFlags flags, CcExpr* left, CcExpr* 
                     if(!ccqt_is_integer(right->type))
                         return cc_types_error(p, tok.loc, left->type, right->type, "operator '%s' requires integer operands", cc_expr_kind_to_operator(kind));
                 }
+                CcQualType right_type;
                 if(kind == CC_EXPR_LSHIFTASSIGN || kind == CC_EXPR_RSHIFTASSIGN){
                     err = cc_integer_promote_expr(p, left, &operation_type, tok.loc);
+                    if(err) return err;
+                    err = cc_integer_promote_expr(p, right, &right_type, tok.loc);
                 }
-                else err = cc_usual_arithmetic(p, left, right, &operation_type, tok.loc);
+                else {
+                    err = cc_usual_arithmetic(p, left, right, &operation_type, tok.loc);
+                    right_type = operation_type;
+                }
                 if(err) return err;
-                err = cc_implicit_cast(p, right, operation_type, &right);
+                err = cc_implicit_cast(p, right, right_type, &right);
                 if(err) return err;
             }
             if(!flags.static_rebind && kind == CC_EXPR_ASSIGN && (right->kind == CC_EXPR_COMPOUND_LITERAL || right->kind == CC_EXPR_INIT_LIST)){

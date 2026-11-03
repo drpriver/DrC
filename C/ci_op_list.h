@@ -51,6 +51,11 @@
 #define CI_OPCODE_CASE(name, suffix) case CI_OP_##name##suffix:
 
 #define CI_OPCODE_NATIVE_LIST(X) \
+    X(UMUL32_64, ) \
+    X(UMUL64_128, ) \
+    X(SHL_IMM128, ) \
+    X(ASR_IMM128, ) \
+    X(LSR_IMM128, ) \
     CI_ALU_BINARY_OPS(X, _IMM32) \
     CI_ALU_BINARY_OPS(X, _IMM64) \
     CI_ALU_BINARY_OPS(X, 8) \

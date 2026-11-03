@@ -578,15 +578,7 @@ Lci_call_error:
         .endif
     .else
         mov ecx, DWORD PTR [r13 + 12]
-        .if \bytes == 1
-            movzx ecx, BYTE PTR [r12 + rcx]
-        .elseif \bytes == 2
-            movzx ecx, WORD PTR [r12 + rcx]
-        .elseif \bytes == 4
-            mov ecx, DWORD PTR [r12 + rcx]
-        .else
-            mov rcx, QWORD PTR [r12 + rcx]
-        .endif
+        mov ecx, DWORD PTR [r12 + rcx]
     .endif
     CI_LOAD_SLOT 8, \bytes, \sign
     \operation rax, cl
@@ -1008,6 +1000,24 @@ CI_WIDE SUB128, sub, sbb
 CI_WIDE_BIT AND128, vpand
 CI_WIDE_BIT OR128, vpor
 CI_WIDE_BIT XOR128, vpxor
+CI_LABEL UMUL32_64
+    CI_SLOT r10, r10d, 8
+    CI_SLOT r11, r11d, 12
+    mov eax, DWORD PTR [r10]
+    mov ecx, DWORD PTR [r11]
+    imul rax, rcx
+    CI_SLOT r10, r10d, 4
+    mov QWORD PTR [r10], rax
+    CI_NEXT
+CI_LABEL UMUL64_128
+    CI_SLOT r10, r10d, 8
+    CI_SLOT r11, r11d, 12
+    mov rax, QWORD PTR [r10]
+    mul QWORD PTR [r11]
+    CI_SLOT r10, r10d, 4
+    mov QWORD PTR [r10], rax
+    mov QWORD PTR [r10 + 8], rdx
+    CI_NEXT
 CI_LABEL MUL128
     CI_SLOT r10, r10d, 8
     CI_SLOT r11, r11d, 12
@@ -1100,13 +1110,17 @@ CI_WIDE_COMPARE ULE128, be
 CI_WIDE_COMPARE UGT128, a
 CI_WIDE_COMPARE UGE128, ae
 
-.macro CI_WIDE_SHIFT name, right, sign
+.macro CI_WIDE_SHIFT name, right, sign, immediate=0
     CI_LABEL \name
     mov r10d, DWORD PTR [r13 + 8]
     mov rax, QWORD PTR [r12 + r10]
     mov rdx, QWORD PTR [r12 + r10 + 8]
-    mov r10d, DWORD PTR [r13 + 12]
-    mov rcx, QWORD PTR [r12 + r10]
+    .if \immediate
+        mov ecx, DWORD PTR [r13 + 16]
+    .else
+        mov r10d, DWORD PTR [r13 + 12]
+        mov ecx, DWORD PTR [r12 + r10]
+    .endif
     cmp ecx, 64
     jae 2f
     .if \right
@@ -1146,6 +1160,9 @@ CI_WIDE_COMPARE UGE128, ae
 CI_WIDE_SHIFT SHL128, 0, 0
 CI_WIDE_SHIFT LSR128, 1, 0
 CI_WIDE_SHIFT ASR128, 1, 1
+CI_WIDE_SHIFT SHL_IMM128, 0, 0, 1
+CI_WIDE_SHIFT ASR_IMM128, 1, 1, 1
+CI_WIDE_SHIFT LSR_IMM128, 1, 0, 1
 
 .macro CI_COND_JUMP name, bytes, nonzero
     CI_LABEL \name
