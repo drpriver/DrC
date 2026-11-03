@@ -22,6 +22,11 @@
 #endif
 
 static void ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt);
+static
+void
+ci_op_print_target(MStringBuilder* out, int32_t target){
+    msb_sprintf(out, "pc%+d", target);
+}
 static void ci_op_print_range(MStringBuilder* out, uint32_t slot, uint32_t size);
 static void ci_op_print_deref(MStringBuilder* out, uint32_t slot, uint32_t offset);
 static const char* ci_op_float_suffix(uint32_t float_width);
@@ -448,6 +453,16 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                 msb_sprintf(out, " source_size=%u", op->abi_transfer.source_size);
             break;
         }
+        case CI_F_ABI_PAIR:
+            msb_write_literal(out, "abi.pair ");
+            ci_op_print_register(out, op->abi_pair.reg0);
+            msb_write_str(out, op->abi_pair.write ? " <- " : " -> ", 4);
+            ci_op_print_range(out, op->abi_pair.slot0, 8);
+            msb_write_literal(out, ", ");
+            ci_op_print_register(out, op->abi_pair.reg1);
+            msb_write_str(out, op->abi_pair.write ? " <- " : " -> ", 4);
+            ci_op_print_range(out, op->abi_pair.slot1, 8);
+            break;
         case CI_F_ABI_MOVE:
             msb_write_literal(out, "abi.move ");
             if(!op->abi_move.write){
@@ -690,7 +705,8 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_range(out, op->cmp_jump.src, sz);
             msb_sprintf(out, " %s%s ", ci_op_numeric_sym(op->kind), ci_op_numeric_unsigned(op->kind) ? "u" : "");
             ci_op_print_range(out, op->cmp_jump.src2, sz);
-            msb_sprintf(out, ") jump 0x%x", op->cmp_jump.jump);
+            msb_write_literal(out, ") jump ");
+            ci_op_print_target(out, op->cmp_jump.jump);
             break;
         }
         case CI_OP_EQ32:{
@@ -853,14 +869,30 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             msb_sprintf(out, " (%u bytes)", op->zero.size);
             msb_sprintf(out, " (align %u)", 1u << op->zero.align_log2);
             break;
+        case CI_F_BITFIELD_JUMP:
+            msb_sprintf(out, "if %sbits[%u:%u] of ", op->bitfield_jump.when_true ? "" : "!",
+                op->bitfield_jump.bit_offset, op->bitfield_jump.bit_offset + op->bitfield_jump.bit_width);
+            if(op->bitfield_jump.from_slot)
+                ci_op_print_range(out, op->bitfield_jump.src + op->bitfield_jump.offset,
+                    (op->bitfield_jump.bit_offset + op->bitfield_jump.bit_width + 7) / 8);
+            else
+                ci_op_print_deref(out, op->bitfield_jump.src, op->bitfield_jump.offset);
+            msb_write_literal(out, " jump ");
+            ci_op_print_target(out, op->bitfield_jump.jump);
+            break;
         case CI_F_LOAD_BITFIELD:
         case CI_F_LOAD_BITFIELD_BYTES:
+        case CI_F_LOAD_SLOT_BITFIELD:
+        case CI_F_LOAD_SLOT_BITFIELD_BYTES:
             ci_op_print_range(out, op->load_bf.slot, op->load_bf.slot_size);
             msb_sprintf(out, " = bits%s%s[%u:%u] of ",
-                ci_op_family(op->kind) == CI_F_LOAD_BITFIELD_BYTES ? ".bytes" : "",
+                ci_op_family(op->kind) == CI_F_LOAD_BITFIELD_BYTES || ci_op_family(op->kind) == CI_F_LOAD_SLOT_BITFIELD_BYTES ? ".bytes" : "",
                 op->load_bf.is_signed?".s":".u",
                 op->load_bf.bit_offset, op->load_bf.bit_offset+op->load_bf.bit_width);
-            ci_op_print_deref(out, op->load_bf.src, op->load_bf.offset);
+            if(ci_op_family(op->kind) == CI_F_LOAD_SLOT_BITFIELD || ci_op_family(op->kind) == CI_F_LOAD_SLOT_BITFIELD_BYTES)
+                ci_op_print_range(out, op->load_bf.src + op->load_bf.offset, op->load_bf.slot_size);
+            else
+                ci_op_print_deref(out, op->load_bf.src, op->load_bf.offset);
             msb_sprintf(out, " (align %u)", 1u << op->load_bf.align_log2);
             break;
         case CI_F_STORE_BITFIELD:
@@ -887,6 +919,9 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                 msb_sprintf(out, "stack @%u", op->call.args_slot);
             msb_write_char(out,  ')');
         } break;
+        case CI_OP_CALL_RESOLVE:
+            msb_sprintf(out, "resolve_call([%u])", op->call_resolve.slot);
+            break;
         case CI_F_ISTRUE:
             ci_op_print_range(out, op->istrue.slot, op->istrue.slot_size);
             msb_sprintf(out, " = %s%s ",
@@ -895,20 +930,35 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             ci_op_print_range(out, op->istrue.src, op->istrue.src_size);
             break;
         case CI_OP_JUMP:
-            msb_sprintf(out, "jump 0x%x", op->jump.jump);
+            msb_write_literal(out, "jump ");
+            ci_op_print_target(out, op->jump.jump);
             break;
         case CI_F_JUMP_FALSE:
             msb_write_literal(out, "if !");
             ci_op_print_range(out, op->jump_false.slot, op->jump_false.slot_size);
-            msb_sprintf(out, " jump 0x%x", op->jump_false.jump);
+            msb_write_literal(out, " jump ");
+            ci_op_print_target(out, op->jump_false.jump);
             break;
         case CI_F_JUMP_TRUE:
             msb_write_literal(out, "if ");
             ci_op_print_range(out, op->jump_true.slot, op->jump_true.slot_size);
-            msb_sprintf(out, " jump 0x%x", op->jump_true.jump);
+            msb_write_literal(out, " jump ");
+            ci_op_print_target(out, op->jump_true.jump);
             break;
         case CI_OP_RETURN:
             msb_write_literal(out, "return");
+            break;
+        case CI_OP_FRAME_ENTER:
+            msb_write_literal(out, "frame_enter");
+            break;
+        case CI_OP_FRAME_SAVE:
+            msb_write_literal(out, "frame_save");
+            break;
+        case CI_OP_FRAME_RESTORE:
+            msb_write_literal(out, "frame_restore");
+            break;
+        case CI_OP_FRAME_READY:
+            msb_write_literal(out, "frame_ready");
             break;
         case CI_OP_RETURN_SLOT:
             msb_write_literal(out, "return ");
@@ -929,10 +979,14 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
                         msb_sprintf(out, "%lld", (long long)e.low);
                         if(e.low != e.high) msb_sprintf(out, "...%lld", (long long)e.high);
                     }
-                    msb_sprintf(out, "=>0x%x, ", e.target);
+                    msb_write_literal(out, "=>");
+                    ci_op_print_target(out, e.target);
+                    msb_write_literal(out, ", ");
                 }
             }
-            msb_sprintf(out, "default=>0x%x}", op->switch_.jump);
+            msb_write_literal(out, "default=>");
+            ci_op_print_target(out, op->switch_.jump);
+            msb_write_literal(out, "}");
             break;
         case CI_F_ATOMIC_LOAD:
             ci_op_print_range(out, op->atomic_load.slot, op->atomic_load.slot_size);
@@ -974,10 +1028,10 @@ ci_op_print(const CiOp* op, MStringBuilder* out, CcLongDoubleFormat ldbl_fmt){
             msb_sprintf(out, "[%u] = alloca([%u], align=%u, zero=%u)", op->alloca.slot, op->alloca.src, op->alloca.alignment, op->alloca.zero_initialize);
             break;
         case CI_OP_STACK_SAVE:
-            msb_sprintf(out, "[%u] = stack_save()", op->stack_save.slot);
+            msb_write_literal(out, "stack_save");
             break;
         case CI_OP_STACK_RESTORE:
-            msb_sprintf(out, "stack_restore([%u])", op->stack_restore.slot);
+            msb_write_literal(out, "stack_restore");
             break;
         case CI_F_BSWAP:
             msb_sprintf(out, "[%u] = bswap%u([%u])", op->bswap.slot, op->bswap.size*8, op->bswap.src);

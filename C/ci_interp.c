@@ -13,6 +13,7 @@
 #endif
 #endif
 #include "ci_interp.h"
+#include "asm/ci_interp_layout.h"
 #include "ci_rt.h"
 #include "ci_op.h"
 #include "cc_memory_order.h"
@@ -56,12 +57,7 @@
 #endif
 #endif
 
-force_inline int _ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable*_Nonnull child);
-static void ci_free_call_frame(CiInterpreter*, CiInterpFrame*);
 static void ci_closure_cleanup(CiInterpreter*);
-
-// Internal opcode result: enter the child frame
-enum { CI_STEP_ENTER_FRAME = -1 };
 
 enum {
     CI_NO_ERROR = _cc_no_error,
@@ -81,7 +77,6 @@ enum {
 
 static int ci_lower_module(CiInterpreter*, CiModule*, CiLowerDeps*);
 
-static char ci_discard_buf[8192];
 
 #define CI_RESULT_TOO_SMALL(ci, loc, sz, size) \
     ci_error((ci), (loc), "interpreter:%s:%d: result buffer too small (need %zu, have %zu)", __FILE__, __LINE__, (size_t)(sz), (size_t)(size))
@@ -94,7 +89,6 @@ static Allocator cc_allocator(CcParser*);
 static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_dlsym(CiInterpreter*, SrcLoc, Atom, const char* what, void*_Nullable*_Nonnull);
 static const CcFunc*_Nullable ci_hotswap_target(const CcFunc*);
-static int ci_make_abi_call_frame(CiInterpreter*, CiInterpFrame*, const CcFunc*, const CiOp*, CiInterpFrame* _Nullable* _Nonnull);
 static int ci_call_abi(CiInterpreter*, CiInterpFrame* _Nullable, const CcFunc*, NcCallState*, SrcLoc);
 static int ci_call_argv(CiInterpreter*, CiInterpFrame* _Nullable caller, const CcFunc*, void* _Nonnull* _Nonnull argv, uint32_t nargs, void* result, size_t size, SrcLoc loc);
 static int ci_try_dlsym(CiInterpreter*, Atom, void*_Nullable*_Nonnull);
@@ -146,10 +140,15 @@ typedef struct CiClosureData CiClosureData;
 struct CiClosureData {
     CiInterpreter* ci;
     CcFunc* func;
-    uint32_t ret_sz;
+    void (*const _Nonnull* _Nonnull helpers)(void);
+    size_t flags;
     NcClosure* _Nullable closure;
+    void (*_Nullable asm_entry)(void);
     CiClosureData* _Nullable next;
 };
+_Static_assert(offsetof(CiClosureData, helpers) == 16 && offsetof(CiClosureData, flags) == 24, "assembly callback metadata");
+static void (*const _Nonnull ci_asm_helpers[CI_ASM_HELPER_COUNT])(void);
+static CiStack* _Nullable ci_prepare_callback(CiInterpreter*);
 
 static
 CcFunc*_Nullable
@@ -177,6 +176,9 @@ ci_closure_cleanup(CiInterpreter* ci){
         CiClosureData* cd = ci->closures;
         ci->closures = cd->next;
         if(cd->closure) nc_destroy_closure(al, (NcClosure* _Nonnull)cd->closure);
+        #ifndef NO_NATIVE_CALL
+        if(cd->asm_entry) nc_destroy_thunk((void(*_Nonnull)(void))cd->asm_entry);
+        #endif
         cd->func->native_closure = NULL;
         cd->func->native_func = NULL;
         Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
@@ -202,7 +204,7 @@ int
 ci_create_closure(CiInterpreter* ci, CcFunc* func){
     DRP_PROFILE_BEGIN(profile, "resolve.native_closure");
     int err;
-    void (*entry)(void);
+    void (*entry)(void) = NULL;
     #ifdef NO_NATIVE_CALL
         // No native code can call this, so just use the CcFunc* itself as a
         // fake function pointer. The closure_map reverse lookup will catch it
@@ -214,28 +216,29 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
         if(!cd) return CI_OOM_ERROR;
         cd->ci = ci;
         cd->func = func;
-        if(!(ccqt_bt_eq(func->type->return_type, CCBT_void))){
-            err = cc_sizeof_as_uint(&ci->parser, func->type->return_type, func->loc, &cd->ret_sz);
-            // This should never happen, but who knows.
-            if(err){
-                Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
-                return err;
-            }
+        NcClosure* nc = NULL;
+        if(ci->force_c_interp || ci_target(ci)->target != CC_TARGET_NATIVE){
+            err = nc_create_closure(al, func->interp_ops->native_type, ci_closure_callback, cd, &nc);
+            if(!err) entry = nc_closure_get_fn(nc);
         }
-        NcClosure* nc;
-        err = nc_create_closure(al, func->interp_ops->native_type, ci_closure_callback, cd, &nc);
+        else {
+            cd->helpers = ci_asm_helpers;
+            cd->flags = 1 | ((size_t)ci->poison_frame_slots << 1);
+            err = nc_create_thunk(cd, ci_interp_callback_asm, &cd->asm_entry);
+            if(!err) entry = cd->asm_entry;
+        }
         if(err){
             Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
             if(err == CI_UNIMPLEMENTED_ERROR)
                 ci_ice(ci, func->loc, "function should've already been rejected in lowering%s", "");
             return err;
         }
-        entry = nc_closure_get_fn(nc);
     #endif
     err = ci_closure_map_put(ci, func, (void*)entry);
     if(err){
         #ifndef NO_NATIVE_CALL
-        nc_destroy_closure(al, nc);
+        if(nc) nc_destroy_closure(al, nc);
+        if(cd->asm_entry) nc_destroy_thunk((void(*_Nonnull)(void))cd->asm_entry);
         Allocator_free(al, cd, 1, sizeof *cd, _Alignof(CiClosureData));
         #endif
         return err == 1 ? CI_OOM_ERROR : CI_RUNTIME_ERROR;
@@ -243,7 +246,7 @@ ci_create_closure(CiInterpreter* ci, CcFunc* func){
     // Publish only after registration succeeds, so preparation can be retried.
     func->native_func = entry;
     #ifndef NO_NATIVE_CALL
-    func->native_closure = nc;
+    func->native_closure = cd;
     cd->closure = nc;
     cd->next = ci->closures;
     ci->closures = cd;
@@ -319,40 +322,47 @@ ci_ensure_var_storage(CiInterpreter* ci, CcVariable* var){
 
 static
 int
-ci_frame_stack(CiInterpreter* ci, CiInterpFrame*_Nullable frame, CiStack*_Nullable*_Nonnull out){
-    if(frame && frame->stack){
-        *out = frame->stack;
-        return 0;
-    }
+ci_get_stack(CiInterpreter* ci, CiStack*_Nullable*_Nonnull out){
     CiTlsThread* state;
     int err = ci_tls_get(ci, &state);
     if(err) return err;
     *out = &state->stack;
-    if(frame) frame->stack = *out;
+    return 0;
+}
+
+static
+size_t
+ci_frame_prefix_size(uint32_t alignment){
+    return (sizeof(CiInterpFrame) + alignment - 1) & -(size_t)alignment;
+}
+
+static
+int
+ci_alloc_frame(CiInterpreter* ci, CiStack* stack, CiInterpFrame*_Nullable caller, size_t data_size, uint32_t alignment, CiInterpFrame*_Nullable*_Nonnull out){
+    if(alignment < 16) alignment = 16;
+    size_t prefix = ci_frame_prefix_size(alignment);
+    size_t allocation_size;
+    if(add_overflow(prefix, data_size, &allocation_size)) return CI_OOM_ERROR;
+    void* allocation = ci_stack_alloc(stack, allocation_size, alignment);
+    if(!allocation) return CI_OOM_ERROR;
+    void* slots = (char*)allocation + prefix;
+    CiInterpFrame* frame = (CiInterpFrame*)slots - 1;
+    *frame = (CiInterpFrame){
+        .parent = caller,
+    };
+    if(ci->poison_frame_slots) memset((frame + 1), 0xCC, data_size);
+    *out = frame;
     return 0;
 }
 
 static
 int
-ci_new_frame(CiInterpreter* ci, CiInterpFrame*_Nullable caller, size_t data_size, uint32_t alignment, CiInterpFrame*_Nullable*_Nonnull out){
-    CiStack* stack;
-    int err = ci_frame_stack(ci, caller, &stack);
+ci_new_frame(CiInterpreter* ci, CiStack* stack, CiInterpFrame*_Nullable caller, size_t data_size, uint32_t alignment, CiInterpFrame*_Nullable*_Nonnull out){
+    int err = ci_stack_save(stack, 1);
     if(err) return err;
-    CiStackMark mark = ci_stack_mark(stack);
-    CiInterpFrame* frame = ci_stack_alloc(stack, sizeof *frame, _Alignof(CiInterpFrame));
-    if(!frame) return CI_OOM_ERROR;
-    void* slots = ci_stack_alloc(stack, data_size, alignment > 16 ? alignment : 16);
-    if(!slots){
-        ci_stack_rewind(stack, mark);
-        return CI_OOM_ERROR;
-    }
-    *frame = (CiInterpFrame){
-        .parent = caller, .stack = stack, .stack_mark = mark,
-        .slots = slots, .data_length = data_size,
-    };
-    if(ci->poison_frame_slots) memset(frame->slots, 0xCC, data_size);
-    *out = frame;
-    return 0;
+    err = ci_alloc_frame(ci, stack, caller, data_size, alignment, out);
+    if(err) ci_stack_unwind_frame(stack);
+    return err;
 }
 
 static inline
@@ -387,7 +397,9 @@ ci_bitfield_write(void* storage_addr, uint32_t storage_sz, uint8_t bit_offset, u
 static inline
 void
 ci_bitfield_write_128(void* storage_addr, uint8_t bit_offset, uint8_t bit_width, CiUint128 val){
-    CiUint128 mask = bit_width == 128 ? ci_uint128_from_int64(-1) : ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), bit_width), ci_uint128_from_uint64(1));
+    CiUint128 mask;
+    if(bit_width == 128) mask = ci_uint128_from_int64(-1);
+    else mask = ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), bit_width), ci_uint128_from_uint64(1));
     CiUint128 storage = {0};
     memcpy(&storage, storage_addr, sizeof storage);
     storage = ci_uint128_and(storage, ci_uint128_not(ci_uint128_shl(mask, bit_offset)));
@@ -445,7 +457,9 @@ ci_bitfield_extend(uint64_t val, uint8_t bit_width, _Bool is_signed){
 static inline
 CiUint128
 ci_bitfield_extend128(CiUint128 val, uint8_t bit_width, _Bool is_signed){
-    CiUint128 mask = bit_width == 128 ? ci_uint128_from_int64(-1) : ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), bit_width), ci_uint128_from_uint64(1));
+    CiUint128 mask;
+    if(bit_width == 128) mask = ci_uint128_from_int64(-1);
+    else mask = ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), bit_width), ci_uint128_from_uint64(1));
     val = ci_uint128_and(val, mask);
     if(is_signed){
         CiUint128 sign_bit = ci_uint128_shl(ci_uint128_from_uint64(1), bit_width-1);
@@ -517,1174 +531,7 @@ ci_read_f64(const void* src){
     return value;
 }
 
-#if defined _MSC_VER
-#if defined(_M_ARM64) || defined(_M_ARM64EC)
-#define CI_ATOMIC_LOAD8(p, d) do { *(uint8_t*)(d) = (uint8_t)__iso_volatile_load8((const volatile __int8*)(p)); __dmb(_ARM64_BARRIER_ISH); } while(0)
-#define CI_ATOMIC_STORE8(p, s) do { __dmb(_ARM64_BARRIER_ISH); __iso_volatile_store8((volatile __int8*)(p), *(const __int8*)(s)); __dmb(_ARM64_BARRIER_ISH); } while(0)
-#else
-#define CI_ATOMIC_LOAD8(p, d) do { *(uint8_t*)(d) = *(volatile uint8_t*)(p); _ReadWriteBarrier(); } while(0)
-#define CI_ATOMIC_STORE8(p, s) (void)_InterlockedExchange8((volatile char*)(p), *(const char*)(s))
-#endif
-#define CI_ATOMIC_XCHG8(p, v, o) (*(uint8_t*)(o) = (uint8_t)_InterlockedExchange8((volatile char*)(p), *(const char*)(v)))
-#define CI_ATOMIC_ADD8(p, v, o) (*(uint8_t*)(o) = (uint8_t)_InterlockedExchangeAdd8((volatile char*)(p), *(const char*)(v)))
-#define CI_ATOMIC_SUB8(p, v, o) (*(uint8_t*)(o) = (uint8_t)_InterlockedExchangeAdd8((volatile char*)(p), -*(const char*)(v)))
-#define CI_ATOMIC_AND8(p, v, o) (*(uint8_t*)(o) = (uint8_t)_InterlockedAnd8((volatile char*)(p), *(const char*)(v)))
-#define CI_ATOMIC_OR8(p, v, o) (*(uint8_t*)(o) = (uint8_t)_InterlockedOr8((volatile char*)(p), *(const char*)(v)))
-#define CI_ATOMIC_XOR8(p, v, o) (*(uint8_t*)(o) = (uint8_t)_InterlockedXor8((volatile char*)(p), *(const char*)(v)))
-#define CI_ATOMIC_CAS8(p, e, d, weak, result) do { uint8_t exp = *(uint8_t*)(e); uint8_t old = (uint8_t)_InterlockedCompareExchange8((volatile char*)(p), *(const char*)(d), (char)exp); (result) = old == exp; *(uint8_t*)(e) = old; } while(0)
-#if defined(_M_ARM64) || defined(_M_ARM64EC)
-#define CI_ATOMIC_LOAD16(p, d) do { *(uint16_t*)(d) = (uint16_t)__iso_volatile_load16((const volatile __int16*)(p)); __dmb(_ARM64_BARRIER_ISH); } while(0)
-#define CI_ATOMIC_STORE16(p, s) do { __dmb(_ARM64_BARRIER_ISH); __iso_volatile_store16((volatile __int16*)(p), *(const __int16*)(s)); __dmb(_ARM64_BARRIER_ISH); } while(0)
-#else
-#define CI_ATOMIC_LOAD16(p, d) do { *(uint16_t*)(d) = *(volatile uint16_t*)(p); _ReadWriteBarrier(); } while(0)
-#define CI_ATOMIC_STORE16(p, s) (void)_InterlockedExchange16((volatile short*)(p), *(const short*)(s))
-#endif
-#define CI_ATOMIC_XCHG16(p, v, o) (*(uint16_t*)(o) = (uint16_t)_InterlockedExchange16((volatile short*)(p), *(const short*)(v)))
-#define CI_ATOMIC_ADD16(p, v, o) (*(uint16_t*)(o) = (uint16_t)_InterlockedExchangeAdd16((volatile short*)(p), *(const short*)(v)))
-#define CI_ATOMIC_SUB16(p, v, o) (*(uint16_t*)(o) = (uint16_t)_InterlockedExchangeAdd16((volatile short*)(p), -*(const short*)(v)))
-#define CI_ATOMIC_AND16(p, v, o) (*(uint16_t*)(o) = (uint16_t)_InterlockedAnd16((volatile short*)(p), *(const short*)(v)))
-#define CI_ATOMIC_OR16(p, v, o) (*(uint16_t*)(o) = (uint16_t)_InterlockedOr16((volatile short*)(p), *(const short*)(v)))
-#define CI_ATOMIC_XOR16(p, v, o) (*(uint16_t*)(o) = (uint16_t)_InterlockedXor16((volatile short*)(p), *(const short*)(v)))
-#define CI_ATOMIC_CAS16(p, e, d, weak, result) do { uint16_t exp = *(uint16_t*)(e); uint16_t old = (uint16_t)_InterlockedCompareExchange16((volatile short*)(p), *(const short*)(d), (short)exp); (result) = old == exp; *(uint16_t*)(e) = old; } while(0)
-#if defined(_M_ARM64) || defined(_M_ARM64EC)
-#define CI_ATOMIC_LOAD32(p, d) do { *(uint32_t*)(d) = (uint32_t)__iso_volatile_load32((const volatile __int32*)(p)); __dmb(_ARM64_BARRIER_ISH); } while(0)
-#define CI_ATOMIC_STORE32(p, s) do { __dmb(_ARM64_BARRIER_ISH); __iso_volatile_store32((volatile __int32*)(p), *(const __int32*)(s)); __dmb(_ARM64_BARRIER_ISH); } while(0)
-#else
-#define CI_ATOMIC_LOAD32(p, d) do { *(uint32_t*)(d) = *(volatile uint32_t*)(p); _ReadWriteBarrier(); } while(0)
-#define CI_ATOMIC_STORE32(p, s) (void)_InterlockedExchange((volatile long*)(p), *(const long*)(s))
-#endif
-#define CI_ATOMIC_XCHG32(p, v, o) (*(uint32_t*)(o) = (uint32_t)_InterlockedExchange((volatile long*)(p), *(const long*)(v)))
-#define CI_ATOMIC_ADD32(p, v, o) (*(uint32_t*)(o) = (uint32_t)_InterlockedExchangeAdd((volatile long*)(p), *(const long*)(v)))
-#define CI_ATOMIC_SUB32(p, v, o) (*(uint32_t*)(o) = (uint32_t)_InterlockedExchangeAdd((volatile long*)(p), (long)(0u - *(const uint32_t*)(v))))
-#define CI_ATOMIC_AND32(p, v, o) (*(uint32_t*)(o) = (uint32_t)_InterlockedAnd((volatile long*)(p), *(const long*)(v)))
-#define CI_ATOMIC_OR32(p, v, o) (*(uint32_t*)(o) = (uint32_t)_InterlockedOr((volatile long*)(p), *(const long*)(v)))
-#define CI_ATOMIC_XOR32(p, v, o) (*(uint32_t*)(o) = (uint32_t)_InterlockedXor((volatile long*)(p), *(const long*)(v)))
-#define CI_ATOMIC_CAS32(p, e, d, weak, result) do { uint32_t exp = *(uint32_t*)(e); uint32_t old = (uint32_t)_InterlockedCompareExchange((volatile long*)(p), *(const long*)(d), (long)exp); (result) = old == exp; *(uint32_t*)(e) = old; } while(0)
-#if defined(_M_ARM64) || defined(_M_ARM64EC)
-#define CI_ATOMIC_LOAD64(p, d) do { *(uint64_t*)(d) = (uint64_t)__iso_volatile_load64((const volatile __int64*)(p)); __dmb(_ARM64_BARRIER_ISH); } while(0)
-#define CI_ATOMIC_STORE64(p, s) do { __dmb(_ARM64_BARRIER_ISH); __iso_volatile_store64((volatile __int64*)(p), *(const __int64*)(s)); __dmb(_ARM64_BARRIER_ISH); } while(0)
-#else
-#define CI_ATOMIC_LOAD64(p, d) do { *(uint64_t*)(d) = *(volatile uint64_t*)(p); _ReadWriteBarrier(); } while(0)
-#define CI_ATOMIC_STORE64(p, s) (void)_InterlockedExchange64((volatile __int64*)(p), *(const __int64*)(s))
-#endif
-#define CI_ATOMIC_XCHG64(p, v, o) (*(uint64_t*)(o) = (uint64_t)_InterlockedExchange64((volatile __int64*)(p), *(const __int64*)(v)))
-#define CI_ATOMIC_ADD64(p, v, o) (*(uint64_t*)(o) = (uint64_t)_InterlockedExchangeAdd64((volatile __int64*)(p), *(const __int64*)(v)))
-#define CI_ATOMIC_SUB64(p, v, o) (*(uint64_t*)(o) = (uint64_t)_InterlockedExchangeAdd64((volatile __int64*)(p), (__int64)(UINT64_C(0) - *(const uint64_t*)(v))))
-#define CI_ATOMIC_AND64(p, v, o) (*(uint64_t*)(o) = (uint64_t)_InterlockedAnd64((volatile __int64*)(p), *(const __int64*)(v)))
-#define CI_ATOMIC_OR64(p, v, o) (*(uint64_t*)(o) = (uint64_t)_InterlockedOr64((volatile __int64*)(p), *(const __int64*)(v)))
-#define CI_ATOMIC_XOR64(p, v, o) (*(uint64_t*)(o) = (uint64_t)_InterlockedXor64((volatile __int64*)(p), *(const __int64*)(v)))
-#define CI_ATOMIC_CAS64(p, e, d, weak, result) do { uint64_t exp = *(uint64_t*)(e); uint64_t old = (uint64_t)_InterlockedCompareExchange64((volatile __int64*)(p), *(const __int64*)(d), (__int64)exp); (result) = old == exp; *(uint64_t*)(e) = old; } while(0)
-#define CI_ATOMIC_LOAD128(p, d) do { __int64* out = (d); out[0] = 0; out[1] = 0; _InterlockedCompareExchange128((volatile __int64*)(p), 0, 0, out); } while(0)
-#define CI_ATOMIC_XCHG128(p, v, o) do { __int64 ci_atomic_desired[2], previous[2] = {0}; memcpy(ci_atomic_desired, (v), 16); while(!_InterlockedCompareExchange128((volatile __int64*)(p), ci_atomic_desired[1], ci_atomic_desired[0], previous)){} memcpy((o), previous, 16); } while(0)
-#define CI_ATOMIC_STORE128(p, v) do { __int64 ignored[2]; CI_ATOMIC_XCHG128(p, v, ignored); } while(0)
-#define CI_ATOMIC_CAS128(p, e, d, weak, result) do { __int64 ci_atomic_desired[2]; memcpy(ci_atomic_desired, (d), 16); (result) = (_Bool)_InterlockedCompareExchange128((volatile __int64*)(p), ci_atomic_desired[1], ci_atomic_desired[0], (__int64*)(e)); } while(0)
-#define CI_THREAD_FENCE() MemoryBarrier()
-#else
-#define CI_ATOMIC_LOAD8(p, d) __atomic_load((uint8_t*)(p), (uint8_t*)(d), __ATOMIC_SEQ_CST)
-#define CI_ATOMIC_STORE8(p, s) __atomic_store((uint8_t*)(p), (uint8_t*)(s), __ATOMIC_SEQ_CST)
-#define CI_ATOMIC_XCHG8(p, v, o) __atomic_exchange((uint8_t*)(p), (uint8_t*)(v), (uint8_t*)(o), __ATOMIC_SEQ_CST)
-#define CI_ATOMIC_CAS8(p, e, d, weak, result) ((result) = __atomic_compare_exchange((uint8_t*)(p), (uint8_t*)(e), (uint8_t*)(d), weak, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_ADD8(p, v, o) (*(uint8_t*)(o) = __atomic_fetch_add((uint8_t*)(p), *(const uint8_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_SUB8(p, v, o) (*(uint8_t*)(o) = __atomic_fetch_sub((uint8_t*)(p), *(const uint8_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_AND8(p, v, o) (*(uint8_t*)(o) = __atomic_fetch_and((uint8_t*)(p), *(const uint8_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_OR8(p, v, o) (*(uint8_t*)(o) = __atomic_fetch_or((uint8_t*)(p), *(const uint8_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_XOR8(p, v, o) (*(uint8_t*)(o) = __atomic_fetch_xor((uint8_t*)(p), *(const uint8_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_LOAD16(p, d) __atomic_load((uint16_t*)(p), (uint16_t*)(d), __ATOMIC_SEQ_CST)
-#define CI_ATOMIC_STORE16(p, s) __atomic_store((uint16_t*)(p), (uint16_t*)(s), __ATOMIC_SEQ_CST)
-#define CI_ATOMIC_XCHG16(p, v, o) __atomic_exchange((uint16_t*)(p), (uint16_t*)(v), (uint16_t*)(o), __ATOMIC_SEQ_CST)
-#define CI_ATOMIC_CAS16(p, e, d, weak, result) ((result) = __atomic_compare_exchange((uint16_t*)(p), (uint16_t*)(e), (uint16_t*)(d), weak, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_ADD16(p, v, o) (*(uint16_t*)(o) = __atomic_fetch_add((uint16_t*)(p), *(const uint16_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_SUB16(p, v, o) (*(uint16_t*)(o) = __atomic_fetch_sub((uint16_t*)(p), *(const uint16_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_AND16(p, v, o) (*(uint16_t*)(o) = __atomic_fetch_and((uint16_t*)(p), *(const uint16_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_OR16(p, v, o) (*(uint16_t*)(o) = __atomic_fetch_or((uint16_t*)(p), *(const uint16_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_XOR16(p, v, o) (*(uint16_t*)(o) = __atomic_fetch_xor((uint16_t*)(p), *(const uint16_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_LOAD32(p, d) __atomic_load((uint32_t*)(p), (uint32_t*)(d), __ATOMIC_SEQ_CST)
-#define CI_ATOMIC_STORE32(p, s) __atomic_store((uint32_t*)(p), (uint32_t*)(s), __ATOMIC_SEQ_CST)
-#define CI_ATOMIC_XCHG32(p, v, o) __atomic_exchange((uint32_t*)(p), (uint32_t*)(v), (uint32_t*)(o), __ATOMIC_SEQ_CST)
-#define CI_ATOMIC_CAS32(p, e, d, weak, result) ((result) = __atomic_compare_exchange((uint32_t*)(p), (uint32_t*)(e), (uint32_t*)(d), weak, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_ADD32(p, v, o) (*(uint32_t*)(o) = __atomic_fetch_add((uint32_t*)(p), *(const uint32_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_SUB32(p, v, o) (*(uint32_t*)(o) = __atomic_fetch_sub((uint32_t*)(p), *(const uint32_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_AND32(p, v, o) (*(uint32_t*)(o) = __atomic_fetch_and((uint32_t*)(p), *(const uint32_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_OR32(p, v, o) (*(uint32_t*)(o) = __atomic_fetch_or((uint32_t*)(p), *(const uint32_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_XOR32(p, v, o) (*(uint32_t*)(o) = __atomic_fetch_xor((uint32_t*)(p), *(const uint32_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_LOAD64(p, d) __atomic_load((uint64_t*)(p), (uint64_t*)(d), __ATOMIC_SEQ_CST)
-#define CI_ATOMIC_STORE64(p, s) __atomic_store((uint64_t*)(p), (uint64_t*)(s), __ATOMIC_SEQ_CST)
-#define CI_ATOMIC_XCHG64(p, v, o) __atomic_exchange((uint64_t*)(p), (uint64_t*)(v), (uint64_t*)(o), __ATOMIC_SEQ_CST)
-#define CI_ATOMIC_CAS64(p, e, d, weak, result) ((result) = __atomic_compare_exchange((uint64_t*)(p), (uint64_t*)(e), (uint64_t*)(d), weak, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_ADD64(p, v, o) (*(uint64_t*)(o) = __atomic_fetch_add((uint64_t*)(p), *(const uint64_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_SUB64(p, v, o) (*(uint64_t*)(o) = __atomic_fetch_sub((uint64_t*)(p), *(const uint64_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_AND64(p, v, o) (*(uint64_t*)(o) = __atomic_fetch_and((uint64_t*)(p), *(const uint64_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_OR64(p, v, o) (*(uint64_t*)(o) = __atomic_fetch_or((uint64_t*)(p), *(const uint64_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_XOR64(p, v, o) (*(uint64_t*)(o) = __atomic_fetch_xor((uint64_t*)(p), *(const uint64_t*)(v), __ATOMIC_SEQ_CST))
-#define CI_ATOMIC_LOAD128(p, d) __atomic_load((CiAtomic16*)(p), (CiAtomic16*)(d), __ATOMIC_SEQ_CST)
-#define CI_ATOMIC_STORE128(p, s) __atomic_store((CiAtomic16*)(p), (CiAtomic16*)(s), __ATOMIC_SEQ_CST)
-#define CI_ATOMIC_XCHG128(p, v, o) __atomic_exchange((CiAtomic16*)(p), (CiAtomic16*)(v), (CiAtomic16*)(o), __ATOMIC_SEQ_CST)
-#define CI_ATOMIC_CAS128(p, e, d, weak, result) ((result) = __atomic_compare_exchange((CiAtomic16*)(p), (CiAtomic16*)(e), (CiAtomic16*)(d), weak, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
-#define CI_THREAD_FENCE() __atomic_thread_fence(__ATOMIC_SEQ_CST)
-#endif
 
-force_inline
-int
-_ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame, CiInterpFrame*_Nullable*_Nonnull child){
-    if(frame->pc >= frame->op_count)
-        return 0;
-    const CiOp* op = &frame->ops[frame->pc];
-    switch(op->kind){
-        case CI_OP_COUNT: break;
-#if (defined __clang__ || defined __GNUC__) && !defined __DRC__
-#define CI_ALIGNED(p, a) __builtin_assume_aligned((p), (a))
-#else
-#define CI_ALIGNED(p, a) (p)
-#endif
-
-#define CI_CONST_CASE(name, bytes, da, sa) \
-        case CI_OP_##name: { \
-            memcpy((char*)frame->slots + op->constant.slot, op->constant.immediate, bytes); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_CONST_OPS(CI_CONST_CASE)
-#undef CI_CONST_CASE
-
-#define CI_LOAD_CASE(name, bytes, da, sa) \
-        case CI_OP_##name: { \
-            char* ptr; memcpy(&ptr, (char*)frame->slots + op->load.src, sizeof ptr); \
-            memmove(CI_ALIGNED((char*)frame->slots + op->load.slot, sa), CI_ALIGNED(ptr + op->load.offset, da), bytes); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_LOAD_OPS(CI_LOAD_CASE)
-#undef CI_LOAD_CASE
-
-#define CI_STORE_CASE(name, bytes, da, sa) \
-        case CI_OP_##name: { \
-            char* ptr; memcpy(&ptr, (char*)frame->slots + op->store.slot, sizeof ptr); \
-            memmove(CI_ALIGNED(ptr + op->store.offset, da), CI_ALIGNED((char*)frame->slots + op->store.src, sa), bytes); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_STORE_OPS(CI_STORE_CASE)
-#undef CI_STORE_CASE
-
-#define CI_STORE_IMM_CASE(name, bytes, da, sa) \
-        case CI_OP_##name: { \
-            char* ptr; memcpy(&ptr, (char*)frame->slots + op->store_imm.slot, sizeof ptr); \
-            memcpy(CI_ALIGNED(ptr + op->store_imm.offset, da), &op->store_imm.immediate, bytes); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_STORE_IMM_OPS(CI_STORE_IMM_CASE)
-#undef CI_STORE_IMM_CASE
-
-#define CI_ZERO_CASE(name, bytes, da, sa) \
-        case CI_OP_##name: { \
-            char* ptr; memcpy(&ptr, (char*)frame->slots + op->zero.slot, sizeof ptr); \
-            memset(CI_ALIGNED(ptr + op->zero.offset, da), 0, bytes); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_ZERO_OPS(CI_ZERO_CASE)
-#undef CI_ZERO_CASE
-
-#define CI_COPY_CASE(name, bytes, da, sa) \
-        case CI_OP_##name: { \
-            memmove(CI_ALIGNED((char*)frame->slots + op->copy.slot, da), CI_ALIGNED((char*)frame->slots + op->copy.src, sa), bytes); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_COPY_OPS(CI_COPY_CASE)
-#undef CI_COPY_CASE
-
-#define CI_MEMCOPY_CASE(name, bytes, da, sa) \
-        case CI_OP_##name: { \
-            char *dst, *src; \
-            memcpy(&dst, (char*)frame->slots + op->memcopy.slot, sizeof dst); \
-            memcpy(&src, (char*)frame->slots + op->memcopy.src, sizeof src); \
-            memmove(CI_ALIGNED(dst + op->memcopy.offset, da), CI_ALIGNED(src + op->memcopy.src_offset, sa), bytes); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_MEMCOPY_OPS(CI_MEMCOPY_CASE)
-#undef CI_MEMCOPY_CASE
-
-#define CI_EXTEND_CASE(name, from, to, value) \
-        case CI_OP_##name: { \
-            const void* src = (char*)frame->slots + op->convert.src; \
-            CiUint128 result = value; \
-            ci_uint128_write((char*)frame->slots + op->convert.slot, to, result); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_EXTEND_OPS(CI_EXTEND_CASE)
-#undef CI_EXTEND_CASE
-
-#define CI_CHECKED_CASE(name, type, wide_type, operation) \
-        case CI_OP_##name: { \
-            type a, b; \
-            memcpy(&a, (char*)frame->slots + op->checked.src, sizeof a); \
-            memcpy(&b, (char*)frame->slots + op->checked.src2, sizeof b); \
-            wide_type wide; \
-            _Bool overflow = operation((wide_type)a, (wide_type)b, &wide); \
-            type result = (type)wide; \
-            overflow |= wide != (wide_type)result; \
-            memcpy((char*)frame->slots + op->checked.result, &result, sizeof result); \
-            *((unsigned char*)frame->slots + op->checked.overflow) = overflow; \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_CHECKED_OPS(CI_CHECKED_CASE)
-#undef CI_CHECKED_CASE
-
-#define CI_OVERFLOW_CASE(name, bits, uns) \
-        case CI_OP_##name: { \
-            CiUint128 value; \
-            ci_uint128_read(&value, (char*)frame->slots + op->checked.src, 16); \
-            *((unsigned char*)frame->slots + op->checked.overflow) = !ci_uint128_fits_integer(value, bits, uns); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_OVERFLOW_OPS(CI_OVERFLOW_CASE)
-#undef CI_OVERFLOW_CASE
-
-#define CI_TRUTH_CASE(name, test) \
-        case CI_OP_##name: { \
-            const void* src = (char*)frame->slots + op->istrue.src; \
-            *((unsigned char*)frame->slots + op->istrue.slot) = (test); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_TRUTH_OPS(CI_TRUTH_CASE)
-#undef CI_TRUTH_CASE
-
-#define CI_ITOF_CASE(name, type, expression, write) \
-        case CI_OP_##name: { \
-            const void* src = (char*)frame->slots + op->convert.src; \
-            void* dest = (char*)frame->slots + op->convert.slot; \
-            type result = expression; \
-            write; \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_ITOF_OPS(CI_ITOF_CASE)
-#undef CI_ITOF_CASE
-
-#define CI_FTOI_CASE(name, bytes, expression) \
-        case CI_OP_##name: { \
-            const void* src = (char*)frame->slots + op->convert.src; \
-            CiUint128 result = expression; \
-            ci_uint128_write((char*)frame->slots + op->convert.slot, bytes, result); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_FTOI_OPS(CI_FTOI_CASE)
-#undef CI_FTOI_CASE
-
-#define CI_FTOF_CASE(name, type, expression, write) \
-        case CI_OP_##name: { \
-            const void* src = (char*)frame->slots + op->convert.src; \
-            void* dest = (char*)frame->slots + op->convert.slot; \
-            type result = expression; \
-            write; \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_FTOF_OPS(CI_FTOF_CASE)
-#undef CI_FTOF_CASE
-
-#define CI_ABI_MOVE_CASE(name, state, bytes, alignment, transfer) \
-        case CI_OP_##name: { \
-            void* reg = CI_ALIGNED((char*)(state) + op->abi_move.reg.capture_offset, alignment); \
-            void* slot = CI_ALIGNED((char*)frame->slots + op->abi_move.slot, alignment); \
-            transfer; \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_ABI_MOVE_OPS(CI_ABI_MOVE_CASE)
-#undef CI_ABI_MOVE_CASE
-
-#define CI_ABI_TRANSFER_CASE(name, transfer) \
-        case CI_OP_##name: { \
-            transfer \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_ABI_TRANSFER_OPS(CI_ABI_TRANSFER_CASE)
-#undef CI_ABI_TRANSFER_CASE
-
-
-#define CI_JUMP_FALSE_CASE(name, bytes) \
-        case CI_OP_##name: { \
-            CiUint128 value; \
-            ci_uint128_read(&value, (char*)frame->slots + op->jump_false.slot, bytes); \
-            frame->pc = !ci_uint128_nonzero(value) ? op->jump_false.jump : frame->pc + 1; \
-            return 0; \
-        }
-        CI_JUMP_FALSE_OPS(CI_JUMP_FALSE_CASE)
-#undef CI_JUMP_FALSE_CASE
-
-#define CI_JUMP_TRUE_CASE(name, bytes) \
-        case CI_OP_##name: { \
-            CiUint128 value; \
-            ci_uint128_read(&value, (char*)frame->slots + op->jump_true.slot, bytes); \
-            frame->pc = ci_uint128_nonzero(value) ? op->jump_true.jump : frame->pc + 1; \
-            return 0; \
-        }
-        CI_JUMP_TRUE_OPS(CI_JUMP_TRUE_CASE)
-#undef CI_JUMP_TRUE_CASE
-
-#define CI_BSWAP_CASE(name, bytes, expression) \
-        case CI_OP_##name: { \
-            const void* src = (char*)frame->slots + op->bswap.src; \
-            ci_write_uint((char*)frame->slots + op->bswap.slot, bytes, expression); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_BSWAP_OPS(CI_BSWAP_CASE)
-#undef CI_BSWAP_CASE
-
-#define CI_BOUNDS_CASE(name, bytes, comparison, signed_index) \
-        case CI_OP_##name: { \
-            uint64_t index = ci_read_uint((char*)frame->slots + op->bounds.src, bytes); \
-            uint64_t length = ci_read_uint((char*)frame->slots + op->bounds.src2, bytes); \
-            if(index comparison length){ \
-                const char* close = op->bounds.inclusive ? "]" : ")"; \
-                if(signed_index) return ci_error(ci, op->loc, "array subscript out of bounds: index %lld not in [0, %llu%s", (long long)index, (unsigned long long)length, close); \
-                return ci_error(ci, op->loc, "array subscript out of bounds: index %llu not in [0, %llu%s", (unsigned long long)index, (unsigned long long)length, close); \
-            } \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_BOUNDS_OPS(CI_BOUNDS_CASE)
-#undef CI_BOUNDS_CASE
-
-#define CI_INDEX_CASE(name, ptr_size, read_index) \
-        case CI_OP_##name: { \
-            const void* src = (char*)frame->slots + op->index.index; \
-            uint64_t index = read_index; \
-            uint64_t base = ci_read_uint((char*)frame->slots + op->index.base, ptr_size); \
-            ci_write_uint((char*)frame->slots + op->index.slot, ptr_size, base + index * op->index.scale); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_INDEX_OPS(CI_INDEX_CASE)
-#undef CI_INDEX_CASE
-
-#define CI_LOAD_BITFIELD_CASE(name, size, value, alignment) \
-        case CI_OP_##name: { \
-            char* ptr; \
-            memcpy(&ptr, (char*)frame->slots + op->load_bf.src, sizeof ptr); \
-            uint64_t result = value; \
-            memcpy(CI_ALIGNED((char*)frame->slots + op->load_bf.slot, alignment), &result, size); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_LOAD_BITFIELD_OPS(CI_LOAD_BITFIELD_CASE)
-#undef CI_LOAD_BITFIELD_CASE
-
-#define CI_LOAD_BITFIELD_128_CASE(name, uns, alignment) \
-        case CI_OP_##name: { \
-            char* ptr; \
-            memcpy(&ptr, (char*)frame->slots + op->load_bf.src, sizeof ptr); \
-            CiUint128 result = ci_bitfield_read128(CI_ALIGNED(ptr + op->load_bf.offset, alignment), op->load_bf.bit_offset, op->load_bf.bit_width); \
-            result = ci_bitfield_extend128(result, op->load_bf.bit_width, !uns); \
-            memcpy(CI_ALIGNED((char*)frame->slots + op->load_bf.slot, alignment), &result, 16); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_LOAD_BITFIELD_128_OPS(CI_LOAD_BITFIELD_128_CASE)
-#undef CI_LOAD_BITFIELD_128_CASE
-
-#define CI_LOAD_BITFIELD_BYTES_CASE(name, size, value) \
-        case CI_OP_##name: { \
-            char* ptr; \
-            memcpy(&ptr, (char*)frame->slots + op->load_bf.src, sizeof ptr); \
-            uint64_t result = value; \
-            memcpy((char*)frame->slots + op->load_bf.slot, &result, size); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_LOAD_BITFIELD_BYTES_OPS(CI_LOAD_BITFIELD_BYTES_CASE)
-#undef CI_LOAD_BITFIELD_BYTES_CASE
-
-#define CI_LOAD_BITFIELD_BYTES_128_CASE(name, uns) \
-        case CI_OP_##name: { \
-            char* ptr; \
-            memcpy(&ptr, (char*)frame->slots + op->load_bf.src, sizeof ptr); \
-            CiUint128 result = ci_bitfield_read128_bytes(ptr + op->load_bf.offset, op->load_bf.bit_offset, op->load_bf.bit_width); \
-            result = ci_bitfield_extend128(result, op->load_bf.bit_width, !uns); \
-            memcpy((char*)frame->slots + op->load_bf.slot, &result, 16); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_LOAD_BITFIELD_BYTES_128_OPS(CI_LOAD_BITFIELD_BYTES_128_CASE)
-#undef CI_LOAD_BITFIELD_BYTES_128_CASE
-
-#define CI_STORE_BITFIELD_CASE(name, size, alignment) \
-        case CI_OP_##name: { \
-            char* ptr; \
-            memcpy(&ptr, (char*)frame->slots + op->store_bf.slot, sizeof ptr); \
-            uint64_t value = ci_read_uint(CI_ALIGNED((char*)frame->slots + op->store_bf.src, alignment), size); \
-            ci_bitfield_write(CI_ALIGNED(ptr + op->store_bf.offset, alignment), size, op->store_bf.bit_offset, op->store_bf.bit_width, value); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_STORE_BITFIELD_OPS(CI_STORE_BITFIELD_CASE)
-#undef CI_STORE_BITFIELD_CASE
-
-#define CI_STORE_BITFIELD_128_CASE(name, alignment) \
-        case CI_OP_##name: { \
-            char* ptr; \
-            memcpy(&ptr, (char*)frame->slots + op->store_bf.slot, sizeof ptr); \
-            CiUint128 value = ci_read_u128(CI_ALIGNED((char*)frame->slots + op->store_bf.src, alignment)); \
-            ci_bitfield_write_128(CI_ALIGNED(ptr + op->store_bf.offset, alignment), op->store_bf.bit_offset, op->store_bf.bit_width, value); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_STORE_BITFIELD_128_OPS(CI_STORE_BITFIELD_128_CASE)
-#undef CI_STORE_BITFIELD_128_CASE
-
-#define CI_STORE_BITFIELD_BYTES_CASE(name, size) \
-        case CI_OP_##name: { \
-            char* ptr; \
-            memcpy(&ptr, (char*)frame->slots + op->store_bf.slot, sizeof ptr); \
-            uint64_t value = ci_read_uint((char*)frame->slots + op->store_bf.src, size); \
-            ci_bitfield_write_bytes(ptr + op->store_bf.offset, op->store_bf.bit_offset, op->store_bf.bit_width, value); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_STORE_BITFIELD_BYTES_OPS(CI_STORE_BITFIELD_BYTES_CASE)
-#undef CI_STORE_BITFIELD_BYTES_CASE
-
-#define CI_STORE_BITFIELD_BYTES_128_CASE(name, unused) \
-        case CI_OP_##name: { \
-            char* ptr; \
-            memcpy(&ptr, (char*)frame->slots + op->store_bf.slot, sizeof ptr); \
-            CiUint128 value = ci_read_u128((char*)frame->slots + op->store_bf.src); \
-            ci_bitfield_write_128_bytes(ptr + op->store_bf.offset, op->store_bf.bit_offset, op->store_bf.bit_width, value); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_STORE_BITFIELD_BYTES_128_OPS(CI_STORE_BITFIELD_BYTES_128_CASE)
-#undef CI_STORE_BITFIELD_BYTES_128_CASE
-
-#define CI_CALL_CASE(name, resolve) \
-        case CI_OP_##name: { \
-            CiCallDescriptor* d = op->call.descrip; \
-            NcCallState* state = &frame->stack->registers; \
-            void (*fn)(void); \
-            const CcFunc* func; \
-            resolve \
-            if(func && func->defined){ \
-                int err = ci_make_abi_call_frame(ci, frame, func, op, child); \
-                return err ? err : CI_STEP_ENTER_FRAME; \
-            } \
-            if(!fn) return ci_error(ci, op->loc, "call through null function pointer"); \
-            NcCallState native = *state; \
-            int err = d->invoke(d->abi, fn, &native); \
-            if(err) return err; \
-            size_t offset = nc_capture_result_offset(d->abi->target); \
-            memcpy((char*)state + offset, (char*)&native + offset, nc_capture_size(d->abi->target) - offset); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_CALL_OPS(CI_CALL_CASE)
-#undef CI_CALL_CASE
-
-#define CI_SWITCH_DENSE_CASE(name, unused) \
-        case CI_OP_##name: { \
-            uint64_t value = ci_read_uint((char*)frame->slots + op->switch_.slot, 8); \
-            const CiSwitchTable* table = op->switch_.table; \
-            uint64_t index = value - table->data[0].low; \
-            frame->pc = index < table->count ? table->data[index].target : op->switch_.jump; \
-            return 0; \
-        }
-        CI_SWITCH_DENSE_OPS(CI_SWITCH_DENSE_CASE)
-#undef CI_SWITCH_DENSE_CASE
-
-#define CI_SWITCH_RANGE_CASE(name, sign) \
-        case CI_OP_##name: { \
-            uint64_t value = ci_read_uint((char*)frame->slots + op->switch_.slot, 8) ^ (sign); \
-            const CiSwitchTable* table = op->switch_.table; \
-            size_t lo = 0, hi = table->count; \
-            while(lo < hi){ \
-                size_t mid = lo + (hi - lo) / 2; \
-                if((table->data[mid].high ^ (sign)) < value) lo = mid + 1; \
-                else if((table->data[mid].low ^ (sign)) > value) hi = mid; \
-                else { frame->pc = table->data[mid].target; return 0; } \
-            } \
-            frame->pc = op->switch_.jump; \
-            return 0; \
-        }
-        CI_SWITCH_RANGE_OPS(CI_SWITCH_RANGE_CASE)
-#undef CI_SWITCH_RANGE_CASE
-
-#define CI_BUILTIN_CASE(name, action) \
-        case CI_OP_##name: { \
-            action \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_BUILTIN_OPS(CI_BUILTIN_CASE)
-#undef CI_BUILTIN_CASE
-
-#define CI_ALLOCA_CASE(name, allocate) \
-        case CI_OP_##name: { \
-            size_t size; \
-            memcpy(&size, (char*)frame->slots + op->alloca.src, sizeof size); \
-            CiStack* stack; \
-            int err = ci_frame_stack(ci, frame, &stack); \
-            if(err) return err; \
-            void* ptr = allocate(stack, size, op->alloca.alignment); \
-            if(!ptr) return CI_OOM_ERROR; \
-            memcpy((char*)frame->slots + op->alloca.slot, &ptr, sizeof ptr); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_ALLOCA_OPS(CI_ALLOCA_CASE)
-#undef CI_ALLOCA_CASE
-
-#define CI_FENCE_CASE(name, fence) \
-        case CI_OP_##name: { \
-            fence \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_FENCE_OPS(CI_FENCE_CASE)
-#undef CI_FENCE_CASE
-
-#define CI_BIT_COUNT_CASE(name, bits, mask, expression) \
-        case CI_OP_##name: { \
-            CiUint128 value; \
-            ci_uint128_read(&value, (char*)frame->slots + op->bit_builtin.src, bits / 8); \
-            uint64_t lo = ci_uint128_lo(value), hi = ci_uint128_hi(value); \
-            (void)lo; (void)hi; \
-            uint32_t result = (uint32_t)(expression); \
-            memcpy((char*)frame->slots + op->bit_builtin.slot, &result, 4); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_BIT_COUNT_OPS(CI_BIT_COUNT_CASE)
-#undef CI_BIT_COUNT_CASE
-
-#define CI_SINGLE_BIT_CASE(name, bits) \
-        case CI_OP_##name: { \
-            CiUint128 value; \
-            ci_uint128_read(&value, (char*)frame->slots + op->bit_builtin.src, bits / 8); \
-            uint32_t result = popcount_64(ci_uint128_lo(value)) + popcount_64(ci_uint128_hi(value)) == 1; \
-            memcpy((char*)frame->slots + op->bit_builtin.slot, &result, 4); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_SINGLE_BIT_OPS(CI_SINGLE_BIT_CASE)
-#undef CI_SINGLE_BIT_CASE
-
-#define CI_BIT_CEIL_CASE(name, bits, mask, calculate) \
-        case CI_OP_##name: { \
-            CiUint128 value; \
-            ci_uint128_read(&value, (char*)frame->slots + op->bit_builtin.src, bits / 8); \
-            uint64_t lo = ci_uint128_lo(value), hi = ci_uint128_hi(value); \
-            CiUint128 result = ci_uint128_from_uint64(0); \
-            calculate \
-            ci_uint128_write((char*)frame->slots + op->bit_builtin.slot, bits / 8, result); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_BIT_CEIL_OPS(CI_BIT_CEIL_CASE)
-#undef CI_BIT_CEIL_CASE
-
-#define CI_BIT_FLOOR_CASE(name, bits, mask, calculate) \
-        case CI_OP_##name: { \
-            CiUint128 value; \
-            ci_uint128_read(&value, (char*)frame->slots + op->bit_builtin.src, bits / 8); \
-            uint64_t lo = ci_uint128_lo(value), hi = ci_uint128_hi(value); \
-            CiUint128 result = ci_uint128_from_uint64(0); \
-            calculate \
-            ci_uint128_write((char*)frame->slots + op->bit_builtin.slot, bits / 8, result); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_BIT_FLOOR_OPS(CI_BIT_FLOOR_CASE)
-#undef CI_BIT_FLOOR_CASE
-
-#define CI_ROTATE_CASE(name, bits, left, right) \
-        case CI_OP_##name: { \
-            CiUint128 value; \
-            ci_uint128_read(&value, (char*)frame->slots + op->bit_builtin.src, bits / 8); \
-            uint32_t shift = (uint32_t)(ci_read_uint((char*)frame->slots + op->bit_builtin.src2, 8) % bits); \
-            CiUint128 result = ci_uint128_or(left, right); \
-            ci_uint128_write((char*)frame->slots + op->bit_builtin.slot, bits / 8, result); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_ROTATE_OPS(CI_ROTATE_CASE)
-#undef CI_ROTATE_CASE
-
-#define CI_CRC_CASE(name, bytes) \
-        case CI_OP_##name: { \
-            uint32_t seed = (uint32_t)ci_read_uint((char*)frame->slots + op->bit_builtin.src, 4); \
-            uint64_t value = ci_read_uint((char*)frame->slots + op->bit_builtin.src2, bytes); \
-            uint32_t result = drp_crc32c(seed, value, bytes); \
-            memcpy((char*)frame->slots + op->bit_builtin.slot, &result, 4); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_CRC_OPS(CI_CRC_CASE)
-#undef CI_CRC_CASE
-
-#define CI_ATOMIC_LOAD_CASE(name, bits) \
-        case CI_OP_##name: { \
-            char* ptr; \
-            memcpy(&ptr, (char*)frame->slots + op->atomic_load.src, sizeof ptr); \
-            ptr += op->atomic_load.offset; \
-            void* dest = (char*)frame->slots + op->atomic_load.slot; \
-            CI_ATOMIC_LOAD##bits(ptr, dest); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_ATOMIC_LOAD_OPS(CI_ATOMIC_LOAD_CASE)
-#undef CI_ATOMIC_LOAD_CASE
-
-#define CI_ATOMIC_STORE_CASE(name, bits) \
-        case CI_OP_##name: { \
-            char* ptr; \
-            memcpy(&ptr, (char*)frame->slots + op->atomic_store.slot, sizeof ptr); \
-            ptr += op->atomic_store.offset; \
-            void* src = (char*)frame->slots + op->atomic_store.src; \
-            CI_ATOMIC_STORE##bits(ptr, src); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_ATOMIC_STORE_OPS(CI_ATOMIC_STORE_CASE)
-#undef CI_ATOMIC_STORE_CASE
-
-#define CI_ATOMIC_RMW_CASE(name, action) \
-        case CI_OP_##name: { \
-            char* ptr; \
-            memcpy(&ptr, (char*)frame->slots + op->atomic_rmw.src, sizeof ptr); \
-            ptr += op->atomic_rmw.offset; \
-            void* old = (char*)frame->slots + op->atomic_rmw.slot; \
-            void* value = (char*)frame->slots + op->atomic_rmw.src2; \
-            action(ptr, value, old); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_ATOMIC_RMW_OPS(CI_ATOMIC_RMW_CASE)
-#undef CI_ATOMIC_RMW_CASE
-
-#define CI_ATOMIC_CAS_CASE(name, bits, weak) \
-        case CI_OP_##name: { \
-            char* ptr; \
-            memcpy(&ptr, (char*)frame->slots + op->atomic_cas.src, sizeof ptr); \
-            ptr += op->atomic_cas.offset; \
-            void* expected = (char*)frame->slots + op->atomic_cas.expected; \
-            void* desired = (char*)frame->slots + op->atomic_cas.desired; \
-            _Bool result; \
-            CI_ATOMIC_CAS##bits(ptr, expected, desired, weak, result); \
-            *((unsigned char*)frame->slots + op->atomic_cas.slot) = result; \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_ATOMIC_CAS_OPS(CI_ATOMIC_CAS_CASE)
-#undef CI_ATOMIC_CAS_CASE
-
-#define CI_VA_SYSV_CASE(name, unused) \
-        case CI_OP_##name: { \
-            void* ap; \
-            memcpy(&ap, (char*)frame->slots + op->va_arg_.src, sizeof ap); \
-            void** pointers = (void**)((char*)frame->slots + op->va_arg_.pointers); \
-            NcSysvVaListTag* va = ap; \
-            unsigned ng = op->va_arg_.gp, nf = op->va_arg_.fp; \
-            if(va->gp_offset + ng * 8 <= 48 && va->fp_offset + nf * 16 <= 176){ \
-                pointers[0] = (char*)va->reg_save_area + va->gp_offset; \
-                pointers[1] = (char*)va->reg_save_area + va->fp_offset; \
-                va->gp_offset += ng * 8; \
-                va->fp_offset += nf * 16; \
-                frame->pc++; \
-                return 0; \
-            } \
-            void** stack = &va->overflow_arg_area; \
-            void* source = ci_va_stack_source(stack, op->va_arg_.stack_mask, op->va_arg_.stack_stride); \
-            pointers[0] = source; \
-            frame->pc += 2 + op->va_arg_.count; \
-            return 0; \
-        }
-        CI_VA_SYSV_OPS(CI_VA_SYSV_CASE)
-#undef CI_VA_SYSV_CASE
-
-#define CI_VA_ARM_CASE(name, align_gp) \
-        case CI_OP_##name: { \
-            void* ap; \
-            memcpy(&ap, (char*)frame->slots + op->va_arg_.src, sizeof ap); \
-            void** pointers = (void**)((char*)frame->slots + op->va_arg_.pointers); \
-            NcAapcs64VaList* va = ap; \
-            unsigned ng = op->va_arg_.gp, nf = op->va_arg_.fp; \
-            int go = va->__gr_offs, fo = va->__vr_offs; \
-            align_gp \
-            if((!ng || (go < 0 && go + (int)ng * 8 <= 0)) && (!nf || (fo < 0 && fo + (int)nf * 16 <= 0))){ \
-                pointers[0] = ng ? (char*)va->__gr_top + go : NULL; \
-                pointers[1] = nf ? (char*)va->__vr_top + fo : NULL; \
-                if(ng) va->__gr_offs = go + (int)ng * 8; \
-                if(nf) va->__vr_offs = fo + (int)nf * 16; \
-                frame->pc++; \
-                return 0; \
-            } \
-            if(ng) va->__gr_offs = 0; \
-            if(nf) va->__vr_offs = 0; \
-            void** stack = &va->__stack; \
-            void* source = ci_va_stack_source(stack, op->va_arg_.stack_mask, op->va_arg_.stack_stride); \
-            pointers[0] = source; \
-            frame->pc += 2 + op->va_arg_.count; \
-            return 0; \
-        }
-        CI_VA_ARM_OPS(CI_VA_ARM_CASE)
-#undef CI_VA_ARM_CASE
-
-#define CI_VA_ARM_INDIRECT_CASE(name, unused) \
-        case CI_OP_##name: { \
-            void* ap; \
-            memcpy(&ap, (char*)frame->slots + op->va_arg_.src, sizeof ap); \
-            void** pointers = (void**)((char*)frame->slots + op->va_arg_.pointers); \
-            NcAapcs64VaList* va = ap; \
-            void* location; \
-            if(va->__gr_offs < 0 && va->__gr_offs + 8 <= 0){ \
-                location = (char*)va->__gr_top + va->__gr_offs; \
-                va->__gr_offs += 8; \
-            } \
-            else { \
-                va->__gr_offs = 0; \
-                location = ci_va_stack_source(&va->__stack, 7, 8); \
-            } \
-            void* source; \
-            memcpy(&source, location, sizeof source); \
-            pointers[0] = source; \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_VA_ARM_INDIRECT_OPS(CI_VA_ARM_INDIRECT_CASE)
-#undef CI_VA_ARM_INDIRECT_CASE
-
-#define CI_VA_STACK_CASE(name, stack_address, indirection) \
-        case CI_OP_##name: { \
-            void* ap; \
-            memcpy(&ap, (char*)frame->slots + op->va_arg_.src, sizeof ap); \
-            void** pointers = (void**)((char*)frame->slots + op->va_arg_.pointers); \
-            void* source = ci_va_stack_source(stack_address, op->va_arg_.stack_mask, op->va_arg_.stack_stride); \
-            indirection \
-            pointers[0] = source; \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_VA_STACK_OPS(CI_VA_STACK_CASE)
-#undef CI_VA_STACK_CASE
-
-#undef CI_ALIGNED
-        case CI_OP_CAPTURE_BACKTRACE: {
-            void* result = (char*)frame->slots + op->capture_backtrace.slot;
-            _Static_assert(sizeof(SrcLoc) == sizeof(void*), "backtrace entry size");
-            void** buffer;
-            int capacity, count = 0;
-            CI_INLINE_MEMCPY(&buffer, (char*)frame->slots + op->capture_backtrace.buffer, sizeof buffer);
-            CI_INLINE_MEMCPY(&capacity, (char*)frame->slots + op->capture_backtrace.capacity, sizeof capacity);
-            if(capacity > 0 && !buffer)
-                return ci_error(ci, op->loc, "__builtin_capture_backtrace buffer must not be NULL");
-            for(CiInterpFrame* f = frame; f && count < capacity; f = f->parent){
-                if(!f->ops || f->pc >= f->op_count) continue;
-                CI_INLINE_MEMCPY(&buffer[count++], &f->ops[f->pc].loc, sizeof(SrcLoc));
-            }
-            CI_INLINE_MEMCPY(result, &count, sizeof count);
-            frame->pc++;
-            return 0;
-        }
-
-#define CI_INTEGER(name, suffix, bits, type, rhs, expression) \
-        case CI_OP_##name##suffix: { \
-            type a = (type)ci_read_uint((char*)frame->slots + op->alu.src, bits / 8); \
-            type b = (type)(rhs); \
-            (void)b; \
-            uint64_t result = (expression); \
-            ci_write_uint((char*)frame->slots + op->alu.slot, bits / 8, result); \
-            frame->pc++; \
-            return 0; \
-        }
-#define CI_INTEGER_BINARY(suffix, bits, type, rhs) \
-        CI_INTEGER(ADD, suffix, bits, type, rhs, a + b) \
-        CI_INTEGER(SUB, suffix, bits, type, rhs, a - b) \
-        CI_INTEGER(MUL, suffix, bits, type, rhs, a * b) \
-        CI_INTEGER(SDIV, suffix, bits, type, rhs, ci_int64_divrem((int##bits##_t)a, (int##bits##_t)b, 0)) \
-        CI_INTEGER(UDIV, suffix, bits, type, rhs, b ? a / b : 0) \
-        CI_INTEGER(SMOD, suffix, bits, type, rhs, ci_int64_divrem((int##bits##_t)a, (int##bits##_t)b, 1)) \
-        CI_INTEGER(UMOD, suffix, bits, type, rhs, b ? a % b : 0) \
-        CI_INTEGER(AND, suffix, bits, type, rhs, a & b) \
-        CI_INTEGER(OR, suffix, bits, type, rhs, a | b) \
-        CI_INTEGER(XOR, suffix, bits, type, rhs, a ^ b) \
-        CI_INTEGER(SHL, suffix, bits, type, rhs, ci_lsl64(a, b)) \
-        CI_INTEGER(ASR, suffix, bits, type, rhs, ci_asr64((int##bits##_t)a, b)) \
-        CI_INTEGER(LSR, suffix, bits, type, rhs, ci_lsr64(a, b))
-        CI_INTEGER_BINARY(8, 8, uint32_t, ci_read_uint((char*)frame->slots + op->alu.src2, 1))
-        CI_INTEGER(NEG, 8, 8, uint32_t, 0, (uint32_t)0 - a)
-        CI_INTEGER(NOT, 8, 8, uint32_t, 0, ~a)
-        CI_INTEGER_BINARY(16, 16, uint32_t, ci_read_uint((char*)frame->slots + op->alu.src2, 2))
-        CI_INTEGER(NEG, 16, 16, uint32_t, 0, (uint32_t)0 - a)
-        CI_INTEGER(NOT, 16, 16, uint32_t, 0, ~a)
-        CI_INTEGER_BINARY(32, 32, uint32_t, ci_read_uint((char*)frame->slots + op->alu.src2, 4))
-        CI_INTEGER(NEG, 32, 32, uint32_t, 0, (uint32_t)0 - a)
-        CI_INTEGER(NOT, 32, 32, uint32_t, 0, ~a)
-        CI_INTEGER_BINARY(64, 64, uint64_t, ci_read_uint((char*)frame->slots + op->alu.src2, 8))
-        CI_INTEGER(NEG, 64, 64, uint64_t, 0, (uint64_t)0 - a)
-        CI_INTEGER(NOT, 64, 64, uint64_t, 0, ~a)
-        CI_INTEGER_BINARY(_IMM32, 32, uint32_t, op->alu_imm.immediate)
-        CI_INTEGER_BINARY(_IMM64, 64, uint64_t, op->alu_imm.immediate)
-#undef CI_INTEGER_BINARY
-#undef CI_INTEGER
-#define CI_INTEGER128(name, expression) \
-        case CI_OP_##name##128: { \
-            CiUint128 a, b; \
-            ci_uint128_read(&a, (char*)frame->slots + op->alu.src, 16); \
-            ci_uint128_read(&b, (char*)frame->slots + op->alu.src2, 16); \
-            CiUint128 result = (expression); \
-            ci_uint128_write((char*)frame->slots + op->alu.slot, 16, result); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_INTEGER128(ADD, ci_uint128_add(a, b))
-        CI_INTEGER128(SUB, ci_uint128_sub(a, b))
-        CI_INTEGER128(MUL, ci_uint128_mul(a, b))
-        CI_INTEGER128(SDIV, ci_uint128_from_int128(ci_int128_div(ci_int128_from_uint128(a), ci_int128_from_uint128(b))))
-        CI_INTEGER128(UDIV, ci_uint128_div(a, b))
-        CI_INTEGER128(SMOD, ci_uint128_from_int128(ci_int128_mod(ci_int128_from_uint128(a), ci_int128_from_uint128(b))))
-        CI_INTEGER128(UMOD, ci_uint128_mod(a, b))
-        CI_INTEGER128(AND, ci_uint128_and(a, b))
-        CI_INTEGER128(OR, ci_uint128_or(a, b))
-        CI_INTEGER128(XOR, ci_uint128_xor(a, b))
-        CI_INTEGER128(SHL, ci_uint128_shl(a, ci_uint128_hi(b) ? UINT64_MAX : ci_uint128_lo(b)))
-        CI_INTEGER128(ASR, ci_uint128_from_int128(ci_int128_shr(ci_int128_from_uint128(a), ci_uint128_hi(b) ? UINT64_MAX : ci_uint128_lo(b))))
-        CI_INTEGER128(LSR, ci_uint128_shr(a, ci_uint128_hi(b) ? UINT64_MAX : ci_uint128_lo(b)))
-        CI_INTEGER128(NEG, ci_uint128_sub(ci_uint128_from_uint64(0), a))
-        CI_INTEGER128(NOT, ci_uint128_xor(a, ci_uint128_from_int64(-1)))
-#undef CI_INTEGER128
-#define CI_COMPARE(name, suffix, bits, expression, branch) \
-        case CI_OP_##name##suffix: { \
-            uint##bits##_t a, b; \
-            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->cmp.src, sizeof a); \
-            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->cmp.src2, sizeof b); \
-            _Bool result = (expression); \
-            if(branch){ \
-                frame->pc = result ? op->cmp_jump.jump : frame->pc + 1; \
-            } \
-            else { \
-                *((unsigned char*)frame->slots + op->cmp.slot) = (unsigned char)result; \
-                frame->pc++; \
-            } \
-            return 0; \
-        }
-#define CI_COMPARE_WIDTH(suffix, bits, branch) \
-        CI_COMPARE(EQ, suffix, bits, a == b, branch) \
-        CI_COMPARE(NE, suffix, bits, a != b, branch) \
-        CI_COMPARE(SLT, suffix, bits, (int##bits##_t)a < (int##bits##_t)b, branch) \
-        CI_COMPARE(ULT, suffix, bits, a < b, branch) \
-        CI_COMPARE(SGT, suffix, bits, (int##bits##_t)a > (int##bits##_t)b, branch) \
-        CI_COMPARE(UGT, suffix, bits, a > b, branch) \
-        CI_COMPARE(SLE, suffix, bits, (int##bits##_t)a <= (int##bits##_t)b, branch) \
-        CI_COMPARE(ULE, suffix, bits, a <= b, branch) \
-        CI_COMPARE(SGE, suffix, bits, (int##bits##_t)a >= (int##bits##_t)b, branch) \
-        CI_COMPARE(UGE, suffix, bits, a >= b, branch)
-        CI_COMPARE_WIDTH(32, 32, 0)
-        CI_COMPARE_WIDTH(_JUMP32, 32, 1)
-        CI_COMPARE_WIDTH(64, 64, 0)
-        CI_COMPARE_WIDTH(_JUMP64, 64, 1)
-#undef CI_COMPARE_WIDTH
-#undef CI_COMPARE
-#define CI_COMPARE128(name, expression) \
-        case CI_OP_##name##128: { \
-            CiUint128 a, b; \
-            ci_uint128_read(&a, (char*)frame->slots + op->cmp.src, 16); \
-            ci_uint128_read(&b, (char*)frame->slots + op->cmp.src2, 16); \
-            _Bool result = (expression); \
-            *((unsigned char*)frame->slots + op->cmp.slot) = (unsigned char)result; \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_COMPARE128(EQ, ci_uint128_eq(a, b))
-        CI_COMPARE128(NE, ci_uint128_ne(a, b))
-        CI_COMPARE128(SLT, ci_int128_lt(ci_int128_from_uint128(a), ci_int128_from_uint128(b)))
-        CI_COMPARE128(ULT, ci_uint128_lt(a, b))
-        CI_COMPARE128(SGT, ci_int128_gt(ci_int128_from_uint128(a), ci_int128_from_uint128(b)))
-        CI_COMPARE128(UGT, ci_uint128_gt(a, b))
-        CI_COMPARE128(SLE, ci_int128_le(ci_int128_from_uint128(a), ci_int128_from_uint128(b)))
-        CI_COMPARE128(ULE, ci_uint128_le(a, b))
-        CI_COMPARE128(SGE, ci_int128_ge(ci_int128_from_uint128(a), ci_int128_from_uint128(b)))
-        CI_COMPARE128(UGE, ci_uint128_ge(a, b))
-#undef CI_COMPARE128
-#define CI_FALU16_CASE(name, suffix, expression) \
-        case CI_OP_##name##suffix: { \
-            uint16_t a = (uint16_t)ci_read_uint((char*)frame->slots + op->falu32.src, 2); \
-            uint16_t b = (uint16_t)ci_read_uint((char*)frame->slots + op->falu32.src2, 2); \
-            (void)b; \
-            uint16_t r; \
-            r = (expression); \
-            ci_write_uint((char*)frame->slots + op->falu32.slot, 2, r); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_FALU16_CASE(FADD, 16, ci_float16_add(a, b, 0))
-        CI_FALU16_CASE(FSUB, 16, ci_float16_sub(a, b, 0))
-        CI_FALU16_CASE(FMUL, 16, ci_float16_mul(a, b, 0))
-        CI_FALU16_CASE(FDIV, 16, ci_float16_div(a, b, 0))
-        CI_FALU16_CASE(FNEG, 16, ci_float16_neg(a))
-        CI_FALU16_CASE(FADD, _BF16, ci_float16_add(a, b, 1))
-        CI_FALU16_CASE(FSUB, _BF16, ci_float16_sub(a, b, 1))
-        CI_FALU16_CASE(FMUL, _BF16, ci_float16_mul(a, b, 1))
-        CI_FALU16_CASE(FDIV, _BF16, ci_float16_div(a, b, 1))
-        CI_FALU16_CASE(FNEG, _BF16, ci_float16_neg(a))
-#undef CI_FALU16_CASE
-#define CI_FALU32_CASE(name, expression) \
-        case CI_OP_##name##32: { \
-            float a, b; \
-            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->falu32.src, sizeof a); \
-            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->falu32.src2, sizeof b); \
-            void* dest = (char*)frame->slots + op->falu32.slot; \
-            float res; \
-            res = (expression); \
-            CI_INLINE_MEMCPY(dest, &res, sizeof res); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_FALU32_CASE(FADD, a + b)
-        CI_FALU32_CASE(FSUB, a - b)
-        CI_FALU32_CASE(FMUL, a * b)
-        CI_FALU32_CASE(FDIV, a / b)
-        CI_FALU32_CASE(FNEG, -a)
-#undef CI_FALU32_CASE
-#define CI_FALU64_CASE(name, expression) \
-        case CI_OP_##name##64: { \
-            double a, b; \
-            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->falu64.src, sizeof a); \
-            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->falu64.src2, sizeof b); \
-            void* dest = (char*)frame->slots + op->falu64.slot; \
-            double res; \
-            res = (expression); \
-            CI_INLINE_MEMCPY(dest, &res, sizeof res); \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_FALU64_CASE(FADD, a + b)
-        CI_FALU64_CASE(FSUB, a - b)
-        CI_FALU64_CASE(FMUL, a * b)
-        CI_FALU64_CASE(FDIV, a / b)
-        CI_FALU64_CASE(FNEG, -a)
-#undef CI_FALU64_CASE
-#define CI_FALU80_CASE(name, expression) \
-        case CI_OP_##name##80: { \
-            CiFloat80 a = ci_float80_read((char*)frame->slots + op->falu32.src); \
-            CiFloat80 b = ci_float80_read((char*)frame->slots + op->falu32.src2), r; \
-            (void)b; \
-            r = (expression); \
-            ci_float80_write((char*)frame->slots + op->falu32.slot, op->falu32.slot_size, r); \
-            frame->pc++; return 0; \
-        }
-        CI_FALU80_CASE(FADD, ci_float80_add(a, b))
-        CI_FALU80_CASE(FSUB, ci_float80_sub(a, b))
-        CI_FALU80_CASE(FMUL, ci_float80_mul(a, b))
-        CI_FALU80_CASE(FDIV, ci_float80_div(a, b))
-        CI_FALU80_CASE(FNEG, ci_float80_neg(a))
-#undef CI_FALU80_CASE
-#define CI_FALU128_CASE(name, expression) \
-        case CI_OP_##name##128: { \
-            CiFloat128 a = ci_float128_read((char*)frame->slots + op->falu32.src); \
-            CiFloat128 b = ci_float128_read((char*)frame->slots + op->falu32.src2), r; \
-            (void)b; \
-            r = (expression); \
-            ci_float128_write((char*)frame->slots + op->falu32.slot, op->falu32.slot_size, r); \
-            frame->pc++; return 0; \
-        }
-        CI_FALU128_CASE(FADD, ci_float128_add(a, b))
-        CI_FALU128_CASE(FSUB, ci_float128_sub(a, b))
-        CI_FALU128_CASE(FMUL, ci_float128_mul(a, b))
-        CI_FALU128_CASE(FDIV, ci_float128_div(a, b))
-        CI_FALU128_CASE(FNEG, ci_float128_neg(a))
-#undef CI_FALU128_CASE
-#define CI_FCMP16_CASE(name, suffix, expression) \
-        case CI_OP_##name##suffix: { \
-            uint16_t a = (uint16_t)ci_read_uint((char*)frame->slots + op->fcmp32.src, 2); \
-            uint16_t b = (uint16_t)ci_read_uint((char*)frame->slots + op->fcmp32.src2, 2); \
-            _Bool r; \
-            r = (expression); \
-            *((unsigned char*)frame->slots + op->fcmp32.slot) = (unsigned char)r; \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_FCMP16_CASE(FEQ, 16,  ci_float16_eq(a, b, 0))
-        CI_FCMP16_CASE(FNE, 16, !ci_float16_eq(a, b, 0))
-        CI_FCMP16_CASE(FLT, 16,  ci_float16_lt(a, b, 0))
-        CI_FCMP16_CASE(FGT, 16,  ci_float16_lt(b, a, 0))
-        CI_FCMP16_CASE(FLE, 16,  ci_float16_le(a, b, 0))
-        CI_FCMP16_CASE(FGE, 16,  ci_float16_le(b, a, 0))
-        CI_FCMP16_CASE(FEQ, _BF16,  ci_float16_eq(a, b, 1))
-        CI_FCMP16_CASE(FNE, _BF16, !ci_float16_eq(a, b, 1))
-        CI_FCMP16_CASE(FLT, _BF16,  ci_float16_lt(a, b, 1))
-        CI_FCMP16_CASE(FGT, _BF16,  ci_float16_lt(b, a, 1))
-        CI_FCMP16_CASE(FLE, _BF16,  ci_float16_le(a, b, 1))
-        CI_FCMP16_CASE(FGE, _BF16,  ci_float16_le(b, a, 1))
-#undef CI_FCMP16_CASE
-#define CI_FCMP32_CASE(name, expression) \
-        case CI_OP_##name##32: { \
-            float a, b; \
-            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->fcmp32.src, sizeof a); \
-            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->fcmp32.src2, sizeof b); \
-            uint64_t res; \
-            res = (expression); \
-            *((unsigned char*)frame->slots + op->fcmp32.slot) = (unsigned char)res; \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_FCMP32_CASE(FEQ, a == b)
-        CI_FCMP32_CASE(FNE, a != b)
-        CI_FCMP32_CASE(FLT, a <  b)
-        CI_FCMP32_CASE(FGT, a >  b)
-        CI_FCMP32_CASE(FLE, a <= b)
-        CI_FCMP32_CASE(FGE, a >= b)
-#undef CI_FCMP32_CASE
-#define CI_FCMP64_CASE(name, expression) \
-        case CI_OP_##name##64: { \
-            double a, b; \
-            CI_INLINE_MEMCPY(&a, (char*)frame->slots + op->fcmp64.src, sizeof a); \
-            CI_INLINE_MEMCPY(&b, (char*)frame->slots + op->fcmp64.src2, sizeof b); \
-            uint64_t res; \
-            res = (expression); \
-            *((unsigned char*)frame->slots + op->fcmp64.slot) = (unsigned char)res; \
-            frame->pc++; \
-            return 0; \
-        }
-        CI_FCMP64_CASE(FEQ, a == b)
-        CI_FCMP64_CASE(FNE, a != b)
-        CI_FCMP64_CASE(FLT, a <  b)
-        CI_FCMP64_CASE(FGT, a >  b)
-        CI_FCMP64_CASE(FLE, a <= b)
-        CI_FCMP64_CASE(FGE, a >= b)
-#undef CI_FCMP64_CASE
-#define CI_FCMP80_CASE(name, expression) \
-        case CI_OP_##name##80: { \
-            CiFloat80 a = ci_float80_read((char*)frame->slots + op->fcmp32.src); \
-            CiFloat80 b = ci_float80_read((char*)frame->slots + op->fcmp32.src2); \
-            _Bool r; \
-            r = (expression); \
-            *((unsigned char*)frame->slots + op->fcmp32.slot) = (unsigned char)r; \
-            frame->pc++; return 0; \
-        }
-        CI_FCMP80_CASE(FEQ, ci_float80_eq(a, b))
-        CI_FCMP80_CASE(FNE, !ci_float80_eq(a, b))
-        CI_FCMP80_CASE(FLT, ci_float80_lt(a, b))
-        CI_FCMP80_CASE(FLE, ci_float80_le(a, b))
-        CI_FCMP80_CASE(FGT, ci_float80_lt(b, a))
-        CI_FCMP80_CASE(FGE, ci_float80_le(b, a))
-#undef CI_FCMP80_CASE
-#define CI_FCMP128_CASE(name, expression) \
-        case CI_OP_##name##128: { \
-            CiFloat128 a = ci_float128_read((char*)frame->slots + op->fcmp32.src); \
-            CiFloat128 b = ci_float128_read((char*)frame->slots + op->fcmp32.src2); \
-            _Bool r; \
-            r = (expression); \
-            *((unsigned char*)frame->slots + op->fcmp32.slot) = (unsigned char)r; \
-            frame->pc++; return 0; \
-        }
-        CI_FCMP128_CASE(FEQ, ci_float128_eq(a, b))
-        CI_FCMP128_CASE(FNE, !ci_float128_eq(a, b))
-        CI_FCMP128_CASE(FLT, ci_float128_lt(a, b))
-        CI_FCMP128_CASE(FLE, ci_float128_le(a, b))
-        CI_FCMP128_CASE(FGT, ci_float128_lt(b, a))
-        CI_FCMP128_CASE(FGE, ci_float128_le(b, a))
-#undef CI_FCMP128_CASE
-
-        case CI_OP_PROPAGATE_ERROR: {
-            int err;
-            CI_INLINE_MEMCPY(&err, (char*)frame->slots + op->propagate_error.src, sizeof err);
-            if(err) return err;
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_CHECK:
-            if(!*((unsigned char*)frame->slots + op->check.src))
-                return ci_error(ci, op->loc, "%s", op->check.message);
-            frame->pc++;
-            return 0;
-        case CI_OP_SLOT_ADDR: {
-            void* addr = (char*)frame->slots + op->slot_addr.src;
-            CI_INLINE_MEMCPY((char*)frame->slots + op->slot_addr.slot, &addr, sizeof addr);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_VAR_ADDR: {
-            CcVariable* var = op->var_addr.var;
-            int err = ci_ensure_var_storage(ci, var);
-            if(err) return err;
-            CI_INLINE_MEMCPY((char*)frame->slots + op->var_addr.slot, &var->interp_val, sizeof(void*));
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_TLS_ADDR: {
-            void* address;
-            int err = ci_tls_address(ci, op->var_addr.var, &address);
-            if(err) return err;
-            CI_INLINE_MEMCPY((char*)frame->slots + op->var_addr.slot, &address, sizeof address);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_FUNC_ADDR: {
-            CcFunc* func = op->func_addr.func;
-            if(!func->native_func)
-                return ci_ice(ci, op->loc, "function '%s' not resolved before execution", func->name ? func->name->data : "<unknown>");
-            void (*fn)(void) = func->native_func;
-            CI_INLINE_MEMCPY((char*)frame->slots + op->func_addr.slot, &fn, sizeof fn);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_JUMP:
-            frame->pc = op->jump.jump;
-            return 0;
-
-        case CI_OP_RETURN: {
-            frame->pc = frame->op_count;
-            return 0;
-        }
-        case CI_OP_RETURN_SLOT: {
-            if(op->return_slot.src_size > frame->return_size)
-                return CI_RESULT_TOO_SMALL(ci, op->loc, op->return_slot.src_size, frame->return_size);
-            memcpy(frame->return_buf, (char*)frame->slots + op->return_slot.src, op->return_slot.src_size);
-            frame->pc = frame->op_count;
-            return 0;
-        }
-        case CI_OP_CLEAR_CACHE: {
-            char *begin, *end;
-            CI_INLINE_MEMCPY(&begin, (char*)frame->slots + op->clear_cache.begin, sizeof begin);
-            CI_INLINE_MEMCPY(&end, (char*)frame->slots + op->clear_cache.end, sizeof end);
-            #ifdef _WIN32
-            if(!FlushInstructionCache(GetCurrentProcess(), begin, (SIZE_T)((uintptr_t)end - (uintptr_t)begin)))
-                return ci_error(ci, op->loc, "__builtin___clear_cache failed");
-            #else
-            __builtin___clear_cache(begin, end);
-            #endif
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_STACK_SAVE: {
-            CiStack* stack;
-            int err = ci_frame_stack(ci, frame, &stack);
-            if(err) return err;
-            CiStackMark mark = ci_stack_mark(stack);
-            CI_INLINE_MEMCPY((char*)frame->slots + op->stack_save.slot, &mark, sizeof mark);
-            frame->pc++;
-            return 0;
-        }
-        case CI_OP_STACK_RESTORE: {
-            CiStackMark mark;
-            CI_INLINE_MEMCPY(&mark, (char*)frame->slots + op->stack_restore.slot, sizeof mark);
-            ci_stack_rewind(frame->stack, mark);
-            frame->pc++;
-            return 0;
-        }
-    }
-    return ci_unimplemented(ci, op->loc, "unsupported op kind");
-}
 
 static
 const CcFunc*_Nullable
@@ -1700,100 +547,332 @@ ci_hotswap_target(const CcFunc* func){
 
 static
 int
-ci_alloc_call_frame(CiInterpreter* ci, CiInterpFrame* _Nullable caller, const CcFunc* func, CiInterpFrame* _Nullable* _Nonnull out){
+ci_alloc_call_frame(CiInterpreter* ci, CiStack* stack, CiInterpFrame* _Nullable caller, const CcFunc* func, CiInterpFrame* _Nullable* _Nonnull out){
     if(!func->parsed)
         return ci_ice(ci, func->loc, "function '%s' not parsed before execution", func->name->data);
     if(!func->interp_ops)
         return ci_ice(ci, func->loc, "function '%s' not lowered before execution", func->name->data);
     CiInterpFrame* frame;
-    int err = ci_new_frame(ci, caller, func->frame_size, func->interp_ops->frame_alignment, &frame);
+    int err = ci_new_frame(ci, stack, caller, func->interp_ops->code->frame_size, (uint32_t)func->interp_ops->code->alignment, &frame);
     if(err) return err;
-    frame->name = func->name;
-    frame->ops = func->interp_ops->code.data;
-    frame->op_count = func->interp_ops->code.count;
-    frame->abi = func->interp_ops->abi;
-    frame->incoming = &frame->stack->registers;
-    if(func->type->is_variadic){
-        NcCallState* saved = ci_stack_alloc(frame->stack, sizeof *saved, _Alignof(NcCallState));
-        if(!saved){
-            ci_stack_rewind(frame->stack, frame->stack_mark);
-            return CI_OOM_ERROR;
-        }
-        *saved = *frame->incoming;
-        frame->incoming = saved;
-    }
+    frame->code = func->interp_ops->code;
+    // Bootstrap a root invocation from the embedding API.
+    const CiOp* entry = &frame->code->ops[1];
+    assert(frame->code->ops[0].kind == CI_OP_FRAME_SAVE);
+    assert(entry->kind == CI_OP_FRAME_ENTER);
+    uint32_t incoming_slot = entry->frame_enter.incoming_slot;
+    frame->incoming = incoming_slot == UINT32_MAX ? NULL : (NcCallState*)((char*)(frame + 1) + incoming_slot);
+    frame->pc = 2;
     *out = frame;
     return 0;
 }
+
+_Static_assert(CI_OOM_ERROR == 1, "assembly allocation failure");
+#define CI_ASM_OFFSET(member, offset) \
+    _Static_assert(offsetof(CiOp, member) == offset, "assembly operand layout: " #member)
+CI_ASM_OFFSET(alu.slot, 4);
+CI_ASM_OFFSET(call_resolve.slot, 4);
+CI_ASM_OFFSET(alu.src, 8);
+CI_ASM_OFFSET(alu.src2, 12);
+CI_ASM_OFFSET(checked.result, 4);
+CI_ASM_OFFSET(checked.overflow, 8);
+CI_ASM_OFFSET(checked.src, 12);
+CI_ASM_OFFSET(checked.src2, 16);
+CI_ASM_OFFSET(alu_imm.slot, 4);
+CI_ASM_OFFSET(alu_imm.src, 8);
+CI_ASM_OFFSET(alu_imm.immediate, 16);
+CI_ASM_OFFSET(cmp.slot, 4);
+CI_ASM_OFFSET(cmp.src, 12);
+CI_ASM_OFFSET(cmp.src2, 16);
+CI_ASM_OFFSET(cmp_jump.jump, 4);
+CI_ASM_OFFSET(cmp_jump.src, 12);
+CI_ASM_OFFSET(cmp_jump.src2, 16);
+CI_ASM_OFFSET(falu32.slot, 4);
+CI_ASM_OFFSET(falu32.slot_size, 8);
+CI_ASM_OFFSET(falu32.src, 12);
+CI_ASM_OFFSET(falu32.src2, 16);
+CI_ASM_OFFSET(fcmp32.slot, 4);
+CI_ASM_OFFSET(fcmp32.src, 12);
+CI_ASM_OFFSET(fcmp32.src2, 16);
+CI_ASM_OFFSET(constant.slot, 4);
+CI_ASM_OFFSET(constant.immediate, 8);
+CI_ASM_OFFSET(copy.slot, 8);
+CI_ASM_OFFSET(copy.slot_size, 12);
+CI_ASM_OFFSET(copy.src, 16);
+CI_ASM_OFFSET(load.slot, 8);
+CI_ASM_OFFSET(load.slot_size, 12);
+CI_ASM_OFFSET(load.src, 16);
+CI_ASM_OFFSET(load.offset, 20);
+CI_ASM_OFFSET(store.slot, 8);
+CI_ASM_OFFSET(store.src, 12);
+CI_ASM_OFFSET(store.src_size, 16);
+CI_ASM_OFFSET(store.offset, 20);
+CI_ASM_OFFSET(store_imm.slot, 4);
+CI_ASM_OFFSET(store_imm.offset, 8);
+CI_ASM_OFFSET(store_imm.immediate, 16);
+CI_ASM_OFFSET(convert.slot, 8);
+CI_ASM_OFFSET(convert.src, 16);
+CI_ASM_OFFSET(index.slot, 4);
+CI_ASM_OFFSET(index.base, 8);
+CI_ASM_OFFSET(index.index, 12);
+CI_ASM_OFFSET(index.scale, 16);
+CI_ASM_OFFSET(slot_addr.slot, 4);
+CI_ASM_OFFSET(slot_addr.src, 12);
+CI_ASM_OFFSET(jump.jump, 4);
+CI_ASM_OFFSET(jump_false.slot, 8);
+CI_ASM_OFFSET(return_slot.src, 8);
+CI_ASM_OFFSET(return_slot.src_size, 12);
+CI_ASM_OFFSET(abi_move.slot, 4);
+CI_ASM_OFFSET(abi_move.reg, 8);
+CI_ASM_OFFSET(abi_transfer.src, 4);
+CI_ASM_OFFSET(abi_transfer.dst, 8);
+CI_ASM_OFFSET(abi_transfer.size, 12);
+CI_ASM_OFFSET(abi_transfer.src_pointer, 16);
+CI_ASM_OFFSET(abi_transfer.dst_pointer, 20);
+CI_ASM_OFFSET(istrue.slot, 8);
+CI_ASM_OFFSET(istrue.src, 16);
+CI_ASM_OFFSET(bounds.src, 8);
+CI_ASM_OFFSET(bounds.src2, 16);
+CI_ASM_OFFSET(load_bf.slot, 8);
+CI_ASM_OFFSET(load_bf.src, 16);
+CI_ASM_OFFSET(load_bf.offset, 20);
+CI_ASM_OFFSET(store_bf.slot, 8);
+CI_ASM_OFFSET(store_bf.src, 12);
+CI_ASM_OFFSET(store_bf.offset, 20);
+CI_ASM_OFFSET(var_addr.slot, 8);
+CI_ASM_OFFSET(var_addr.var, 16);
+CI_ASM_OFFSET(func_addr.slot, 8);
+CI_ASM_OFFSET(func_addr.func, 16);
+CI_ASM_OFFSET(memcopy.size, 4);
+CI_ASM_OFFSET(memcopy.slot, 8);
+CI_ASM_OFFSET(memcopy.offset, 12);
+CI_ASM_OFFSET(memcopy.src, 16);
+CI_ASM_OFFSET(memcopy.src_offset, 20);
+CI_ASM_OFFSET(zero.size, 4);
+CI_ASM_OFFSET(zero.slot, 8);
+CI_ASM_OFFSET(zero.offset, 12);
+CI_ASM_OFFSET(switch_.jump, 4);
+CI_ASM_OFFSET(switch_.slot, 8);
+CI_ASM_OFFSET(switch_.table, 16);
+CI_ASM_OFFSET(bswap.slot, 8);
+CI_ASM_OFFSET(bswap.src, 12);
+CI_ASM_OFFSET(bit_builtin.slot, 4);
+CI_ASM_OFFSET(bit_builtin.src, 12);
+CI_ASM_OFFSET(bit_builtin.src2, 16);
+CI_ASM_OFFSET(propagate_error.src, 4);
+CI_ASM_OFFSET(check.src, 4);
+CI_ASM_OFFSET(atomic_load.slot, 8);
+CI_ASM_OFFSET(atomic_load.src, 16);
+CI_ASM_OFFSET(atomic_load.offset, 20);
+CI_ASM_OFFSET(atomic_store.slot, 8);
+CI_ASM_OFFSET(atomic_store.src, 12);
+CI_ASM_OFFSET(atomic_store.offset, 20);
+CI_ASM_OFFSET(atomic_rmw.offset, 4);
+CI_ASM_OFFSET(atomic_rmw.slot, 8);
+CI_ASM_OFFSET(atomic_rmw.src, 16);
+CI_ASM_OFFSET(atomic_rmw.src2, 20);
+CI_ASM_OFFSET(atomic_cas.offset, 4);
+CI_ASM_OFFSET(atomic_cas.slot, 8);
+CI_ASM_OFFSET(atomic_cas.src, 12);
+CI_ASM_OFFSET(atomic_cas.expected, 16);
+CI_ASM_OFFSET(atomic_cas.desired, 20);
+#undef CI_ASM_OFFSET
+_Static_assert(offsetof(CiStack, registers) == 0, "assembly ABI register base");
+_Static_assert(offsetof(CcSwitchEntry, low) == 0 && offsetof(CcSwitchEntry, high) == 8, "assembly switch interval layout");
+
+_Static_assert(offsetof(CiInterpFrame, code) == CI_ASM_code, "assembly layout: code");
+_Static_assert(offsetof(CiCode, ops) == CI_ASM_code_ops, "assembly layout: code ops");
+_Static_assert(offsetof(CiCode, op_count) == CI_ASM_code_count, "assembly layout: code count");
+_Static_assert(offsetof(CiInterpFrame, pc) == CI_ASM_pc, "assembly layout: pc");
+_Static_assert(offsetof(CiInterpFrame, incoming) == CI_ASM_incoming, "assembly layout: incoming");
+_Static_assert(offsetof(CiInterpFrame, parent) == CI_ASM_parent, "assembly layout: parent");
+_Static_assert(sizeof(CiInterpFrame) == CI_ASM_frame_size, "assembly layout: frame_size");
+_Static_assert(offsetof(CiStack, top) == CI_ASM_stack_top, "assembly layout: stack_top");
+_Static_assert(offsetof(CiStack, marks) == CI_ASM_stack_marks && offsetof(CiStack, mark_count) == CI_ASM_stack_mark_count
+    && offsetof(CiStack, mark_capacity) == CI_ASM_stack_mark_capacity && offsetof(CiStack, boundary) == CI_ASM_stack_boundary,
+    "assembly mark stack");
+_Static_assert(sizeof(CiStackSave) == 24 && offsetof(CiStackSave, boundary) == 16, "assembly saved mark");
+_Static_assert(offsetof(CiStackSegment, capacity) == 8 && offsetof(CiStackSegment, data) == 16, "assembly frame allocation: segment layout");
+_Static_assert(offsetof(CiStackMark, segment) == 0 && offsetof(CiStackMark, used) == 8, "assembly frame allocation: stack mark");
+_Static_assert(offsetof(CiCode, frame_size) == 8 && offsetof(CiCode, alignment) == 16, "assembly frame allocation: code layout");
+_Static_assert(offsetof(CiFuncOps, code) == 8, "assembly function code");
+_Static_assert(offsetof(CcVariable, interp_val) == CI_ASM_var_value, "assembly layout: var_value");
+_Static_assert(offsetof(CcFunc, interp_ops) == CI_ASM_func_code && offsetof(CcFunc, hotswap) == CI_ASM_func_hotswap, "assembly function entry");
+_Static_assert(offsetof(CcFunc, native_func) == CI_ASM_native_func, "assembly layout: native_func");
+_Static_assert(offsetof(CcFunc, frame_size) == CI_ASM_func_flags + 4, "assembly function flags");
+_Static_assert(offsetof(Atom_, data) == CI_ASM_atom_data, "assembly atom text");
+_Static_assert(sizeof(NcCallState) == 320, "assembly native call capture");
+_Static_assert(offsetof(CiCallDescriptor, abi) == 0 && offsetof(CiCallDescriptor, invoke) == 8
+    && offsetof(CiCallDescriptor, func) == 16, "assembly call descriptor");
+_Static_assert(offsetof(NcCallPlan, target) == 0, "assembly native call target");
+_Static_assert(offsetof(NcCallPlan, stack_size) == CI_ASM_plan_stack_size, "assembly native stack size");
+_Static_assert(offsetof(NcCallPlan, stack_alignment) == CI_ASM_plan_stack_alignment, "assembly native stack alignment");
+_Static_assert(offsetof(NcSysvVaListTag, gp_offset) == 0 && offsetof(NcSysvVaListTag, fp_offset) == 4
+    && offsetof(NcSysvVaListTag, overflow_arg_area) == 8 && offsetof(NcSysvVaListTag, reg_save_area) == 16, "assembly SysV va_list");
+_Static_assert(offsetof(NcAapcs64VaList, __stack) == 0 && offsetof(NcAapcs64VaList, __gr_top) == 8
+    && offsetof(NcAapcs64VaList, __vr_top) == 16 && offsetof(NcAapcs64VaList, __gr_offs) == 24
+    && offsetof(NcAapcs64VaList, __vr_offs) == 28, "assembly AAPCS64 va_list");
+_Static_assert(offsetof(CiSwitchTable, count) == CI_ASM_switch_count, "assembly layout: switch_count");
+_Static_assert(offsetof(CiSwitchTable, data) == CI_ASM_switch_data, "assembly layout: switch_data");
+_Static_assert(sizeof(CcSwitchEntry) == CI_ASM_entry_size, "assembly layout: entry_size");
+_Static_assert(offsetof(CcSwitchEntry, target) == CI_ASM_entry_target, "assembly layout: entry_target");
+_Static_assert(CI_OP_COUNT == CI_ASM_op_count, "assembly opcode count");
+
+#if defined __x86_64__ && !defined _WIN32
+#define CI_CACHE_SERVICE NULL
+#elif defined __APPLE__
+extern void sys_icache_invalidate(void*, size_t);
+#define CI_CACHE_SERVICE sys_icache_invalidate
+#elif defined _WIN32
+#define CI_CACHE_SERVICE FlushInstructionCache
+#else
+void clear_cache(void* a, void* b){
+    __builtin___clear_cache(a, b);
+}
+#define CI_CACHE_SERVICE clear_cache
+#endif
+_Static_assert(sizeof(void (*)(void)) == 8, "assembly helper pointer size");
+static void (*const _Nonnull ci_asm_helpers[CI_ASM_HELPER_COUNT])(void) = {
+#define CI_HELPER_ENTRY(name, function) [CI_ASM_HELPER_##name] = (void (*)(void))function,
+    CI_ASM_HELPERS(CI_HELPER_ENTRY)
+#undef CI_HELPER_ENTRY
+};
+#undef CI_CACHE_SERVICE
+
+static
+CiStack* _Nullable
+ci_prepare_callback(CiInterpreter* ci){
+    CiStack* stack;
+    if(ci_get_stack(ci, &stack)) return NULL;
+    if(ci_stack_save(stack, 1)) return NULL;
+    return stack;
+}
+
+#ifdef __clang__
+// clang hits some pathological cases apparently in these funcs,
+// disabling these warnings triples the speed of compilation.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wuninitialized"
+#pragma clang diagnostic ignored "-Wsometimes-uninitialized"
+#pragma clang diagnostic ignored "-Wconditional-uninitialized"
+#endif
+static
+int
+ci_interp_run_c(CiInterpreter* ci, CiInterpFrame* root, CiStack* stack, void* _Nullable root_result, size_t root_result_size){
+    int error = 0;
+    CiInterpFrame* frame = root;
+    size_t pc = frame->pc;
+    dispatch:;
+    if(pc >= frame->code->op_count) goto finish;
+    const CiOp* op = &frame->code->ops[pc];
+    execute_op:;
+    switch(op->kind){
+    #define CI_OP_BEGIN(name) case name:
+    #define CI_OP_END(name) goto dispatch
+    #define CI_OP_SYNC_PC() (frame->pc = pc)
+    #define CI_OP_CALL(code) do { op = (code)->ops; goto execute_op; } while(0)
+    #define CI_OP_ENTER(child) do { frame = (child); pc = frame->pc; goto dispatch; } while(0)
+    #define CI_OP_ERROR(value) do { frame->pc = pc; error = (value); goto cleanup; } while(0)
+        #ifdef __clang__
+        #pragma clang assume_nonnull end
+        #endif
+        #include "ci_interp_step.h"
+        #ifdef __clang__
+        #pragma clang assume_nonnull begin
+        #endif
+    case CI_OP_COUNT: break;
+    }
+    frame->pc = pc;
+    error = ci_unimplemented(ci, op->loc, "unsupported op kind");
+    goto cleanup;
+    finish:
+    frame->pc = pc;
+    if(frame == root){
+        if(root->code->ops[0].kind == CI_OP_FRAME_SAVE) ci_stack_unwind_frame(stack);
+        return 0;
+    }
+    CiInterpFrame* parent = frame->parent;
+    ci_stack_unwind_frame(stack);
+    frame = parent;
+    pc = frame->pc + 1;
+    goto dispatch;
+    cleanup:
+    while(frame != root){
+        parent = frame->parent;
+        ci_stack_unwind_frame(stack);
+        frame = parent;
+    }
+    if(root->code->ops[0].kind == CI_OP_FRAME_SAVE) ci_stack_unwind_frame(stack);
+    return error;
+}
+
 
 static
 int
-ci_make_abi_call_frame(CiInterpreter* ci, CiInterpFrame* caller, const CcFunc* func, const CiOp* op, CiInterpFrame* _Nullable* _Nonnull out){
-    const CcFunc* target = ci_hotswap_target(func);
-    if(!target) return ci_error(ci, op->loc, "hotswap cycle detected");
-    func = target;
-    CiInterpFrame* frame = NULL;
-    int err = ci_alloc_call_frame(ci, caller, func, &frame);
-    if(err) return err;
-    frame->return_buf = op->call.ret_size ? (char*)caller->slots + op->call.ret_slot : ci_discard_buf;
-    frame->return_size = op->call.ret_size ? op->call.ret_size : sizeof ci_discard_buf;
-    *out = frame;
-    return 0;
+ci_interp_step(CiInterpreter* ci, CiInterpFrame* root, CiInterpFrame* _Nonnull* _Nonnull current, void* _Nullable root_result, size_t root_result_size){
+    CiInterpFrame* frame = *current;
+    if(frame == root && frame->pc >= frame->code->op_count) return 0;
+    int error = 0;
+    CiStack* stack;
+    error = ci_get_stack(ci, &stack);
+    if(error) return error;
+    size_t pc = frame->pc;
+    if(pc >= frame->code->op_count) goto finish;
+    const CiOp* op = &frame->code->ops[pc];
+    execute_op:;
+    switch(op->kind){
+    #define CI_OP_BEGIN(name) case name:
+    #define CI_OP_END(name) frame->pc = pc; goto finish
+    #define CI_OP_SYNC_PC() ((void)0)
+    #define CI_OP_CALL(code) do { op = (code)->ops; goto execute_op; } while(0)
+    #define CI_OP_ENTER(child) do { frame = (child); goto finish; } while(0)
+    #define CI_OP_ERROR(value) do { error = (value); goto finish; } while(0)
+        #ifdef __clang__
+        #pragma clang assume_nonnull end
+        #endif
+        #include "ci_interp_step.h"
+        #ifdef __clang__
+        #pragma clang assume_nonnull begin
+        #endif
+    case CI_OP_COUNT: break;
+    }
+    error = ci_unimplemented(ci, op->loc, "unsupported op kind");
+    finish:
+    while(frame != root && (error || frame->pc >= frame->code->op_count)){
+        CiInterpFrame* parent = frame->parent;
+        ci_stack_unwind_frame(stack);
+        frame = parent;
+        if(!error) frame->pc++;
+    }
+    *current = frame;
+    if(frame == root && (error || frame->pc >= frame->code->op_count)
+        && root->code->ops[0].kind == CI_OP_FRAME_SAVE) ci_stack_unwind_frame(stack);
+    return error;
 }
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 static
-void
-ci_free_call_frame(CiInterpreter* ci, CiInterpFrame* frame){
-    (void)ci;
-    ci_stack_rewind(frame->stack, frame->stack_mark);
+int
+ci_interp_execute(CiInterpreter* ci, CiInterpFrame* root, CiStack* stack, void* _Nullable result, size_t result_size){
+    int err;
+    DRP_PROFILE_BEGIN(profile, "interpreter.run");
+    if(!ci->force_c_interp && ci_target(ci)->target == CC_TARGET_NATIVE)
+        err = ci_interp_execute_asm(ci, root, ci_asm_helpers, stack, result, result_size, (size_t)ci->poison_frame_slots << 1);
+    else
+        err = ci_interp_run_c(ci, root, stack, result, result_size);
+    DRP_PROFILE_END(profile);
+    return err;
 }
 
 static
 int
 ci_interp_run(CiInterpreter* ci, CiInterpFrame* root){
-    DRP_PROFILE_BEGIN(profile, "interpreter.run");
-    int err = 0;
-    if(!root->stack){
-        CiStack* stack;
-        err = ci_frame_stack(ci, root, &stack);
-        if(err) return err;
-    }
-    CiInterpFrame* frame = root;
-    for(;;){
-        CiInterpFrame* child = NULL;
-        while(frame->pc < frame->op_count){
-            err = _ci_interp_step(ci, frame, &child);
-            if(err) break;
-        }
-        if(err == CI_STEP_ENTER_FRAME){ frame = child; err = 0; continue; }
-        for(;;){
-            if(frame == root) return err;
-            CiInterpFrame* parent = frame->parent;
-            ci_free_call_frame(ci, frame);
-            frame = parent;
-            if(!err){ frame->pc++; break; }
-        }
-    }
-    DRP_PROFILE_END(profile);
-}
-
-static
-int
-ci_interp_step(CiInterpreter* ci, CiInterpFrame* frame){
-    int err;
-    if(!frame->stack){
-        CiStack* stack;
-        err = ci_frame_stack(ci, frame, &stack);
-        if(err) return err;
-    }
-    CiInterpFrame* child = NULL;
-    err = _ci_interp_step(ci, frame, &child);
-    if(err == CI_STEP_ENTER_FRAME){
-        err = ci_interp_run(ci, child);
-        ci_free_call_frame(ci, child);
-        if(!err) frame->pc++;
-    }
-    return err;
+    CiStack* stack;
+    int err = ci_get_stack(ci, &stack);
+    if(err) return err;
+    return ci_interp_execute(ci, root, stack, &ci->exit_code, sizeof ci->exit_code);
 }
 
 static
@@ -1803,7 +882,7 @@ ci_call_argv(CiInterpreter* ci, CiInterpFrame* _Nullable caller, const CcFunc* f
     if(plan->result.size > size) return CI_RESULT_TOO_SMALL(ci, loc, plan->result.size, size);
     if(nargs != func->interp_ops->native_type->param_count) return ci_error(ci, loc, "argument count mismatch");
     CiStack* stack;
-    int err = ci_frame_stack(ci, caller, &stack);
+    int err = ci_get_stack(ci, &stack);
     if(err) return err;
     CiStackMark mark = ci_stack_mark(stack);
     void* storage = ci_stack_alloc(stack, nc_stack_storage_size(plan), plan->stack_alignment);
@@ -1826,16 +905,15 @@ ci_call_abi(CiInterpreter* ci, CiInterpFrame* _Nullable caller, const CcFunc* fu
     const CcFunc* target = ci_hotswap_target(func);
     if(!target) return ci_error(ci, loc, "hotswap cycle detected");
     CiStack* stack;
-    int err = ci_frame_stack(ci, caller, &stack);
+    int err = ci_get_stack(ci, &stack);
     if(err) return err;
     size_t capture_size = nc_capture_size(target->interp_ops->abi->target);
     if(state != &stack->registers) memcpy(&stack->registers, state, capture_size);
     CiInterpFrame* frame = NULL;
-    err = ci_alloc_call_frame(ci, caller, target, &frame);
+    err = ci_alloc_call_frame(ci, stack, caller, target, &frame);
     if(err) return err;
-    err = ci_interp_run(ci, frame);
+    err = ci_interp_execute(ci, frame, stack, NULL, 0);
     if(state != &stack->registers) memcpy(state, &stack->registers, capture_size);
-    ci_free_call_frame(ci, frame);
     return err;
 }
 
@@ -2780,7 +1858,7 @@ ci_procmacro_expand(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc lo
         }
     }
     char* orig_result = result;
-    err = ci_eval_lowered_expr(ci, &ci->top_frame, expr, result, result_sz);
+    err = ci_eval_lowered_expr(ci, ci->top_frame, expr, result, result_sz);
     if(err) goto cleanup;
     CcQualType rt = ftype->return_type;
     Atom a = NULL;
@@ -3206,9 +2284,9 @@ static
 int
 ci_backtrace(CiInterpreter* ci, CiInterpFrame* f, int level){
     for(;;){
-        if(!f || !f->ops || f->pc >= f->op_count) return 1;
-        const CiOp* op = &f->ops[f->pc];
-        ci_error(ci, op->loc, "%s: %d", f->name?f->name->data:"(top level)", level);
+        if(!f || !f->code || f->pc >= f->code->op_count) return 1;
+        const CiOp* op = &f->code->ops[f->pc];
+        ci_error(ci, op->loc, "%s: %d", f->code->name?f->code->name->data:"(top level)", level);
         if(!f->parent) return 0;
         f = f->parent;
         level++;
@@ -3271,23 +2349,17 @@ int
 ci_run_lowered_expr(CiInterpreter*_Nonnull ci, CiInterpFrame*_Nullable parent, const CiLoweredExpr*_Nonnull code, SrcLoc loc, void*_Nonnull result, size_t size){
     if(code->value_size > size)
         return CI_RESULT_TOO_SMALL(ci, loc, code->value_size, size);
-    CiInterpFrame frame = {
-        .parent = parent, .return_buf = result, .return_size = size,
-        .ops = code->ops.data, .op_count = code->ops.count,
-    };
-    int err = ci_frame_stack(ci, NULL, &frame.stack);
+    CiInterpFrame* frame;
+    CiStack* stack;
+    int err = ci_get_stack(ci, &stack);
     if(err) return err;
-    frame.stack_mark = ci_stack_mark(frame.stack);
-    if(code->frame_size){
-        uint32_t alignment = code->frame_alignment > 16 ? code->frame_alignment : 16;
-        frame.slots = ci_stack_alloc(frame.stack, code->frame_size, alignment);
-        if(!frame.slots) return CI_OOM_ERROR;
-        if(ci->poison_frame_slots) memset(frame.slots, 0xCC, code->frame_size);
-    }
-    err = ci_interp_run(ci, &frame);
+    err = ci_new_frame(ci, stack, parent, code->code->frame_size, (uint32_t)code->code->alignment, &frame);
+    if(err) return err;
+    frame->code = code->code;
+    err = ci_interp_execute(ci, frame, stack, result, size);
     if(!err && code->value_size)
-        memcpy(result, (char*)frame.slots + code->value_slot, code->value_size);
-    ci_stack_rewind(frame.stack, frame.stack_mark);
+        memcpy(result, (char*)(frame + 1) + code->value_slot, code->value_size);
+    ci_stack_unwind_frame(stack);
     return err;
 }
 

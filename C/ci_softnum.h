@@ -262,7 +262,8 @@ static inline CiUint128 ci_uint128_from_double(double d, _Bool is_unsigned){
     uint64_t hi = (uint64_t)(d / two64);
     uint64_t lo = (uint64_t)(d - (double)hi * two64);
     CiUint128 v = ci_uint128_or(ci_uint128_shl(ci_uint128_from_uint64(hi), 64), ci_uint128_from_uint64(lo));
-    return negative? ci_uint128_sub(ci_uint128_from_uint64(0), v) : v;
+    if(negative) return ci_uint128_sub(ci_uint128_from_uint64(0), v);
+    return v;
 #endif
 }
 
@@ -331,10 +332,16 @@ static inline CiInt128 ci_int128_divrem(CiInt128 a, CiInt128 b, _Bool remainder)
     if(ci_int128_eq(b, zero)) return zero;
     _Bool a_neg = ci_int128_lt(a, zero);
     _Bool b_neg = ci_int128_lt(b, zero);
-    CiUint128 au = a_neg? ci_uint128_from_int128(ci_int128_neg(a)) : ci_uint128_from_int128(a);
-    CiUint128 bu = b_neg? ci_uint128_from_int128(ci_int128_neg(b)) : ci_uint128_from_int128(b);
-    CiInt128 result = ci_int128_from_uint128(remainder? ci_uint128_mod(au, bu) : ci_uint128_div(au, bu));
-    return (a_neg != (!remainder && b_neg))? ci_int128_neg(result) : result;
+    CiUint128 au, bu;
+    if(a_neg) au = ci_uint128_from_int128(ci_int128_neg(a));
+    else au = ci_uint128_from_int128(a);
+    if(b_neg) bu = ci_uint128_from_int128(ci_int128_neg(b));
+    else bu = ci_uint128_from_int128(b);
+    CiInt128 result;
+    if(remainder) result = ci_int128_from_uint128(ci_uint128_mod(au, bu));
+    else result = ci_int128_from_uint128(ci_uint128_div(au, bu));
+    if(a_neg != (!remainder && b_neg)) return ci_int128_neg(result);
+    return result;
 }
 static inline CiInt128 ci_int128_div(CiInt128 a, CiInt128 b){
     return ci_int128_divrem(a, b, 0);
@@ -595,7 +602,7 @@ static inline _Bool ci_float80_nonzero(CiFloat80 a){ return !ci_float80_eq(a, ci
 #if defined __LDBL_MANT_DIG__ && __LDBL_MANT_DIG__ == 113 && __LDBL_MAX_EXP__ == 16384
 #define CI_NATIVE_FLOAT128 1
 typedef long double CiFloat128;
-#elif defined __SIZEOF_FLOAT128__ && (defined __GNUC__ || defined __clang__ || defined __DRC__)
+#elif defined __SIZEOF_FLOAT128__ && (defined __GNUC__ || defined __clang__ || defined __DRC__) && !(defined __APPLE__ && defined __aarch64__)
 #define CI_NATIVE_FLOAT128 1
 typedef __float128 CiFloat128;
 #else
@@ -788,8 +795,11 @@ static inline CiUint128 ci_float80_to_uint128(CiFloat80 v){
     CiUint128 sig = ci_uint128_from_uint64(raw[0]);
     int shift = exp - 16383 - 63;
     if(exp == 0 || exp == 0x7fff || shift <= -128 || shift >= 128) return ci_uint128_from_uint64(0);
-    CiUint128 r = shift < 0? ci_uint128_shr(sig, -shift) : ci_uint128_shl(sig, shift);
-    return neg? ci_uint128_sub(ci_uint128_from_uint64(0), r) : r;
+    CiUint128 r;
+    if(shift < 0) r = ci_uint128_shr(sig, -shift);
+    else r = ci_uint128_shl(sig, shift);
+    if(neg) return ci_uint128_sub(ci_uint128_from_uint64(0), r);
+    return r;
 }
 
 static inline CiFloat128 ci_float128_from_uint128(CiUint128 v, _Bool uns){
@@ -817,8 +827,11 @@ static inline CiUint128 ci_float128_to_uint128(CiFloat128 v){
     CiUint128 sig; ci_uint128_read(&sig, raw, 16);
     int shift = exp - 16383 - 112;
     if(exp == 0 || exp == 0x7fff || shift <= -128 || shift >= 128) return ci_uint128_from_uint64(0);
-    CiUint128 r = shift < 0? ci_uint128_shr(sig, -shift) : ci_uint128_shl(sig, shift);
-    return neg? ci_uint128_sub(ci_uint128_from_uint64(0), r) : r;
+    CiUint128 r;
+    if(shift < 0) r = ci_uint128_shr(sig, -shift);
+    else r = ci_uint128_shl(sig, shift);
+    if(neg) return ci_uint128_sub(ci_uint128_from_uint64(0), r);
+    return r;
 }
 
 static inline
@@ -1124,8 +1137,11 @@ ci_float16_to_uint128(uint16_t bits, _Bool is_brian_float){
     if(!exp || exp == 255 || shift <= -128 || shift >= 128)
         return ci_uint128_from_uint64(0);
     CiUint128 sig = ci_uint128_from_uint64((f.v & 0x7fffff) | 0x800000);
-    CiUint128 result = shift < 0? ci_uint128_shr(sig, (uint64_t)-shift) : ci_uint128_shl(sig, (uint64_t)shift);
-    return f.v >> 31? ci_uint128_sub(ci_uint128_from_uint64(0), result) : result;
+    CiUint128 result;
+    if(shift < 0) result = ci_uint128_shr(sig, (uint64_t)-shift);
+    else result = ci_uint128_shl(sig, (uint64_t)shift);
+    if(f.v >> 31) return ci_uint128_sub(ci_uint128_from_uint64(0), result);
+    return result;
 }
 
 static inline

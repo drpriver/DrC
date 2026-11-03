@@ -292,7 +292,6 @@ struct CcParser {
     CcQualType char_star,
                const_char_star,
                void_star,
-               stack_mark_type,
                const_void_star,
                char_slice,
                const_char_slice,

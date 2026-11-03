@@ -658,8 +658,8 @@ nc_invoke(const NcCallPlan* p, void (*fn)(void), NcCallState* state){
 }
 typedef struct NcCaptureSlot NcCaptureSlot;
 struct NcCaptureSlot {
-    NcClosure* _Nullable closure;
-    void (*dispatch)(NcClosure* closure, NcCallState* capture);
+    void* _Nullable closure;
+    void (*dispatch)(void);
     void (*entry)(void);
     uint64_t reserved;
 };
@@ -710,7 +710,7 @@ nc_capture_dispatch(NcClosure* c, NcCallState* state){
     if(nc_abi_sysv(CC_TARGET_NATIVE))
         state->sysv.result_x87_count = _nc_abi_bank_count(c->plan->result, NC_ABI_X87);
 }
-static int native_capture_allocate(NcClosure*, NcCaptureHandle*);
+static int native_capture_allocate(NcCaptureSlot, NcCaptureHandle*);
 static int native_capture_release(NcCaptureHandle);
 static struct {
     LOCK_T lock;
@@ -732,7 +732,7 @@ nc_create_closure(Allocator al, const CcFunction* type, NcClosureCallback* cb, v
     c->plan = plan;
     c->userdata = userdata;
     NcCaptureHandle handle;
-    err = native_capture_allocate(c, &handle);
+    err = native_capture_allocate((NcCaptureSlot){c, (void(*)(void))nc_capture_dispatch, nc_capture_entry, 0}, &handle);
     if(err){
         nc_plan_destroy(al, plan);
         Allocator_free(al, c, 1, sizeof *c, _Alignof(NcClosure));
@@ -977,7 +977,7 @@ nc_capture_unmap_region(unsigned char* base){
 
 static
 int
-native_capture_allocate(NcClosure* closure, NcCaptureHandle* out){
+native_capture_allocate(NcCaptureSlot slot, NcCaptureHandle* out){
     int err;
     if((uintptr_t)nc_capture_slots_end - (uintptr_t)nc_capture_slots != NC_CAPTURE_TABLE_SIZE)
         return NC_MAP_ERROR_UNSUPPORTED;
@@ -1009,7 +1009,7 @@ native_capture_allocate(NcClosure* closure, NcCaptureHandle* out){
     unsigned bit = (unsigned)ctz_64(~table->occupied[word]);
     unsigned index = word * 64 + bit;
     table->occupied[word] |= UINT64_C(1) << bit;
-    slots[index] = (NcCaptureSlot){closure, nc_capture_dispatch, nc_capture_entry, 0};
+    slots[index] = slot;
     table->used++;
     out->fn = (void (*)(void))(uintptr_t)(table->code + index * sizeof(NcCaptureSlot));
     err = NC_MAP_ERROR_OK;
@@ -1056,6 +1056,22 @@ native_capture_release(NcCaptureHandle handle){
 unlock:
     LOCK_T_unlock(&NC_CAPTURE_ALLOCATOR.lock);
     return err;
+}
+
+static
+int
+nc_create_thunk(void* userdata, void (*entry)(void), void (*_Nullable* _Nonnull out)(void)){
+    NcCaptureHandle handle;
+    int err = native_capture_allocate((NcCaptureSlot){userdata, entry, entry, 0}, &handle);
+    if(err) return err == NC_MAP_ERROR_OOM ? NC_OOM_ERROR : NC_RUNTIME_ERROR;
+    *out = handle.fn;
+    return 0;
+}
+
+static
+void
+nc_destroy_thunk(void (*entry)(void)){
+    native_capture_release((NcCaptureHandle){entry});
 }
 
 #else

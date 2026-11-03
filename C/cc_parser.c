@@ -7578,7 +7578,8 @@ cc_static_switch_key(CcParser* p, CcParseFlags flags, CcQualType* type, CiUint12
     if(err) goto evaluation_done;
     err = cc_eval_expr(&(CcEvalCtx){.parser=p}, expr, &value);
     if(err) goto evaluation_done;
-    *key = is_type ? ci_uint128_from_uint64(value->type_value.bits) : cc_eval_u128(cc_target(p), value);
+    if(is_type) *key = ci_uint128_from_uint64(value->type_value.bits);
+    else *key = cc_eval_u128(cc_target(p), value);
     if(range) range->high = *key;
     evaluation_done:
     if(err == CC_NOT_CONSTANT_ERROR || err == CC_OVERFLOW_ERROR)
@@ -7626,7 +7627,9 @@ cc_parse_static_switch_inner(CcParser* p, CcParseFlags flags, SrcLoc loc){
     size_t selected = SIZE_MAX, fallback = SIZE_MAX;
     // Sign-extended keys become monotonically ordered after flipping the sign bit.
     _Bool uns = ccqt_bt_eq(type, CCBT__Type) || ccqt_is_unsigned(type, !cc_target(p)->char_is_signed);
-    CiUint128 sign = uns ? ci_uint128_from_uint64(0) : ci_uint128_shl(ci_uint128_from_uint64(1), 127);
+    CiUint128 sign;
+    if(uns) sign = ci_uint128_from_uint64(0);
+    else sign = ci_uint128_shl(ci_uint128_from_uint64(1), 127);
     CiUint128 ordered_key = ci_uint128_xor(key, sign);
     while(!err){
         CcToken tok;
@@ -8544,7 +8547,9 @@ cc_print_diagnostic_token(CcParser* p, MStringBuilder* sb, CcToken tok){
                 msb_write_char(sb, ' ');
                 CcBasicTypeKind kind = tok.constant.ctype;
                 _Bool wide = kind == CCBT_int128 || kind == CCBT_unsigned_int128;
-                CiUint128 bits = wide ? tok.constant.integer128_value : ci_uint128_from_uint64(tok.constant.integer_value);
+                CiUint128 bits;
+                if(wide) bits = tok.constant.integer128_value;
+                else bits = ci_uint128_from_uint64(tok.constant.integer_value);
                 cc_print_runtime_integer(sb, bits, wide ? 128 : 64, !ccbt_is_unsigned(kind, !cc_target(p)->char_is_signed));
             }
             return;
@@ -12630,7 +12635,9 @@ cc_enumerator_value_fits(const CcTargetConfig* target, CcQualType type, CiUint12
         return !negative && ci_uint128_le(bits, ci_uint128_from_uint64(1));
     uint32_t width = target->sizeof_[ccqt_basic_kind(type)] * 8;
     _Bool unsigned_ = ccqt_is_unsigned(type, !target->char_is_signed);
-    CiUint128 magnitude = negative ? ci_uint128_sub(ci_uint128_from_uint64(0), bits) : bits;
+    CiUint128 magnitude;
+    if(negative) magnitude = ci_uint128_sub(ci_uint128_from_uint64(0), bits);
+    else magnitude = bits;
     return ci_uint128_magnitude_fits_integer(magnitude, negative, width, unsigned_);
 }
 
@@ -16531,23 +16538,12 @@ cc_parse_decls(CcParser* p, CcParseFlags flags, const CcDeclBase* declbase, CcPa
             if(var && ccqt_kind(type) == CC_VLA){
                 if(initializer && (initializer->kind != CC_EXPR_INIT_LIST || initializer->init_list->count))
                     return cc_error(p, name_loc, "VLA initializer must be {} or {0}");
-                CcVariable* mark = Allocator_zalloc(cc_allocator(p), 1, sizeof *mark, _Alignof(CcVariable));
-                if(!mark) return CC_OOM_ERROR;
-                *mark = (CcVariable){
-                    .name=nil_atom,
-                    .loc=name_loc,
-                    .type=p->stack_mark_type,
-                    .automatic=var->automatic,
-                };
-                err = cc_scope_insert_var(cc_allocator(p), cc_scope_declarations(p->current), nil_atom, mark);
-                if(err) return err;
                 CcStmtNode* allocation = cc_stmt_node(p, CC_STMT_VLA, name_loc, 0);
                 if(!allocation) return CC_OOM_ERROR;
                 allocation->vla.object = var;
-                allocation->vla.mark = mark;
                 allocation->zero_initialize = initializer != NULL;
                 initializer = NULL;
-                p->defer_context.active->stack_mark = mark;
+                p->defer_context.active->saves_stack = 1;
                 err = cc_sink_push(p, allocation);
                 if(err) return err;
             }
@@ -16787,9 +16783,6 @@ cc_define_builtin_types(CcParser* p){
         if(err) return err;
         err = cc_slice_of(p, const_char, (SrcLoc){0}, &p->const_char_slice);
         if(err) return err;
-        CcArray* mark_type = cc_intern_array(&p->type_cache, al, ccqt_basic(t->size_type), 2, 0);
-        if(!mark_type) return CC_OOM_ERROR;
-        p->stack_mark_type = (CcQualType){.bits=(uintptr_t)mark_type};
     }
     Atom va_list_name = AT_atomize(p->cpp.at, "__builtin_va_list", sizeof "__builtin_va_list"-1);
     if(!va_list_name) return CC_OOM_ERROR;
@@ -18057,7 +18050,11 @@ cc_eval_wide_binary(const CcTargetConfig* target, CcExprKind op, CcExpr* l, CcEx
             break;
         case CC_EXPR_MUL:{
             if(!uns){
-                CiUint128 aa = an ? ci_uint128_sub(z,a) : a, bb = bn ? ci_uint128_sub(z,b) : b;
+                CiUint128 aa, bb;
+                if(an) aa = ci_uint128_sub(z,a);
+                else aa = a;
+                if(bn) bb = ci_uint128_sub(z,b);
+                else bb = b;
                 CiUint128 limit = ci_uint128_shl(ci_uint128_from_uint64(1),127);
                 if(an == bn) limit = ci_uint128_sub(limit,ci_uint128_from_uint64(1));
                 if(ci_uint128_nonzero(bb) && ci_uint128_gt(aa,ci_uint128_div(limit,bb))) return CC_OVERFLOW_ERROR;
@@ -18068,8 +18065,14 @@ cc_eval_wide_binary(const CcTargetConfig* target, CcExprKind op, CcExpr* l, CcEx
             if(!ci_uint128_nonzero(b)) return CC_OVERFLOW_ERROR;
             if(!uns && ci_uint128_eq(a,ci_uint128_shl(ci_uint128_from_uint64(1),127))
                 && ci_uint128_eq(b,ci_uint128_sub(z,ci_uint128_from_uint64(1)))) return CC_OVERFLOW_ERROR;
-            if(uns) u = op == CC_EXPR_DIV ? ci_uint128_div(a,b) : ci_uint128_mod(a,b);
-            else u = ci_uint128_from_int128(op == CC_EXPR_DIV ? ci_int128_div(sa,sb) : ci_int128_mod(sa,sb));
+            if(uns){
+                if(op == CC_EXPR_DIV) u = ci_uint128_div(a,b);
+                else u = ci_uint128_mod(a,b);
+            }
+            else {
+                if(op == CC_EXPR_DIV) u = ci_uint128_from_int128(ci_int128_div(sa,sb));
+                else u = ci_uint128_from_int128(ci_int128_mod(sa,sb));
+            }
             break;
         case CC_EXPR_BITAND: u = ci_uint128_and(a,b); break;
         case CC_EXPR_BITOR: u = ci_uint128_or(a,b); break;
@@ -20915,8 +20918,9 @@ cc_eval_object_view_select(CcEvalCtx* ctx, CcExpr* e, _Bool expression, _Bool* h
     if(width){
         CiUint128 bits = cc_eval_u128(cc_target(p), value);
         if(bit_shift) bits = ci_uint128_shr(bits, bit_shift);
-        CiUint128 mask = width == 128 ? ci_uint128_from_int64(-1)
-            : ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), width), ci_uint128_from_uint64(1));
+        CiUint128 mask;
+        if(width == 128) mask = ci_uint128_from_int64(-1);
+        else mask = ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), width), ci_uint128_from_uint64(1));
         bits = ci_uint128_and(bits, mask);
         if(!ccqt_is_unsigned(e->type, !cc_target(p)->char_is_signed)
             && ci_uint128_nonzero(ci_uint128_shr(bits, width-1)))

@@ -93,8 +93,8 @@ ci_lower_deps_merge(CiLowerDeps* dst, const CiLowerDeps* src, Allocator al){
 
 typedef struct CiLoweredExpr CiLoweredExpr;
 struct CiLoweredExpr {
-    Marray(CiOp) ops;
-    uint32_t frame_size, frame_alignment, value_slot, value_size;
+    CiCode* _Null_unspecified code;
+    uint32_t value_slot, value_size;
 };
 
 typedef struct CiInterpreter CiInterpreter;

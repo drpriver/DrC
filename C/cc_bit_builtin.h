@@ -97,7 +97,8 @@ cc_bit_builtin_words(uint64_t lo, uint64_t hi){
 static inline
 CiUint128
 cc_bit_builtin_power(uint32_t bit){
-    return bit < 64 ? ci_uint128_from_uint64((uint64_t)1 << bit) : cc_bit_builtin_words(0, (uint64_t)1 << (bit-64));
+    if(bit < 64) return ci_uint128_from_uint64((uint64_t)1 << bit);
+    return cc_bit_builtin_words(0, (uint64_t)1 << (bit-64));
 }
 
 static inline
@@ -180,7 +181,8 @@ cc_bit_builtin(CcBitBuiltinOp op, CiUint128 v, uint32_t width, CiUint128 arg, _B
         case CC_BIT_ROTATE_LEFT: case CC_BIT_ROTATE_RIGHT:
             n = (uint32_t)(ci_uint128_lo(arg) % width);
             if(!n){
-                *result = width <= 64 ? ci_uint128_from_uint64(lo) : cc_bit_builtin_words(lo, hi);
+                if(width <= 64) *result = ci_uint128_from_uint64(lo);
+                else *result = cc_bit_builtin_words(lo, hi);
                 return 1;
             }
             if(op == CC_BIT_ROTATE_RIGHT) n = width-n;

@@ -254,8 +254,9 @@ cc_print_type(MStringBuilder* sb, CcQualType t){
 static void
 cc_print_runtime_integer(MStringBuilder* sb, CiUint128 bits, uint32_t width, _Bool signed_){
     if(signed_ && ci_uint128_nonzero(ci_uint128_shr(bits, width-1))){
-        CiUint128 mask = width == 128 ? ci_uint128_from_int64(-1)
-            : ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), width), ci_uint128_from_uint64(1));
+        CiUint128 mask;
+        if(width == 128) mask = ci_uint128_from_int64(-1);
+        else mask = ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), width), ci_uint128_from_uint64(1));
         bits = ci_uint128_and(ci_uint128_sub(ci_uint128_from_uint64(0), bits), mask);
         msb_write_char(sb, '-');
     }
@@ -385,8 +386,9 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
             if(!sz || sz > 16){ msb_write_literal(sb, "<invalid enum>"); return; }
             CiUint128 bits;
             ci_uint128_read(&bits, data, sz);
-            CiUint128 mask = sz == 16 ? ci_uint128_from_int64(-1)
-                : ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), sz*8), ci_uint128_from_uint64(1));
+            CiUint128 mask;
+            if(sz == 16) mask = ci_uint128_from_int64(-1);
+            else mask = ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), sz*8), ci_uint128_from_uint64(1));
             _Bool signed_ = !ccqt_is_unsigned(e->underlying, !tgt->char_is_signed);
             for(size_t i = 0; i < e->enumerator_count; i++){
                 if(ci_uint128_eq(ci_uint128_and(e->enumerators[i]->value, mask), bits)){
@@ -438,8 +440,9 @@ cc_print_runtime_value(CcParser* p, CcQualType type, const void* data, MStringBu
                     }
                     CiUint128 storage;
                     ci_uint128_read(&storage, (const char*)data + f->offset, storage_sz);
-                    CiUint128 mask = f->bitwidth == 128 ? ci_uint128_from_int64(-1)
-                        : ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), f->bitwidth), ci_uint128_from_uint64(1));
+                    CiUint128 mask;
+                    if(f->bitwidth == 128) mask = ci_uint128_from_int64(-1);
+                    else mask = ci_uint128_sub(ci_uint128_shl(ci_uint128_from_uint64(1), f->bitwidth), ci_uint128_from_uint64(1));
                     CiUint128 val = ci_uint128_and(ci_uint128_shr(storage, f->bitoffset), mask);
                     cc_print_runtime_integer(sb, val, f->bitwidth,
                         !ccqt_is_unsigned(f->type, !tgt->char_is_signed));

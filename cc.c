@@ -58,10 +58,6 @@ static CiInterpreter cc_interp = {
         .module = &cc_interp.root.cc,
         .current = &cc_interp.root.cc.scope,
     },
-    .top_frame = {
-        .return_buf = &cc_interp.exit_code,
-        .return_size = sizeof cc_interp.exit_code,
-    },
     .can_dlopen = 1,
     .procedural_macros = 1,
 };
@@ -75,14 +71,11 @@ cc_cleanup_interp(void){
 static
 int
 cc_run_toplevel(CiInterpreter* ci){
+    int err;
     DRP_PROFILE_BEGIN(profile, "interpreter.toplevel");
-    CiInterpFrame* frame = &ci->top_frame;
-    while(frame->pc < frame->op_count){
-        int err = ci_interp_step(ci, frame);
-        if(err) return err;
-    }
-    return 0;
+    err = ci_interp_run(ci, ci->top_frame);
     DRP_PROFILE_END(profile);
+    return err;
 }
 
 int main(int argc, char** argv, char** envp){
@@ -91,7 +84,8 @@ int main(int argc, char** argv, char** envp){
           syntax_only        = 0,
           poison_frame_slots = 0,
           opt_noinline       = 0,
-          no_fun             = 0;
+          no_fun             = 0,
+          c_interp           = 0;
     uint32_t inline_budget = 12,
              inline_hint_budget = 40;
     Logger* logger = std_logger();
@@ -268,6 +262,13 @@ int main(int argc, char** argv, char** envp){
             .help = "Disable fun",
             .dest = ARGDEST(&no_fun),
         },
+        {
+            .name = SV("-fno-asm-interp"),
+            .altname1 = SV("--no-asm-interp"),
+            .help = "Disable the asm interpreter, use the C implementation",
+            .dest = ARGDEST(&c_interp),
+            .hidden = 1,
+        },
     };
     enum {HELP, HIDDEN_HELP, FISH};
     ArgToParse early_args[] = {
@@ -337,6 +338,7 @@ int main(int argc, char** argv, char** envp){
     cc_interp.inline_budget = inline_budget;
     cc_interp.inline_hint_budget = inline_hint_budget;
     cc_interp.nofun = no_fun;
+    cc_interp.force_c_interp = c_interp;
     err = cpp_define_builtin_macros(&cc_interp.parser.cpp);
     if(err) goto stringify_error;
     // _Argc, _Argv and args to main
@@ -403,23 +405,25 @@ int main(int argc, char** argv, char** envp){
             err = ci_register_sym(&cc_interp, SV("crt"), crt_syms[i].symname, crt_syms[i].sym);
             if(err) goto stringify_error;
         }
-        #ifndef NO_NATIVE_CALL
         // Temporary self-hosting bridge: expose assembly addresses through the
         // interpreter's symbol table without exporting them from the executable.
         static const struct {
             StringView symname; const void* sym;
         } bridge_syms[] = {
+            { SVI("ci_interp_execute_asm"), (void*)&ci_interp_execute_asm },
+            { SVI("ci_interp_callback_asm"), (void*)&ci_interp_callback_asm },
+            #ifndef NO_NATIVE_CALL
             { SVI("nc_abi_invoke"), (void*)&nc_abi_invoke },
             { SVI("nc_capture_slots"), nc_capture_slots },
             { SVI("nc_capture_slots_end"), nc_capture_slots_end },
             { SVI("nc_capture_entry"), (void*)&nc_capture_entry },
+            #endif
         };
         for(size_t i = 0; i < countof(bridge_syms); i++){
             err = ci_register_sym(&cc_interp, SV("native_bridge"), bridge_syms[i].symname,
                 (void*)(uintptr_t)bridge_syms[i].sym);
             if(err) goto stringify_error;
         }
-        #endif
     }
     err = cc_register_pragmas(&cc_interp.parser);
     if(err) goto stringify_error;
@@ -563,8 +567,8 @@ int main(int argc, char** argv, char** envp){
                     cc_print_statement(sb, cc_interp.root.cc.nodes.data[i]);
                 msb_write_literal(sb, "-------\n");
             }
-            for(size_t i = 0; i < cc_interp.root.ops.count; i++){
-                CiOp* op = &cc_interp.root.ops.data[i];
+            for(size_t i = 0; i < ci_code_count(&cc_interp.root.ops); i++){
+                CiOp* op = &ci_code_ops(&cc_interp.root.ops)[i];
                 size_t cur = sb->cursor;
                 msb_sprintf(sb, "  0x%02zx)  ", i);
                 ci_op_print(op, sb, cc_interp.parser.cpp.target->long_double_format);
@@ -1074,8 +1078,8 @@ cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb, _Bool ast){
         cc_print_statement(sb, (CcStmtNode*)func->body_tree);
     }
     if(func->interp_ops){
-        for(size_t i = 0; i < func->interp_ops->code.count; i++){
-            CiOp* op = &func->interp_ops->code.data[i];
+        for(size_t i = 0; i < func->interp_ops->code->op_count; i++){
+            CiOp* op = &func->interp_ops->code->ops[i];
             size_t cur = sb->cursor;
             msb_sprintf(sb, "  0x%02zx)  ", i);
             ci_op_print(op, sb, p->cpp.target->long_double_format);

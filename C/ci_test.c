@@ -37,9 +37,14 @@
 
 static const struct opt {
     _Bool noinline;
+    _Bool force_c_interp;
 } optimization_options[] = {
-    {.noinline = 0},
-    {.noinline = 1},
+    #ifndef __DRC__
+    {.noinline = 0, .force_c_interp = 0},
+    {.noinline = 1, .force_c_interp = 0},
+    #endif
+    {.noinline = 0, .force_c_interp = 1},
+    {.noinline = 1, .force_c_interp = 1},
 };
 
 TestFunction(test_interpreter){
@@ -139,8 +144,8 @@ TestFunction(test_interpreter){
                 "return f(2.0bf16,3.0bf16);"),
         },
         {
-            .name = "flattened memory and conversion shapes", .line = __LINE__,
-            .program = SV(
+             "flattened memory and conversion shapes", __LINE__,
+            SVI(
                 "struct Odd { unsigned char bytes[37]; };\n"
                 "__attribute__((noinline)) unsigned long long widen(signed char x) { return x; }\n"
                 "__attribute__((noinline)) unsigned char narrow(unsigned __int128 x) { return x; }\n"
@@ -161,6 +166,440 @@ TestFunction(test_interpreter){
                 "  return c.bytes[0] != 19 || c.bytes[36] != 73;\n"
                 "}\nreturn main();\n"
             ),
+        },
+        {
+            "execution loop: every wide bit builtin across limb boundaries", __LINE__,
+            SVI("typedef unsigned __int128 U;typedef __int128 S;\n"
+                "int check(U x){\n"
+                " unsigned n=0,l=0,t=0,lo=0,to=0;\n"
+                " for(unsigned i=0;i<128;i++)n+=(unsigned)((x>>i)&1);\n"
+                " while(l<128&&!((x>>(127-l))&1))l++;\n"
+                " while(t<128&&!((x>>t)&1))t++;\n"
+                " while(lo<128&&((x>>(127-lo))&1))lo++;\n"
+                " while(to<128&&((x>>to)&1))to++;\n"
+                " if(__builtin_popcountg(x)!=n||__builtin_parityg(x)!=(n&1)||__builtin_ffsg((S)x)!=(x?t+1:0))return 1;\n"
+                " if(__builtin_clrsbg((S)x)!=(((S)x<0?lo:l)-1))return 2;\n"
+                " if(__builtin_clzg(x)!=l||__builtin_ctzg(x)!=t||__builtin_clzg(x,-17)!=(x?(int)l:-17)||__builtin_ctzg(x,-19)!=(x?(int)t:-19))return 3;\n"
+                " if(__builtin_stdc_count_ones(x)!=n||__builtin_stdc_count_zeros(x)!=128-n||__builtin_stdc_has_single_bit(x)!=(n==1))return 4;\n"
+                " if(__builtin_stdc_leading_zeros(x)!=l||__builtin_stdc_trailing_zeros(x)!=t||__builtin_stdc_leading_ones(x)!=lo||__builtin_stdc_trailing_ones(x)!=to)return 5;\n"
+                " if(__builtin_stdc_first_leading_one(x)!=(x?l+1:0)||__builtin_stdc_first_trailing_one(x)!=(x?t+1:0))return 6;\n"
+                " if(__builtin_stdc_first_leading_zero(x)!=(lo==128?0:lo+1)||__builtin_stdc_first_trailing_zero(x)!=(to==128?0:to+1))return 7;\n"
+                " U floor=x?((U)1<<(127-l)):0,ceil=x<=1?1:(n==1?x:floor<<1);\n"
+                " if(__builtin_stdc_bit_floor(x)!=floor||__builtin_stdc_bit_ceil(x)!=ceil||__builtin_stdc_bit_width(x)!=128-l)return 8;\n"
+                " unsigned counts[]={0,1,7,31,63,64,65,127,128,129,255,256};for(unsigned j=0;j<12;j++){unsigned k=counts[j],r=k%128;U left=r?(x<<r)|(x>>(128-r)):x,right=r?(x>>r)|(x<<(128-r)):x;\n"
+                " U count=((U)1<<100)+k;\n"
+                " if(__builtin_stdc_rotate_left(x,count)!=left||__builtin_stdc_rotate_right(x,count)!=right)return 9;\n"
+                " unsigned char y=(unsigned char)x;unsigned s=k%8;unsigned char yl=s?(y<<s)|(y>>(8-s)):y,yr=s?(y>>s)|(y<<(8-s)):y;\n"
+                " if(__builtin_stdc_rotate_left(y,count)!=yl||__builtin_stdc_rotate_right(y,count)!=yr)return 10;\n"
+                " }return 0;\n"
+                "}\n"
+                "int run(void){if(check(0)||check(~(U)0)||check(((U)0xaaaaaaaaaaaaaaaaULL<<64)|0x5555555555555555ULL))return 1;\n"
+                "for(unsigned i=0;i<128;i++){U p=(U)1<<i;if(check(p)||check(~p)||check(p-1)||check(p+1))return 2;}return 0;}return run();\n"),
+        },
+        {
+            "execution loop: half and bfloat conversion chains select the destination format", __LINE__,
+            SVI("__attribute__((noinline)) __bf16 to_bfloat(_Float16 x){return (__bf16)x;}"
+                "__attribute__((noinline)) _Float16 to_half(__bf16 x){return (_Float16)x;}"
+                "union H{_Float16 f;unsigned short u;};union B{__bf16 f;unsigned short u;};"
+                "union H h={.u=0x3e00};union B b={.f=to_bfloat(h.f)};"
+                "if(b.u!=0x3fc0)return 1;"
+                "b.u=0xc010;h.f=to_half(b.f);if(h.u!=0xc080)return 2;"
+                "h.u=0x8000;b.f=to_bfloat(h.f);if(b.u!=0x8000)return 3;"
+                "b.u=0;h.f=to_half(b.f);return h.u!=0;"),
+        },
+        {
+            "execution loop: non-native float negation preserves payload bits", __LINE__,
+            SVI("typedef unsigned __int128 U;\n"
+                "unsigned short h(unsigned short bits){union{unsigned short u;_Float16 f;}a={.u=bits},b;b.f=-a.f;return b.u;}\n"
+                "unsigned short bf(unsigned short bits){union{unsigned short u;__bf16 f;}a={.u=bits},b;b.f=-a.f;return b.u;}\n"
+                "U q(U bits){union{U u;_Float128 f;}a={.u=bits},b;b.f=-a.f;return b.u;}\n"
+                "int run(void){unsigned short v[]={0,0x8000,1,0x8001,0x3c00,0x7c00,0xfc00,0x7e35,0x7c35,0x7f80,0x7fc5};\n"
+                "for(unsigned i=0;i<sizeof(v)/sizeof(v[0]);i++)if(h(v[i])!=(v[i]^0x8000)||bf(v[i])!=(v[i]^0x8000))return 1;\n"
+                "U sign=(U)1<<127;U w[]={0,sign,1,sign|1,(U)0x3fff<<112,(U)0x7fff<<112,((U)0x7fff<<112)|123,((U)0x7fff800000000001ULL<<64)|456};\n"
+                "for(unsigned i=0;i<sizeof(w)/sizeof(w[0]);i++)if(q(w[i])!=(w[i]^sign))return 2;return 0;}return run();\n"),
+        },
+        {
+            "execution loop: floating truth ignores only the sign bit", __LINE__,
+            SVI("typedef unsigned __int128 U128;\n"
+                "#define TEST(T,U,N) int N(U bits){union{U bits;T f;}x={.bits=bits};"
+                "int e=(bits&((U)~(U)0>>1))!=0;"
+                "return ((_Bool)x.f)!=e||(!x.f)!=(!e)||(x.f?1:0)!=e;}\n"
+                "TEST(_Float16,unsigned short,h) TEST(__bf16,unsigned short,b)"
+                "TEST(float,unsigned,f) TEST(double,unsigned long long,d) TEST(_Float128,U128,q)\n"
+                "int run(void){unsigned short v[]={0,0x8000,1,0x8001,0x3c00,0x7c00,0xfc00,0x7e01,0x7c01,0x7f80,0x7fc1};"
+                "for(unsigned i=0;i<sizeof(v)/sizeof(v[0]);i++)if(h(v[i])||b(v[i]))return 1;"
+                "unsigned w[]={0,0x80000000,1,0x80000001,0x3f800000,0x7f800000,0xff800000,0x7fc00001,0x7f800001};"
+                "for(unsigned i=0;i<sizeof(w)/sizeof(w[0]);i++)if(f(w[i]))return 2;"
+                "unsigned long long z[]={0,1,1ULL<<63,(1ULL<<63)|1,0x3ff0000000000000ULL,"
+                "0x7ff0000000000000ULL,0xfff0000000000000ULL,0x7ff8000000000001ULL,0x7ff0000000000001ULL};"
+                "for(unsigned i=0;i<sizeof(z)/sizeof(z[0]);i++)if(d(z[i]))return 3;"
+                "U128 sign=(U128)1<<127;U128 a[]={0,1,sign,sign|1,(U128)0x3fff<<112,"
+                "(U128)0x7fff<<112,(U128)0xffff<<112,((U128)0x7fff<<112)|1};"
+                "for(unsigned i=0;i<sizeof(a)/sizeof(a[0]);i++)if(q(a[i]))return 4;return 0;}return run();"),
+        },
+        {
+            "execution loop: x87 negation clears padding and preserves payload", __LINE__,
+            SVI("void neg(long double* d,long double* s){*d=-*s;}\n"
+                "int run(void){union{long double f;unsigned char b[16];}a,b;\n"
+                "unsigned short e[]={0,0x8000,0x3fff,0x7fff,0xffff};\n"
+                "for(int k=0;k<5;k++){for(int i=0;i<16;i++){a.b[i]=i*13+7;b.b[i]=0xa5;}a.b[8]=e[k];a.b[9]=e[k]>>8;\n"
+                "neg(&b.f,&a.f);for(int i=0;i<10;i++)if(b.b[i]!=(a.b[i]^(i==9?0x80:0)))return 1;for(int i=10;i<16;i++)if(b.b[i])return 2;}return 0;}return run();\n"),
+            .target = &cc_target_x86_64_linux,
+        },
+        {
+            "checked conversions: wide VLA bounds and signed pointer indices", __LINE__,
+            SVI("typedef unsigned __int128 U;typedef __int128 S;"
+                "int bound(S n){return sizeof(char[n])==(U)n;}"
+                "int ubound(U n){return sizeof(char[n])==n;}"
+                "int index(S n){int a[]={11,22,33};int* p=a+1;return p[n];}"
+                "int uindex(U n){int a[]={11,22,33};return a[n];}"
+                "U max=((U)1<<(sizeof(void*)*8))-1;"
+                "return !(bound(1)&&bound((S)max)&&ubound(1)&&ubound(max)"
+                "&&index(-1)==11&&index(0)==22&&index(1)==33&&uindex(2)==33);"),
+        },
+        {
+            "execution loop: atomic RMW and CAS across scalar widths", __LINE__,
+            SVI("#define TEST(T,N) int N(T a,T b){T x=a,old,expected;"
+                "old=__atomic_fetch_add(&x,b,5);if(old!=a||x!=(T)(a+b))return 1;"
+                "old=__atomic_fetch_sub(&x,b,5);if(old!=(T)(a+b)||x!=a)return 2;"
+                "old=__atomic_fetch_xor(&x,b,5);if(old!=a||x!=(T)(a^b))return 3;"
+                "old=__atomic_fetch_or(&x,b,5);if(old!=(T)(a^b)||x!=(T)(a|b))return 4;"
+                "old=__atomic_fetch_and(&x,b,5);if(old!=(T)(a|b)||x!=b)return 5;"
+                "old=__atomic_exchange_n(&x,a,5);if(old!=b||x!=a)return 6;"
+                "expected=~a;if(__atomic_compare_exchange_n(&x,&expected,b,0,5,5)||expected!=a||x!=a)return 7;"
+                "if(!__atomic_compare_exchange_n(&x,&expected,b,0,5,5)||expected!=a||x!=b)return 8;"
+                "expected=b;while(!__atomic_compare_exchange_n(&x,&expected,a,1,5,5))expected=b;"
+                "return x!=a;}\n"
+                "TEST(unsigned char,f1) TEST(unsigned short,f2) TEST(unsigned,f4) TEST(unsigned long long,f8)\n"
+                "int g(void){unsigned long long v[]={0,1,~0ULL,1ULL<<63,0x5555555555555555ULL};"
+                "for(int i=0;i<5;i++)for(int j=0;j<5;j++)"
+                "if(f1(v[i],v[j])||f2(v[i],v[j])||f4(v[i],v[j])||f8(v[i],v[j]))return 1;return 0;}return g();"),
+        },
+        {
+            "execution loop: packed bitfield widths preserve adjacent fields", __LINE__,
+            SVI("typedef unsigned __int128 U;typedef __int128 S;\n"
+                "#define TEST(W) struct __attribute__((packed)) B##W {unsigned p:3;U u:W;S s:W;unsigned t:5;};"
+                "int f##W(U v){struct B##W b={.p=5,.t=21};b.u=v;b.s=v;"
+                "U mask=~(U)0>>(128-W);S signed_value=(S)(v<<(128-W))>>(128-W);"
+                "if(b.u!=(v&mask)||b.s!=signed_value||b.p!=5||b.t!=21)return 1;"
+                "b.u=~v;b.s=~v;"
+                "return b.u!=((~v)&mask)||b.s!=((S)((~v)<<(128-W))>>(128-W))||b.p!=5||b.t!=21;}\n"
+                "TEST(1) TEST(7) TEST(9) TEST(63) TEST(64) TEST(65) TEST(127) TEST(128)\n"
+                "int g(void){U v[]={0,1,~(U)0,(U)1<<63,(U)1<<64,(U)1<<127,"
+                "((U)0xaaaaaaaaaaaaaaaaULL<<64)|0x5555555555555555ULL};"
+                "for(int i=0;i<7;i++)if(f1(v[i])||f7(v[i])||f9(v[i])||f63(v[i])"
+                "||f64(v[i])||f65(v[i])||f127(v[i])||f128(v[i]))return 1;return 0;}return g();"),
+            .sysv_bitfields = 1,
+        },
+        {
+            "execution loop: packed scalar bitfields across byte boundaries", __LINE__,
+            SVI("#define TEST(U,S,W,N) struct __attribute__((packed)) B##N {unsigned p:3;U u:W;S s:W;unsigned t:5;};"
+                "int set##N(struct B##N* b,unsigned long long v){b->u=v;b->s=v;"
+                "unsigned long long mask=~0ULL>>(64-W);"
+                "long long expected=(long long)(v<<(64-W))>>(64-W);"
+                "return b->u!=(v&mask)||b->s!=expected||b->p!=5||b->t!=21;}"
+                "int f##N(unsigned long long v){struct B##N b={.p=5,.t=21};"
+                "if(set##N(&b,v)||set##N(&b,~v))return 1;"
+                "return b.u!=((~v)&(~0ULL>>(64-W)))"
+                "||b.s!=((long long)((~v)<<(64-W))>>(64-W));}\n"
+                "TEST(unsigned char,signed char,1,c1) TEST(unsigned char,signed char,7,c7) TEST(unsigned char,signed char,8,c8)\n"
+                "TEST(unsigned short,short,9,s9) TEST(unsigned short,short,15,s15) TEST(unsigned short,short,16,s16)\n"
+                "TEST(unsigned,int,17,i17) TEST(unsigned,int,31,i31) TEST(unsigned,int,32,i32)\n"
+                "TEST(unsigned long long,long long,33,l33) TEST(unsigned long long,long long,63,l63) TEST(unsigned long long,long long,64,l64)\n"
+                "int g(void){unsigned long long v[]={0,1,~0ULL,1ULL<<7,1ULL<<15,1ULL<<31,1ULL<<63,0xaaaaaaaa55555555ULL};"
+                "for(int i=0;i<8;i++)if(fc1(v[i])||fc7(v[i])||fc8(v[i])||fs9(v[i])||fs15(v[i])||fs16(v[i])"
+                "||fi17(v[i])||fi31(v[i])||fi32(v[i])||fl33(v[i])||fl63(v[i])||fl64(v[i]))return 1;return 0;}return g();"),
+            .sysv_bitfields = 1,
+        },
+        {
+            "execution loop: wide carry, borrow, bitwise and unary operations", __LINE__,
+            SVI("typedef unsigned __int128 U;"
+                "int f(U a,U b){U s=a+b,d=a-b;"
+                "if(s-a!=b||d+b!=a||-a+a!=0||~~a!=a)return 1;"
+                "if((a&b)!=(a+b-(a|b))||((a^b)^(a&b))!=(a|b))return 2;"
+                "return 0;}"
+                "int g(void){U v[]={0,1,(U)1<<64,((U)1<<64)-1,(U)1<<127,~(U)0};"
+                "for(int i=0;i<6;i++)for(int j=0;j<6;j++)if(f(v[i],v[j]))return 1;return 0;}"
+                "return g();"),
+        },
+        {
+            "execution loop: packed wide bitwise operands and aliased destinations", __LINE__,
+            SVI("typedef unsigned __int128 U;"
+                "struct __attribute__((packed)) P{unsigned char tag;U a,b,c;};"
+                "int f(U a,U b){struct P p={.tag=93,.a=a,.b=b};"
+                "p.c=p.a&p.b;if(p.c!=(a&b)||p.tag!=93)return 1;"
+                "p.a|=p.b;if(p.a!=(a|b)||p.b!=b)return 2;"
+                "p.b^=p.a;if(p.b!=(b^(a|b)))return 3;"
+                "p.b&=p.b;if(p.b!=(b^(a|b)))return 4;"
+                "p.c|=p.c;if(p.c!=(a&b))return 5;"
+                "p.a^=p.a;return p.a!=0||p.tag!=93;}"
+                "int g(void){U v[]={0,1,((U)1<<64)-1,(U)1<<64,(U)1<<127,~(U)0};"
+                "for(int i=0;i<6;i++)for(int j=0;j<6;j++)if(f(v[i],v[j]))return 1;return 0;}return g();"),
+        },
+        {
+            "execution loop: wide comparisons and valid shift counts", __LINE__,
+            SVI("typedef unsigned __int128 U;typedef __int128 S;"
+                "int f(U a,U b){unsigned long long ah=a>>64,al=a,bh=b>>64,bl=b;"
+                "int lt=ah<bh||(ah==bh&&al<bl),eq=ah==bh&&al==bl;"
+                "if((a<b)!=lt||(a>b)!=(!lt&&!eq)||(a<=b)!=(lt||eq)||(a>=b)!=!lt"
+                "||(a==b)!=eq||(a!=b)!=!eq)return 1;"
+                "lt=(long long)ah<(long long)bh||(ah==bh&&al<bl);"
+                "if(((S)a<(S)b)!=lt||((S)a>(S)b)!=(!lt&&!eq)"
+                "||((S)a<=(S)b)!=(lt||eq)||((S)a>=(S)b)!=!lt)return 2;"
+                "return 0;}"
+                "int shift(U n){U a=((U)0x123456789abcdefULL<<64)|0xfedcba987654321ULL;"
+                "U r=a<<n;"
+                "U e=a;for(unsigned i=0;i<(unsigned)n;i++)e+=e;return r!=e;}"
+                "int g(void){U v[]={0,1,((U)1<<64)-1,(U)1<<64,(U)1<<127,~(U)0};"
+                "for(int i=0;i<6;i++)for(int j=0;j<6;j++)if(f(v[i],v[j]))return 1;"
+                "for(int i=0;i<128;i++)if(shift(i))return 2;"
+                "return 0;}return g();"),
+        },
+        {
+            "execution loop: software float arithmetic and unordered comparisons", __LINE__,
+            SVI("#define TEST(T,N) int N(T a,T b,T z){"
+                "T c=a+b;if(c!=5||a-b!=-1||a*b!=6||b/a!=(T)1.5||-a!=-2)return 1;"
+                "if(!(a<b)||!(b>a)||!(a<=b)||!(b>=a)||a==b||!(a!=b))return 2;"
+                "T n=z/z;if(n==a||!(n!=a)||n<a||n>a||n<=a||n>=a)return 3;"
+                "if(a==n||!(a!=n)||a<n||a>n||a<=n||a>=n)return 4;"
+                "return z!=-z||z<-z||z>-z||!(z<=-z)||!(z>=-z);}\n"
+                "TEST(_Float16,h) TEST(__bf16,b) TEST(long double,l) TEST(_Float128,q)\n"
+                "return h(2,3,0)||b(2,3,0)||l(2,3,0)||q(2,3,0);"),
+        },
+        {
+            "execution loop: checked arithmetic mixed operands and all result widths", __LINE__,
+            SVI("typedef __int128 S;\n"
+                "#define CHECK(T, LO, HI) { T r; S e; int overflow; e=(S)a+(S)b; overflow=__builtin_add_overflow(a,b,&r); if(overflow!=(e<(S)(LO)||e>(S)(HI))||r!=(T)e)return 1; e=(S)a-(S)b; overflow=__builtin_sub_overflow(a,b,&r); if(overflow!=(e<(S)(LO)||e>(S)(HI))||r!=(T)e)return 2; e=(S)a*(S)b; overflow=__builtin_mul_overflow(a,b,&r); if(overflow!=(e<(S)(LO)||e>(S)(HI))||r!=(T)e)return 3; }\n"
+                "#define FN(N,A,B) int N(A a,B b){ CHECK(signed char,-128,127) CHECK(unsigned char,0,255) CHECK(short,-32768,32767) CHECK(unsigned short,0,65535) CHECK(int,-2147483647-1,2147483647) CHECK(unsigned,0,4294967295ULL) CHECK(long long,-9223372036854775807LL-1,9223372036854775807LL) CHECK(unsigned long long,0,18446744073709551615ULL) return 0; }\n"
+                "FN(ss,long long,long long)\n"
+                "FN(su,long long,unsigned long long)\n"
+                "FN(us,unsigned long long,long long)\n"
+                "FN(uu,unsigned long long,unsigned long long)\n"
+                "FN(narrow,signed char,unsigned short)\n"
+                "FN(mixed,unsigned,signed short)\n"
+                "int f(void){unsigned long long v[]={0,1,~0ULL,1ULL<<63,(1ULL<<63)-1,1ULL<<32};\n"
+                "for(int i=0;i<6;i++)for(int j=0;j<6;j++){\n"
+                "if(ss(v[i],v[j])||su(v[i],v[j])||us(v[i],v[j])||uu(v[i],v[j]))return 1;\n"
+                "if(narrow(v[i],v[j])||mixed(v[i],v[j]))return 2;}\n"
+                "long long limits[]={127,32767,2147483647,9223372036854775807LL};\n"
+                "for(int i=0;i<4;i++){long long m=limits[i];\n"
+                "if(ss(m,1)||ss(-m-1,1)||ss(-m-1,-1)||uu((unsigned long long)m*2+1,1))return 3;}\n"
+                "if(narrow(-128,65535)||mixed(~0u,-32768))return 4;\n"
+                "return 0;}return f();\n"),
+        },
+        {
+            "execution loop: 128-bit integer extension and truncation", __LINE__,
+            SVI("typedef unsigned __int128 U;typedef __int128 S;"
+                "int f(signed char a,short b,int c,long long d,"
+                "unsigned char e,unsigned short f,unsigned g,unsigned long long h){"
+                "if((S)a!=-7||(S)b!=-300||(S)c!=-70000||(S)d!=-9223372036854775807LL)return 1;"
+                "if((U)a!=(U)-7||(U)b!=(U)-300||(U)c!=(U)-70000||(U)d!=(U)-9223372036854775807LL)return 2;"
+                "if((U)e!=255||(U)f!=65535||(U)g!=4294967295ULL||(U)h!=18446744073709551615ULL)return 3;"
+                "if((S)e!=255||(S)f!=65535||(S)g!=4294967295ULL||(S)h!=(S)18446744073709551615ULL)return 4;"
+                "return 0;}"
+                "int t(U x,S y){"
+                "if((unsigned long long)x!=0xfedcba9876543210ULL||(unsigned)x!=0x76543210u)return 5;"
+                "if((unsigned short)x!=0x3210||(unsigned char)x!=0x10)return 6;"
+                "if((long long)y!=-300||(int)y!=-300||(short)y!=-300||(unsigned char)y!=212)return 7;"
+                "return 0;}"
+                "return f(-7,-300,-70000,-9223372036854775807LL,255,65535,~0u,~0ULL)"
+                "||t(((U)0x123456789abcdef0ULL<<64)|0xfedcba9876543210ULL,-300);"),
+        },
+        {
+            "execution loop: unsigned 128-bit multiplication modulo 2 to the 128", __LINE__,
+            SVI("typedef unsigned __int128 U;"
+                "U mul(U a,U b){a*=b;return a;}"
+                "int check(U a,U b){unsigned x[4],y[4],r[4]={0};"
+                "for(int i=0;i<4;i++){x[i]=(unsigned)a;y[i]=(unsigned)b;a/=((U)1<<32);b/=((U)1<<32);}"
+                "for(int i=0;i<4;i++){unsigned long long carry=0;"
+                "for(int j=0;i+j<4;j++){unsigned long long v=(unsigned long long)x[i]*y[j]+r[i+j]+carry;"
+                "r[i+j]=(unsigned)v;carry=v>>32;}}"
+                "U aa=0,bb=0,expected=0;"
+                "for(int i=3;i>=0;i--){aa=(aa<<32)|x[i];bb=(bb<<32)|y[i];expected=(expected<<32)|r[i];}"
+                "return mul(aa,bb)!=expected;}"
+                "int f(void){U values[]={0,1,~(U)0,(U)1<<64,(U)1<<127,"
+                "((U)0xfedcba9876543210ULL<<64)|0x0123456789abcdefULL};"
+                "for(int i=0;i<6;i++)for(int j=0;j<6;j++)if(check(values[i],values[j]))return 1;"
+                "return 0;}return f();"),
+        },
+        {
+            "execution loop: 128-bit right shifts across limb boundaries", __LINE__,
+            SVI("typedef unsigned __int128 U;typedef __int128 S;"
+                "U logical(U x,U n){x>>=n;return x;}S arithmetic(S x,U n){x>>=n;return x;}"
+                "int check(unsigned long long lo,unsigned long long hi,U n,unsigned steps){"
+                "U x=((U)hi<<64)|lo;unsigned long long a=lo,b=hi,c=lo,d=hi;"
+                "unsigned long long sign=hi&0x8000000000000000ULL;"
+                "for(unsigned i=0;i<steps;i++){a=(a>>1)|(b<<63);b>>=1;c=(c>>1)|(d<<63);d=(d>>1)|sign;}"
+                "return logical(x,n)!=(((U)b<<64)|a)||(U)arithmetic((S)x,n)!=(((U)d<<64)|c);}"
+                "int f(void){unsigned counts[]={0,1,63,64,65,127};"
+                "unsigned long long words[][2]={{0,0},{~0ULL,~0ULL},{0,0x8000000000000000ULL},"
+                "{0xfedcba9876543210ULL,0x123456789abcdef0ULL}};"
+                "for(int i=0;i<4;i++)for(int j=0;j<6;j++)if(check(words[i][0],words[i][1],counts[j],counts[j]))return 1;"
+                "return 0;}return f();"),
+        },
+        {
+            "execution loop: floating conversions preserve range and truncation", __LINE__,
+            SVI("long long s(double x){return (long long)x;}"
+                "unsigned long long u(double x){return (unsigned long long)x;}"
+                "double d(long long x){return (double)x;}"
+                "float f(unsigned long long x){return (float)x;}"
+                "double widen(float x){return (double)x;}"
+                "float narrow(double x){return (float)x;}"
+                "if(u(-0.5))return 2;"
+                "if(s(-0x1p63)!=(-9223372036854775807LL-1)||s(-123.75)!=-123)return 3;"
+                "if(u(0x1.fffffffffffffp63)!=18446744073709549568ULL)return 4;"
+                "if(d(-9223372036854775807LL-1)!=-0x1p63||f(~0ULL)!=0x1p64f)return 5;"
+                "if(widen(-1.25f)!=-1.25||narrow(0x1.000001p0)!=1.0f)return 6;"
+                "return 0;"),
+        },
+        {
+            "execution loop: byte bit builtins exhaustive values", __LINE__,
+            SVI("int f(unsigned char x){"
+                "unsigned v=x; int n=0,l=0,t=0;"
+                "for(unsigned y=v;y;y>>=1)n+=y&1;"
+                "for(unsigned y=128;y&&!(v&y);y>>=1)l++;"
+                "for(unsigned y=1;y<256&&!(v&y);y<<=1)t++;"
+                "if(__builtin_popcountg(x)!=n||__builtin_parityg(x)!=(n&1))return 1;"
+                "if(__builtin_clzg(x)!=l||__builtin_ctzg(x)!=t)return 2;"
+                "if(__builtin_ffsg((signed char)x)!=(v?t+1:0))return 3;"
+                "if(__builtin_stdc_count_zeros(x)!=8-n||__builtin_stdc_bit_width(x)!=8-l)return 4;"
+                "unsigned floor=v?(1u<<(7-l)):0,ceil=v<=1?1:(n==1?v:floor*2);"
+                "if(__builtin_stdc_bit_floor(x)!=floor||__builtin_stdc_bit_ceil(x)!=(unsigned char)ceil)return 11;"
+                "if(__builtin_stdc_first_leading_one(x)!=(v?l+1:0))return 5;"
+                "if(__builtin_stdc_first_trailing_one(x)!=(v?t+1:0))return 6;"
+                "if(__builtin_stdc_has_single_bit(x)!=(n==1))return 7;"
+                "int rs=0;unsigned sign=v>>7;"
+                "for(unsigned m=64;m&&((!!(v&m))==sign);m>>=1)rs++;"
+                "if(__builtin_clrsbg((signed char)x)!=rs)return 10;"
+                "for(unsigned k=0;k<17;k++){unsigned r=k%8;"
+                "if(__builtin_stdc_rotate_left(x,k)!=(unsigned char)((v<<r)|(v>>(8-r))))return 8;"
+                "if(__builtin_stdc_rotate_right(x,k)!=(unsigned char)((v>>r)|(v<<(8-r))))return 9;}"
+                "return 0;}"
+                "int g(void){for(unsigned i=0;i<256;i++)if(f(i))return 1;return 0;}return g();"),
+        },
+        {
+            "execution loop: halfword sign counts and bit ceilings at boundaries", __LINE__,
+            SVI("int check(short x,unsigned v){unsigned n=0,sign=v>>15;"
+                "for(unsigned m=16384;m&&((!!(v&m))==sign);m>>=1)n++;"
+                "if(__builtin_clrsbg(x)!=n)return 1;"
+                "unsigned p=v?v-1:0;p|=p>>1;p|=p>>2;p|=p>>4;p|=p>>8;"
+                "return __builtin_stdc_bit_ceil((unsigned short)v)!=(unsigned short)(p+1);}"
+                "int run(void){for(unsigned i=0;i<16;i++){unsigned p=1u<<i;"
+                "for(int d=-1;d<=1;d++){unsigned v=p+d,w=65535-v;"
+                "if(check((short)v,v)||check((short)w,w))return 1;}}"
+                "return 0;}return run();"),
+        },
+        {
+            "execution loop: scalar bit powers at every boundary", __LINE__,
+            SVI("#define CHECK(T,N) int N(T x){T floor=0;"
+                "for(unsigned i=0;i<sizeof(T)*8;i++)if(x>>i)floor=(T)1<<i;"
+                "T ceil=x<=1?1:(x==floor?floor:floor*2);"
+                "return __builtin_stdc_bit_floor(x)!=floor||__builtin_stdc_bit_ceil(x)!=ceil;}\n"
+                "CHECK(unsigned,c32) CHECK(unsigned long long,c64)\n"
+                "int run(void){if(c32(0)||c64(0)||c32(~0u)||c64(~0ull))return 1;"
+                "for(unsigned i=0;i<64;i++){unsigned long long p=1ull<<i;"
+                "if(c64(p)||c64(p-1)||c64(p+1))return 2;"
+                "if(i<32&&(c32(p)||c32(p-1)||c32(p+1)))return 3;}"
+                "return 0;}return run();"),
+        },
+        {
+            "execution loop: fixed memory widths preserve surrounding bytes", __LINE__,
+            SVI("#define CHECK(N) int c##N(int seed){"
+                "struct __attribute__((packed)) Box{unsigned char a,b[N],z;};"
+                "struct Box box={.a=seed,.z=seed+1};"
+                "for(unsigned i=0;i<N;i++)if(box.b[i])return 1;"
+                "unsigned char src[40],dst[40];"
+                "for(unsigned i=0;i<40;i++){src[i]=seed+i;dst[i]=255;}"
+                "__builtin_memcpy(dst+3,src+1,N);"
+                "for(unsigned i=0;i<40;i++)if(dst[i]!=(i>=3&&i<3+N?src[i-2]:255))return 2;"
+                "__builtin_memcpy(box.b,dst+3,N);"
+                "if(box.a!=seed||box.z!=seed+1)return 3;"
+                "for(unsigned i=0;i<N;i++)if(box.b[i]!=src[i+1])return 4;"
+                "return 0;}\n"
+                "CHECK(1) CHECK(2) CHECK(4) CHECK(8) CHECK(16)\n"
+                "return c1(7)||c2(9)||c4(11)||c8(13)||c16(15);"),
+        },
+        {
+            "execution loop: dynamic overlapping copies sweep every size", __LINE__,
+            SVI("int copy(int n,int capture){unsigned char a[96];typedef unsigned char Row[n];"
+                "Row* src=(Row*)a;Row* dst=(Row*)(a+1);"
+                "for(int i=0;i<96;i++)a[i]=i;"
+                "if(capture){unsigned char* r=(*dst=*src);"
+                "for(int i=0;i<n;i++)if(r[i]!=i)return 1;}"
+                "else *dst=*src;"
+                "for(int i=0;i<96;i++)if(a[i]!=(i>=1&&i<=n?i-1:i))return 2;"
+                "for(int i=0;i<96;i++)a[i]=i;"
+                "if(capture){unsigned char* r=(*src=*dst);"
+                "for(int i=0;i<n;i++)if(r[i]!=i+1)return 3;}"
+                "else *src=*dst;"
+                "for(int i=0;i<96;i++)if(a[i]!=(i<n?i+1:i))return 4;"
+                "*src=*src;"
+                "for(int i=0;i<96;i++)if(a[i]!=(i<n?i+1:i))return 5;"
+                "return 0;}"
+                "int f(void){for(int n=1;n<=32;n++){"
+                "if(copy(n,0)||copy(n,1))return n;}return 0;}return f();"),
+        },
+        {
+            "execution loop: overlapping small and large memory copies", __LINE__,
+            SVI("int f(void){unsigned char a[96];"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a+1,a,0);"
+                "for(int i=0;i<0;i++)if(a[i+1]!=i)return 1;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a,a+1,0);"
+                "for(int i=0;i<0;i++)if(a[i]!=i+1)return 2;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a+1,a,1);"
+                "for(int i=0;i<1;i++)if(a[i+1]!=i)return 1;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a,a+1,1);"
+                "for(int i=0;i<1;i++)if(a[i]!=i+1)return 2;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a+1,a,2);"
+                "for(int i=0;i<2;i++)if(a[i+1]!=i)return 1;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a,a+1,2);"
+                "for(int i=0;i<2;i++)if(a[i]!=i+1)return 2;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a+1,a,3);"
+                "for(int i=0;i<3;i++)if(a[i+1]!=i)return 1;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a,a+1,3);"
+                "for(int i=0;i<3;i++)if(a[i]!=i+1)return 2;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a+1,a,4);"
+                "for(int i=0;i<4;i++)if(a[i+1]!=i)return 1;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a,a+1,4);"
+                "for(int i=0;i<4;i++)if(a[i]!=i+1)return 2;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a+1,a,8);"
+                "for(int i=0;i<8;i++)if(a[i+1]!=i)return 1;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a,a+1,8);"
+                "for(int i=0;i<8;i++)if(a[i]!=i+1)return 2;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a+1,a,16);"
+                "for(int i=0;i<16;i++)if(a[i+1]!=i)return 1;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a,a+1,16);"
+                "for(int i=0;i<16;i++)if(a[i]!=i+1)return 2;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a+1,a,24);"
+                "for(int i=0;i<24;i++)if(a[i+1]!=i)return 1;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a,a+1,24);"
+                "for(int i=0;i<24;i++)if(a[i]!=i+1)return 2;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a+1,a,32);"
+                "for(int i=0;i<32;i++)if(a[i+1]!=i)return 1;"
+                "for(int i=0;i<96;i++)a[i]=i;__builtin_memcpy(a,a+1,32);"
+                "for(int i=0;i<32;i++)if(a[i]!=i+1)return 2;"
+                "return 0;}return f();"),
+        },
+        {
+            "execution loop: unordered float comparisons in both operand orders", __LINE__,
+            SVI("int f(float a,float b){"
+                "return (a==b) || !(a!=b) || (a<b) || (a<=b) || (a>b) || (a>=b);}"
+                "int g(double a,double b){"
+                "if(a==b) return 1; if(!(a!=b)) return 2; if(a<b) return 3;"
+                "if(a<=b) return 4; if(a>b) return 5; if(a>=b) return 6; return 0;}"
+                "union F{unsigned u;float f;} fval={.u=0x7fc00001u};"
+                "union D{unsigned long long u;double d;} dval={.u=0x7ff8000000000001ULL};"
+                "return f(fval.f,1.0f) || f(1.0f,fval.f) || g(dval.d,1.0) || g(1.0,dval.d);"),
+        },
+        {
+            "execution loop: recursive calls resume around wide arithmetic helpers", __LINE__,
+            SVI("struct S{long long a,b,c;};"
+                "struct S f(int n){"
+                "if(!n)return (struct S){1,2,3};"
+                "struct S s=f(n-1); unsigned __int128 x=(unsigned __int128)s.a<<80;"
+                "s.a=(long long)((x/3*3+x%3)>>80)+n; s.b+=n*2; s.c+=n*3; return s;}"
+                "int g(void){for(int i=0;i<12;i++){struct S s=f(i);long long t=i*(i+1)/2;"
+                "if(s.a!=1+t || s.b!=2+2*t || s.c!=3+3*t)return 1;}return 0;} return g();"),
         },
         {
             "integer arithmetic preserves signedness in register and immediate forms", __LINE__,
@@ -2233,6 +2672,18 @@ TestFunction(test_interpreter){
             SVI("int f(int x){int q=(x/=8);return q==-1&&x==-1;}"
                 "long long g(long long x){long long r=(x%=8);return r==-1&&x==-1;}"
                 "int x=-9;long long y=-9;x%=8;y/=8;return f(-9)&&g(-9)&&x==-1&&y==-1;"),
+            .exit_code=1,
+        },
+        {
+            "compound division: narrow operands retain quotient and remainder", __LINE__,
+            SVI("#define CHECK(T,N) int N(T a,T b,long long q,long long r){T x=a,y=a;"
+                "x/=b;y%=b;return x==q&&y==r;}\n"
+                "CHECK(signed char,s8) CHECK(unsigned char,u8) CHECK(short,s16) "
+                "CHECK(unsigned short,u16) CHECK(int,s32) CHECK(unsigned,u32)\n"
+                "return s8(-128,3,-42,-2)&&s8(127,-3,-42,1)"
+                "&&u8(255,16,15,15)&&s16(-32768,257,-127,-129)"
+                "&&u16(65535,257,255,0)&&s32(-2147483647-1,3,-715827882,-2)"
+                "&&u32(4294967295u,3,1431655765,0);\n"),
             .exit_code=1,
         },
         {
@@ -6208,11 +6659,6 @@ TestFunction(test_interpreter){
             .exit_code = 42,
         },
         {
-            "fold: division by zero uses runtime behavior", __LINE__,
-            SVI("return 42 / 0;\n"),
-            .exit_code = 0,
-        },
-        {
             "fold: constexpr variable", __LINE__,
             SVI("constexpr int n = 6; return n * 7;\n"),
             .exit_code = 42,
@@ -6348,16 +6794,6 @@ TestFunction(test_interpreter){
                 "&&h(sign)==sign&&f(1)==~0u&&g(1)==~0ull"
                 "&&h(1)==~(unsigned __int128)0;\n"),
             .exit_code = 1,
-        },
-        {
-            "arith: signed division overflow stays within VM arithmetic", __LINE__,
-            SVI("int f(int x,int y){return x/y==x&&x%y==0;}"
-                "int g(long long x,long long y){return x/y==x&&x%y==0;}"
-                "int h(__int128 x,__int128 y){return x/y==x&&x%y==0;}"
-                "return f(-2147483647-1,-1)"
-                "&&g(-9223372036854775807ll-1,-1)"
-                "&&h(-((__int128)1<<126)*2,-1);\n"),
-            .exit_code=1,
         },
         {
             "arith: signed 128 minimum division and remainder", __LINE__,
@@ -7271,6 +7707,126 @@ TestFunction(test_interpreter){
                 "_Bool flag=nullptr; _Any boxed=nullptr; int* wide=0ui128;\n"
                 "return a==0&&b==0&&c==0&&d==0&&q==p&&r==(4-4)&&!flag"
                 "&&boxed.type==typeof(nullptr)&&wide==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "overflow conditions branch on the original flag", __LINE__,
+            SVI("__attribute__((noinline)) int probe(unsigned a,unsigned b){unsigned r;\n"
+                "if(__builtin_mul_overflow(a,b,&r))return 1;return r==6?2:3;}\n"
+                "return probe(2,3)==2&&probe(~0u,2)==1;\n"),
+            .exit_code = 1,
+        },
+        {
+            "overflow assignment commits its flag after the result store", __LINE__,
+            SVI("__attribute__((noinline)) int probe(void){union {unsigned char result; _Bool flag;} u={0};\n"
+                "u.flag=__builtin_add_overflow(255u,1u,&u.result);return u.flag;}return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "pointer arithmetic consumes narrow indices directly", __LINE__,
+            SVI("__attribute__((noinline)) long long* add(long long* p,unsigned short i){return p+i;}\n"
+                "__attribute__((noinline)) long long* reverse(short i,long long* p){return i+p;}\n"
+                "__attribute__((noinline)) long long* update(long long* p,unsigned short i){p+=i;return p;}\n"
+                "__attribute__((noinline)) long long* truncate(long long* p,unsigned i){return p+(unsigned short)i;}\n"
+                "long long a[8];return add(a,3)==a+3&&reverse(-2,a+4)==a+2"
+                "&&update(a,2)==a+2&&truncate(a,65539)==a+3;\n"),
+            .exit_code = 1,
+        },
+        {
+            "consecutive ABI arguments use paired transfers", __LINE__,
+            SVI("__attribute__((noinline)) long long combine(long long a,long long b){return a*7+b;}\n"
+                "__attribute__((noinline)) long long probe(long long a,long long b){return combine(b,a);}\n"
+                "return probe(13,29)==216;\n"),
+            .exit_code = 1,
+        },
+        {
+            "unsigned one-bit fields remain canonical across boolean conversions", __LINE__,
+            SVI("struct S {unsigned flag:1; unsigned __int128 wide:1;};\n"
+                "__attribute__((noinline)) int probe(struct S s){\n"
+                "_Bool a=s.flag,b=s.wide;int c=!!s.flag,d=!!s.wide;\n"
+                "unsigned long long e=s.flag?1:0;unsigned __int128 f=s.wide?1:0;\n"
+                "return a+b+c+d+(int)e+(int)f;}\n"
+                "return probe((struct S){0,0})==0&&probe((struct S){1,1})==6;\n"),
+            .exit_code = 1,
+        },
+        {
+            "logical values avoid widening into a temporary then copying", __LINE__,
+            SVI("__attribute__((noinline)) int probe(int* p){return !p||p==(int*)1;}\n"
+                "int x;return probe(nullptr)==1&&probe(&x)==0;\n"),
+            .exit_code = 1,
+        },
+        {
+            "logical result destinations preserve old values and short circuit effects", __LINE__,
+            SVI("__attribute__((noinline)) int probe(void){int x=7,n=0;\n"
+                "x=x&&(++n,x==7);if(x!=1||n!=1)return 0;\n"
+                "x=0;x=x||(++n,x==0);if(x!=1||n!=2)return 0;\n"
+                "x=7;x=(x&&x==7)&&((++n,x==7)||++n);if(x!=1||n!=3)return 0;\n"
+                "x=0;x=x&&++n;if(x||n!=3)return 0;\n"
+                "x=5;x=x||++n;return x==1&&n==3;}return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "signed one-bit fields normalize minus one to true", __LINE__,
+            SVI("struct S {signed flag:1;}; __attribute__((noinline)) int probe(struct S s){\n"
+                "_Bool a=s.flag;int b=!!s.flag;int c=s.flag?1:0;return a+b+c;}\n"
+                "return probe((struct S){0})==0&&probe((struct S){-1})==3;\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitfield conditions fuse extraction and branching", __LINE__,
+            SVI("struct S {unsigned flag:1; signed sign:1; unsigned word:17; unsigned __int128 wide:93;};\n"
+                "__attribute__((noinline)) struct S* get(struct S* p,int* count){++*count;return p;}\n"
+                "__attribute__((noinline)) int probe(void){struct S s={0};struct S* p=&s;int n=0,calls=0;\n"
+                "if(s.flag) return 0;s.flag=1;if(!s.flag) return 0;\n"
+                "s.sign=-1;if(!s.sign) return 0;if(p->word) return 0;\n"
+                "p->word=5;if(!p->word) return 0;while(s.flag){s.flag=0;n++;}\n"
+                "do {n++;s.word>>=1;} while(s.word);\n"
+                "s.wide=(unsigned __int128)1<<80;if(!s.wide) return 0;s.wide=0;if(p->wide) return 0;\n"
+                "if(get(p,&calls)->flag) return 0;volatile struct S* v=p;if(v->flag) return 0;\n"
+                "return n==4&&calls==1;}return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "packed bitfield branches test only field bits", __LINE__,
+            SVI("struct __attribute__((packed)) S {unsigned pad:5; signed value:13; unsigned __int128 wide:93;};\n"
+                "__attribute__((noinline)) int probe(void){struct S s={31,0,0};struct S* p=&s;\n"
+                "if(s.value||p->wide) return 0;s.value=-1;s.wide=(unsigned __int128)1<<80;\n"
+                "if(!p->value||!s.wide) return 0;s.value=0;s.wide=0;\n"
+                "return !(p->value||s.wide);}return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "bitfields load directly from local slots", __LINE__,
+            SVI("__attribute__((noinline)) int probe(void){ struct S {unsigned a:7; signed b:13; unsigned long long c:63;};\n"
+                "struct Outer {int tag; struct S s;}; struct Outer x={1,{97,-1234,0x123456789abcdef}};\n"
+                "unsigned a=x.s.a; int b=x.s.b; unsigned long long c=x.s.c;\n"
+                "return a==97&&b==-1234&&c==0x123456789abcdef; } return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "packed and wide bitfields load directly from local slots", __LINE__,
+            SVI("__attribute__((noinline)) int probe(void){ struct __attribute__((packed)) S {char tag; unsigned a:3; signed b:11; unsigned __int128 c:73; signed __int128 d:79;};\n"
+                "struct S x={1,5,-777,((unsigned __int128)1<<70)+123,-((__int128)1<<72)+45};\n"
+                "unsigned a=x.a; int b=x.b; unsigned __int128 c=x.c; __int128 d=x.d;\n"
+                "return a==5&&b==-777&&c==((unsigned __int128)1<<70)+123&&d==-((__int128)1<<72)+45; } return probe();\n"),
+            .exit_code = 1,
+        },
+        {
+            "pointer arithmetic uses INDEX for dynamic fixed strides", __LINE__,
+            SVI("long long a[8]={0}; long long* p=a+4; volatile int i=-2;\n"
+                "long long* x=p+i; long long* y=i+p; long long* z=p-i;\n"
+                "if(x!=a+2||y!=a+2||z!=a+6) return 0;\n"
+                "p+=i; if(p!=a+2) return 0; p-=i; if(p!=a+4) return 0;\n"
+                "long long* q=p; long long** pp=&q; *pp+=i;\n"
+                "if(q!=a+2) return 0; *pp-=i; return q==a+4;\n"),
+            .exit_code = 1,
+        },
+        {
+            "pointer arithmetic INDEX handles byte and non-power-of-two strides", __LINE__,
+            SVI("struct S {char bytes[3];}; struct S a[8]; char b[8];\n"
+                "volatile unsigned i=3; struct S* p=a; char* q=b;\n"
+                "p+=i; q+=i; if(p!=a+3||q!=b+3) return 0;\n"
+                "return p-i==a&&q-i==b;\n"),
             .exit_code = 1,
         },
         {
@@ -11768,6 +12324,40 @@ TestFunction(test_interpreter){
         },
         // Bitfields
         {
+            "bitfield: wide stores preserve neighboring fields", __LINE__,
+            SVI("typedef unsigned __int128 U; typedef __int128 S;\n"
+                "#define CASE(N,O,W) struct B##N {U before:O; U n:W; U after:128-O-W;}; "
+                "struct C##N {U before:O; S n:W; U after:128-O-W;}; "
+                "void put##N(struct B##N* p,U n){p->n=n;} void signed##N(struct C##N* p,S n){p->n=n;} "
+                "int f##N(void){U mask=~(U)0>>(128-W); U a=~(U)0>>(128-O),b=~(U)0>>(O+W); "
+                "struct B##N u={a,0,b}; struct C##N s={a,0,b}; "
+                "U values[]={0,1,mask,mask>>1,~(U)0}; "
+                "for(int i=0;i<5;i++){put##N(&u,values[i]); "
+                "if(u.n!=(values[i]&mask)||u.before!=a||u.after!=b)return 1;} "
+                "S min=-(S)(mask>>1)-1; signed##N(&s,min); "
+                "if(s.n!=min||s.before!=a||s.after!=b)return 2; signed##N(&s,-1); "
+                "if(s.n!=-1||s.before!=a||s.after!=b)return 3; signed##N(&s,0); "
+                "return s.n!=0||s.before!=a||s.after!=b;}\n"
+                "CASE(a,1,1) CASE(b,1,63) CASE(c,1,64) CASE(d,1,65) "
+                "CASE(e,63,64) CASE(f,64,63) CASE(g,65,62) CASE(h,126,1)\n"
+                "return fa()||fb()||fc()||fd()||fe()||ff()||fg()||fh();\n"),
+        },
+        {
+            "bitfield: 128-bit container loads across limb boundaries", __LINE__,
+            SVI("typedef unsigned __int128 U; typedef __int128 S;\n"
+                "#define CASE(N,O,W) struct U##N {U :O; U n:W;}; struct S##N {U :O; S n:W;}; "
+                "U u##N(struct U##N* p){return p->n;} S s##N(struct S##N* p){return p->n;} "
+                "U v##N(struct U##N x){return x.n;} S w##N(struct S##N x){return x.n;} "
+                "int f##N(void){U mask=~(U)0>>(128-W); S min=-(S)(mask>>1)-1; "
+                "struct U##N u={.n=mask}; struct S##N s={.n=min}; "
+                "if(u##N(&u)!=mask||s##N(&s)!=min||v##N(u)!=mask||w##N(s)!=min)return 1; "
+                "u.n=1;s.n=-1;if(u##N(&u)!=1||s##N(&s)!=-1)return 2; "
+                "u.n=0;s.n=(S)(mask>>1);return u##N(&u)!=0||s##N(&s)!=(S)(mask>>1);}\n"
+                "CASE(a,0,128) CASE(b,0,127) CASE(c,1,127) CASE(d,63,65) "
+                "CASE(e,64,64) CASE(f,65,63) CASE(g,127,1) CASE(h,1,64)\n"
+                "return fa()||fb()||fc()||fd()||fe()||ff()||fg()||fh();\n"),
+        },
+        {
             "bitfield: 128-bit compound arithmetic", __LINE__,
             SVI("struct S {unsigned pad:7; unsigned __int128 n:100; unsigned tail:3;} s={5,3,6};\n"
                 "unsigned __int128 high=(unsigned __int128)1<<80;\n"
@@ -13736,57 +14326,6 @@ TestFunction(test_interpreter){
                 "&&(signed char)byte==-128&&(long long)min==(-9223372036854775807LL-1)"
                 "&&(__int128)wide_min==-((__int128)1<<126)*2;\n"),
             .exit_code=1,
-        },
-        {
-            // Out-of-domain guest conversions have no C result, but must not
-            // invoke undefined floating-to-integer conversions in the host.
-            "cast: invalid floating inputs are contained for scalar integers", __LINE__,
-            SVI("volatile double huge=1e300,negative=-1e300;\n"
-                "volatile double nan=__builtin_nan(\"\"),inf=__builtin_inf();\n"
-                "return (long long)huge==0&&(unsigned long long)huge==0"
-                "&&(long long)negative==0&&(unsigned long long)negative==0"
-                "&&(long long)nan==0&&(unsigned long long)nan==0"
-                "&&(long long)inf==0&&(unsigned long long)inf==0;\n"),
-            .exit_code=1,
-        },
-        {
-            "cast: invalid floating inputs are contained for wide integers", __LINE__,
-            SVI("volatile double huge=1e300,negative=-1e300;\n"
-                "volatile double nan=__builtin_nan(\"\"),inf=__builtin_inf();\n"
-                "return (__int128)huge==0&&(unsigned __int128)huge==0"
-                "&&(__int128)negative==0&&(unsigned __int128)negative==0"
-                "&&(__int128)nan==0&&(unsigned __int128)nan==0"
-                "&&(__int128)inf==0&&(unsigned __int128)inf==0;\n"),
-            .exit_code=1,
-        },
-        {
-            "shift: wide counts are checked before narrowing", __LINE__,
-            SVI("volatile unsigned __int128 count=(unsigned __int128)1<<64;\n"
-                "unsigned __int128 u=1;__int128 s=-1;\n"
-                "return (u<<count)==0&&(u>>count)==0&&(s>>count)==-1;\n"),
-            .exit_code=1,
-        },
-        {
-            // Guest C leaves these shifts undefined. The VM must still avoid
-            // undefined host shifts and agree with its portable wide helpers.
-            "shift: oversized counts are contained across integer widths", __LINE__,
-            SVI("volatile unsigned count=128;\n"
-                "unsigned u=1;unsigned long long w=1;unsigned __int128 q=1;\n"
-                "int s=-1;long long t=-1;__int128 r=-1;\n"
-                "return (u<<count)==0&&(u>>count)==0"
-                "&&(w<<count)==0&&(w>>count)==0"
-                "&&(q<<count)==0&&(q>>count)==0"
-                "&&(s>>count)==-1&&(t>>count)==-1&&(r>>count)==-1;\n"),
-            .exit_code=1,
-        },
-        {
-            "arith: zero divisor behavior agrees across integer widths", __LINE__,
-            SVI("unsigned int f(unsigned int x,unsigned int z){return x/z==0 && x%z==0;}\n"
-                "unsigned long long g(unsigned long long x,unsigned long long z){return x/z==0 && x%z==0;}\n"
-                "int h(unsigned __int128 x,unsigned __int128 z){return x/z==0 && x%z==0;}\n"
-                "volatile unsigned int z=0;\n"
-                "return f(37,z)&&g(37,z)&&h(((unsigned __int128)1<<100)+37,z);\n"),
-            .exit_code = 1,
         },
         // Shifts
         {
@@ -19887,6 +20426,8 @@ TestFunction(test_interpreter){
         #endif
         size_t test_idx = i / (2 * countof(optimization_options) * CC_TARGET_COUNT);
         const struct opt* o = &optimization_options[opt_idx];
+        if(!o->force_c_interp && target_idx != CC_TARGET_NATIVE)
+            continue;
         const struct tc* tc = &testcases[test_idx];
         const CcTargetConfig* target = cc_targets[target_idx];
         if(tc->target && tc->target != target) continue;
@@ -19909,6 +20450,7 @@ TestFunction(test_interpreter){
             .poison_frame_slots = 1,
             .procedural_macros = tc->procedural_macros,
             .opt_noinline = o->noinline || tc->call_boundaries,
+            .force_c_interp = o->force_c_interp,
             .inline_budget = CI_DEFAULT_INLINE_BUDGET,
             .inline_hint_budget = CI_DEFAULT_INLINE_HINT_BUDGET,
             .exit_code = -1,
@@ -19925,10 +20467,6 @@ TestFunction(test_interpreter){
                 .root = &interp.root.cc,
                 .module = &interp.root.cc,
                 .current = &interp.root.cc.scope,
-            },
-            .top_frame = {
-                .return_buf = &interp.exit_code,
-                .return_size = sizeof interp.exit_code,
             },
         };
         LOCK_T_init(&interp.error_lock);
@@ -19974,13 +20512,10 @@ TestFunction(test_interpreter){
         err = ci_resolve_refs(&interp);
         if(err){TestPrintf("%s:%d: failed to link: %s\n", __FILE__, tc->line, _cc_error_names[err]); goto finally;}
 
-        CiInterpFrame* frame = &interp.top_frame;
         err = ci_prepare_toplevel(&interp);
         if(err) goto finally;
-        while(frame->pc < frame->op_count){
-            err = ci_interp_step(&interp, frame);
-            if(err) goto finally;
-        }
+        err = ci_interp_run(&interp, interp.top_frame);
+        if(err) goto finally;
         TEST_stats.executed++;
         if(interp.exit_code != tc->exit_code){
             TEST_stats.failures++;
@@ -20109,6 +20644,21 @@ TestFunction(test_interpreter_diagnostics){
             "negative wide index cannot wrap into an array", __LINE__,
             SVI("int a[2]={1,2};__int128 i=-((__int128)1<<100);\nreturn a[i];"),
             SVI("(test):2:10: error: index is outside the pointer-sized integer range\n"),
+        },
+        {
+            "checked signed index rejects just above intptr maximum", __LINE__,
+            SVI("int a[2]={1,2};__int128 i=(__int128)1<<63;\nreturn a[i];"),
+            SVI("(test):2:10: error: index is outside the pointer-sized integer range\n"),
+        },
+        {
+            "checked signed index rejects just below intptr minimum", __LINE__,
+            SVI("int a[2]={1,2};__int128 i=-((__int128)1<<63)-1;\nreturn a[i];"),
+            SVI("(test):2:10: error: index is outside the pointer-sized integer range\n"),
+        },
+        {
+            "checked bound rejects negative wide value with a positive low limb", __LINE__,
+            SVI("__int128 n=-((__int128)1<<64)+1;\nsizeof(int[n]);"),
+            SVI("(test):2:12: error: VLA bound is outside the size_t range\n"),
         },
         {
             "slice bounds cannot truncate a wide index into range", __LINE__,
@@ -20653,10 +21203,6 @@ TestFunction(test_interpreter_diagnostics){
                 .module = &interp.root.cc,
                 .current = &interp.root.cc.scope,
             },
-            .top_frame = {
-                .return_buf = &interp.exit_code,
-                .return_size = sizeof interp.exit_code,
-            },
         };
         LOCK_T_init(&interp.error_lock);
         LOCK_T_init(&interp.atom_lock);
@@ -20680,7 +21226,6 @@ TestFunction(test_interpreter_diagnostics){
         err = cpp_include_file_via_file_cache(&interp.parser.cpp, SV("(test)"));
         if(err) {TestReport("failed to include"); goto finally;}
 
-        CiInterpFrame* frame = &interp.top_frame;
         _Bool trapped = 0;
         err = cc_parse_all(&interp.parser);
         if(err){
@@ -20693,8 +21238,8 @@ TestFunction(test_interpreter_diagnostics){
         err = ci_prepare_toplevel(&interp);
         if(err) trapped = 1;
         if(tc->lowering_error) TestExpectTrue(_Bool, trapped);
-        while(!tc->lowering_error && !trapped && frame->pc < frame->op_count){
-            err = ci_interp_step(&interp, frame);
+        if(!tc->lowering_error && !trapped){
+            err = ci_interp_run(&interp, interp.top_frame);
             if(err) trapped = 1;
         }
         err = 0; // the trap is the expected outcome, not a harness failure
@@ -20843,10 +21388,6 @@ TestFunction(test_ci_call_main){
                 .root = &interp.root.cc,
                 .module = &interp.root.cc,
                 .current = &interp.root.cc.scope,
-            },
-            .top_frame = {
-                .return_buf = &interp.exit_code,
-                .return_size = sizeof interp.exit_code,
             },
         };
         LOCK_T_init(&interp.error_lock);
@@ -21150,10 +21691,6 @@ TestFunction(test_ci_call_by_name){
                 .root = &interp.root.cc,
                 .module = &interp.root.cc,
                 .current = &interp.root.cc.scope,
-            },
-            .top_frame = {
-                .return_buf = &interp.exit_code,
-                .return_size = sizeof interp.exit_code,
             },
         };
         LOCK_T_init(&interp.error_lock);

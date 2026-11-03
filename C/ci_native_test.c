@@ -596,6 +596,16 @@ static __bf16 abi_bfloat_callback(__bf16 (*fn)(__bf16),__bf16 x){return fn(x);}
 #define ABI_BFLOAT_SKIP 1
 #endif
 
+static
+double
+ci_test_register_args(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+    uint64_t e, uint64_t f, uint64_t g, uint64_t h,
+    double i, double j, double k, double l, double m, double n, double o, double p,
+    uint64_t q, double r){
+    return a + 2*b + 3*c + 4*d + 5*e + 6*f + 7*g + 8*h
+        + 9*i + 10*j + 11*k + 12*l + 13*m + 14*n + 15*o + 16*p + 17*q + 18*r;
+}
+
 TestFunction(test_interop){
     TESTBEGIN();
     ArenaAllocator arena = {0};
@@ -606,7 +616,30 @@ TestFunction(test_interop){
         struct { StringView name; void* sym;} symbols[8];
         int exit_code;
         _Bool skip;
+        _Bool force_c_interp;
     } testcases[] = {
+        {
+            "ABI: register arguments are marshalled after nested calls", __LINE__,
+            SVI("int seven(void);"
+                "double probe(unsigned long long,unsigned long long,unsigned long long,unsigned long long,"
+                "unsigned long long,unsigned long long,unsigned long long,unsigned long long,"
+                "double,double,double,double,double,double,double,double,unsigned long long,double);"
+                "__attribute__((noinline)) double go(void){"
+                "return probe(seven(),2,3,4,5,6,7,8,seven(),10,11,12,13,14,15,16,17,18);}"
+                "return go()==2097;"),
+            {{SV("seven"),(void*)test_seven}, {SV("probe"),(void*)ci_test_register_args}}, .exit_code=1,
+        },
+        {
+            "ABI: indirect targets resolve before marshalling nested-call arguments", __LINE__,
+            SVI("int seven(void);"
+                "double probe(unsigned long long,unsigned long long,unsigned long long,unsigned long long,"
+                "unsigned long long,unsigned long long,unsigned long long,unsigned long long,"
+                "double,double,double,double,double,double,double,double,unsigned long long,double);"
+                "__attribute__((noinline)) double go(typeof(&probe) p){"
+                "return p(seven(),2,3,4,5,6,7,8,seven(),10,11,12,13,14,15,16,17,18);}"
+                "return go(probe)==2097;"),
+            {{SV("seven"),(void*)test_seven}, {SV("probe"),(void*)ci_test_register_args}}, .exit_code=1,
+        },
         {
             "ABI: nested native calls do not change callback return conventions", __LINE__,
             SVI("long double identity(long double);int seven(void);"
@@ -687,7 +720,7 @@ TestFunction(test_interop){
             {{SV("probe"),(void*)abi_pair_five}}, .exit_code=1,
         },
         {
-            "ABI: two GP words at the ARM64 register boundary", __LINE__,
+            "ABI: two GP words at the assembly register boundary", __LINE__,
             SVI("struct P {long long x,y;}; long long probe(long long,long long,long long,long long,long long,long long,long long,struct P,long long);\n"
                 "return probe(1,2,3,4,5,6,7,(struct P){11,13},17)==69;\n"),
             {{SV("probe"),(void*)abi_pair_seven}}, .exit_code=1,
@@ -948,6 +981,44 @@ TestFunction(test_interop){
                "int v=n?apply(descend,n-1,value+1):0;return v+(p[0]==n&&p[40000]==value);}\n"
                "return descend(5,7)==6&&descend(5,7)==6;\n"),
             {{SV("apply"), (void*)test_apply}},
+            .exit_code = 1,
+        },
+        {
+            "frame entry: 32 hotswap links reach the final callee", __LINE__,
+            SV("#define F(N) [[drc::hotswappable]] int f##N(int x,int y){return x+y+N;}\n"
+               "F(0) F(1) F(2) F(3) F(4) F(5) F(6) F(7) F(8) F(9) F(10)"
+               "F(11) F(12) F(13) F(14) F(15) F(16) F(17) F(18) F(19) F(20)"
+               "F(21) F(22) F(23) F(24) F(25) F(26) F(27) F(28) F(29) F(30) F(31) F(32)\n"
+               "int apply(int(*)(int,int),int,int);"
+               "int(*functions[])(int,int)={f0,f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,"
+               "f11,f12,f13,f14,f15,f16,f17,f18,f19,f20,f21,f22,f23,f24,f25,f26,"
+               "f27,f28,f29,f30,f31,f32};"
+               "if(apply(f0,4,6)!=10)return 0;"
+               "for(int i=0;i<32;i++)if(__hotswap(functions[i],functions[i+1]))return 0;"
+               "return f0(4,6)==42&&functions[0](4,6)==42&&apply(f0,4,6)==42;"),
+            {{SV("apply"), (void*)test_apply}},
+            .exit_code = 1,
+        },
+        {
+            "frame entry: VM growth preserves register and stack arguments", __LINE__,
+            SV("__attribute__((noinline)) int descend(int n,int a,int b,int c,int d,int e,int f,int g,int h,"
+               "double x,double y,double z){_Alignas(256) volatile char local[70001];"
+               "local[0]=a;local[70000]=h;"
+               "int ok=a==11&&b==12&&c==13&&d==14&&e==15&&f==16&&g==17&&h==18"
+               "&&x==1.25&&y==2.5&&z==3.75&&((unsigned long)local%256)==0;"
+               "int child=n?descend(n-1,a,b,c,d,e,f,g,h,x,y,z):0;"
+               "return child+(ok&&local[0]==11&&local[70000]==18);}"
+               "return descend(20,11,12,13,14,15,16,17,18,1.25,2.5,3.75)==21;"),
+            .exit_code = 1,
+        },
+        {
+            "frame entry: variadic imports survive nested calls before va_start", __LINE__,
+            SV("__attribute__((noinline)) double disturb(double x){return x+10;}"
+               "__attribute__((noinline)) int sum(int n,...){double d=disturb(5);__builtin_va_list ap;"
+               "__builtin_va_start(ap,n);int a=__builtin_va_arg(ap,int);double b=__builtin_va_arg(ap,double);"
+               "int c=__builtin_va_arg(ap,int);double e=__builtin_va_arg(ap,double);__builtin_va_end(ap);"
+               "return n==4&&d==15&&a==17&&b==2.5&&c==23&&e==3.75;}"
+               "return sum(4,17,2.5,23,3.75);"),
             .exit_code = 1,
         },
         {
@@ -1914,6 +1985,7 @@ TestFunction(test_interop){
         Environment env = {.allocator = al, .at=&at};
         CiInterpreter interp = {
             .poison_frame_slots = 1,
+            .force_c_interp = tc->force_c_interp,
             .inline_budget = CI_DEFAULT_INLINE_BUDGET,
             .inline_hint_budget = CI_DEFAULT_INLINE_HINT_BUDGET,
             .exit_code = -1,
@@ -1929,10 +2001,6 @@ TestFunction(test_interop){
                 .root = &interp.root.cc,
                 .module = &interp.root.cc,
                 .current = &interp.root.cc.scope,
-            },
-            .top_frame = {
-                .return_buf = &interp.exit_code,
-                .return_size = sizeof interp.exit_code,
             },
         };
         LOCK_T_init(&interp.error_lock);
@@ -1970,13 +2038,10 @@ TestFunction(test_interop){
         err = ci_resolve_refs(&interp);
         if(err){TestPrintf("%s:%d: %s: failed to link\n", __FILE__, tc->line, tc->name); goto finally;}
 
-        CiInterpFrame* frame = &interp.top_frame;
         err = ci_lower_toplevel(&interp, &interp.deps);
         if(err) goto finally;
-        while(frame->pc < frame->op_count){
-            err = ci_interp_step(&interp, frame);
-            if(err) goto finally;
-        }
+        err = ci_interp_run(&interp, interp.top_frame);
+        if(err) goto finally;
         TEST_stats.executed++;
         if(interp.exit_code != tc->exit_code){
             TEST_stats.failures++;
@@ -2185,10 +2250,6 @@ TestFunction(test_interp){
                 .module = &interp.root.cc,
                 .current = &interp.root.cc.scope,
             },
-            .top_frame = {
-                .return_buf = &interp.exit_code,
-                .return_size = sizeof interp.exit_code,
-            },
         };
         LOCK_T_init(&interp.error_lock);
         LOCK_T_init(&interp.atom_lock);
@@ -2225,13 +2286,11 @@ TestFunction(test_interp){
         err = ci_resolve_refs(&interp);
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
-        CiInterpFrame* frame = &interp.top_frame;
         err = ci_prepare_toplevel(&interp);
         if(err) goto finally;
-        while(frame->pc < frame->op_count){
-            err = ci_interp_step(&interp, frame);
-            if(err) goto finally;
-        }
+        CiInterpFrame* frame = interp.top_frame;
+        err = ci_interp_run(&interp, frame);
+        if(err) goto finally;
         TEST_stats.executed++;
         if(interp.exit_code != tc->exit_code){
             TEST_stats.failures++;
@@ -2338,10 +2397,6 @@ TestFunction(test_interp_fail){
                 .module = &interp.root.cc,
                 .current = &interp.root.cc.scope,
             },
-            .top_frame = {
-                .return_buf = &interp.exit_code,
-                .return_size = sizeof interp.exit_code,
-            },
         };
         LOCK_T_init(&interp.error_lock);
         LOCK_T_init(&interp.atom_lock);
@@ -2371,13 +2426,10 @@ TestFunction(test_interp_fail){
         err = ci_resolve_refs(&interp);
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
-        CiInterpFrame* frame = &interp.top_frame;
         err = ci_prepare_toplevel(&interp);
         if(err) goto finally;
-        while(frame->pc < frame->op_count){
-            err = ci_interp_step(&interp, frame);
-            if(err) goto finally;
-        }
+        err = ci_interp_run(&interp, interp.top_frame);
+        if(err) goto finally;
 
         finally:;
         StringView sv = SV("");

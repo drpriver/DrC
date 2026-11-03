@@ -104,6 +104,7 @@ static
 void
 ci_tls_cleanup(CiInterpreter* ci){
     ci_closure_cleanup(ci);
+    ci_free_toplevel_frame(ci);
     if(!ci->tls_key_created) return;
     thread_local_key_delete(ci->tls_key);
     while(ci->tls_threads){
@@ -112,7 +113,6 @@ ci_tls_cleanup(CiInterpreter* ci){
         ci_tls_free_thread(state);
     }
     ci->tls_key_created = 0;
-    ci->top_frame.stack = NULL;
 }
 
 static

@@ -26,8 +26,11 @@ struct CiStackMark {
     CiStackSegment*_Nullable segment;
     size_t used;
 };
-_Static_assert(sizeof(CiStackMark) == 2*sizeof(size_t), "hidden stack mark storage");
-_Static_assert(_Alignof(CiStackMark) == _Alignof(size_t), "hidden stack mark alignment");
+typedef struct CiStackSave CiStackSave;
+struct CiStackSave {
+    CiStackMark position;
+    size_t boundary;
+};
 
 typedef struct CiStack CiStack;
 struct CiStack {
@@ -36,6 +39,9 @@ struct CiStack {
     CiStackSegment*_Nullable first;
     CiStackSegment*_Nullable last;
     CiStackMark top;
+    CiStackSave* _Nullable marks;
+    size_t mark_count, mark_capacity;
+    size_t boundary;
 };
 
 enum {CI_STACK_SEGMENT_SIZE = 64 * 1024};
@@ -48,6 +54,37 @@ ci_stack_mark(const CiStack* stack){ return stack->top; }
 static inline
 void
 ci_stack_rewind(CiStack* stack, CiStackMark mark){ stack->top = mark; }
+
+static
+int
+ci_stack_save(CiStack* stack, _Bool boundary){
+    if(stack->mark_count == stack->mark_capacity){
+        size_t capacity = stack->mark_capacity ? stack->mark_capacity * 2 : 16;
+        if(capacity < stack->mark_capacity || capacity > SIZE_MAX / sizeof(CiStackSave)) return 1;
+        CiStackSave* marks = Allocator_realloc(stack->allocator, stack->marks, stack->mark_capacity, capacity, sizeof *marks, _Alignof(CiStackSave));
+        if(!marks) return 1;
+        stack->marks = marks;
+        stack->mark_capacity = capacity;
+    }
+    stack->marks[stack->mark_count++] = (CiStackSave){stack->top, stack->boundary};
+    if(boundary) stack->boundary = stack->mark_count;
+    return 0;
+}
+
+static inline
+void
+ci_stack_restore(CiStack* stack){
+    CiStackSave mark = stack->marks[--stack->mark_count];
+    stack->top = mark.position;
+    stack->boundary = mark.boundary;
+}
+
+static inline
+void
+ci_stack_unwind_frame(CiStack* stack){
+    stack->mark_count = stack->boundary;
+    ci_stack_restore(stack);
+}
 
 static
 void*_Nullable
@@ -93,6 +130,9 @@ ci_stack_zalloc(CiStack* stack, size_t size, size_t alignment){
 static
 void
 ci_stack_destroy(CiStack* stack){
+    if(stack->marks) Allocator_free(stack->allocator, stack->marks, stack->mark_capacity, sizeof(CiStackSave), _Alignof(CiStackSave));
+    stack->marks = NULL;
+    stack->mark_count = stack->mark_capacity = stack->boundary = 0;
     CiStackSegment* segment = stack->first;
     while(segment){
         CiStackSegment* next = segment->next;

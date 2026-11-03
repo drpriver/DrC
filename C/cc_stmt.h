@@ -42,9 +42,9 @@ typedef struct CcDefer CcDefer;
 struct CcDefer {
     CcDefer* _Nullable prev;
     CcStmtNode* _Nullable body; // borrowed from CC_STMT_DEFER
-    CcVariable* _Nullable stack_mark; // hidden saved mark. NULL for a VM-only marker
     _Bool vm_scope;
-    unsigned char _pad[7]; // free real estate
+    _Bool saves_stack; // this scope owns a dynamic allocation
+    unsigned char _pad[6]; // free real estate
 };
 typedef struct CcDeferContext CcDeferContext;
 struct CcDeferContext {
@@ -88,7 +88,6 @@ struct CcStmtNode {
     union {
         struct { // CC_STMT_VLA
             CcVariable* object;
-            CcVariable* mark;
         } vla;
         CcExpr* _Null_unspecified exprs[2];
         struct {
@@ -118,7 +117,7 @@ _Static_assert(offsetof(CcStmtNode, count) == sizeof(uint32_t), "");
 typedef struct CcSwitchEntry CcSwitchEntry;
 struct CcSwitchEntry {
     uint64_t low, high; // inclusive range
-    uint32_t target;
+    int32_t target;
     uint32_t _pad; // free real estate
 };
 

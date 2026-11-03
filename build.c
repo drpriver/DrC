@@ -39,6 +39,7 @@ static int do_install(BuildCtx*, BuildTarget*);
 static BuildTarget* build_soft_float(BuildCtx*);
 static BuildTarget* build_native_capture(BuildCtx*);
 static void link_native_capture(BuildCtx*, BuildTarget*, BuildTarget*);
+static BuildTarget* build_asm_interp(BuildCtx*);
 
 int main(int argc, char** argv, char** envp){
     BuildCtx* ctx = b_build_ctx(argc, argv, envp, __FILE__);
@@ -47,6 +48,7 @@ int main(int argc, char** argv, char** envp){
     all->description = b_atomize(ctx, "Build all binaries (including tests).");
     BuildTarget* soft_float = build_soft_float(ctx);
     BuildTarget* native_capture = build_native_capture(ctx);
+    BuildTarget* asm_interp = build_asm_interp(ctx);
 
     BuildTarget* Makefile = b_script_target(ctx, "Makefile", mkfile, NULL);
     Makefile->is_phony = 1;
@@ -65,6 +67,7 @@ int main(int argc, char** argv, char** envp){
         b_linkarg(ctx, cc, "-lsynchronization");
     b_get_target(ctx, "drc")->description = cc->description;
     link_native_capture(ctx, cc, native_capture);
+    b_linkinp(ctx, cc, asm_interp);
     b_add_dep(ctx, all, cc);
     b_linkinp(ctx, cc, soft_float);
 
@@ -72,6 +75,7 @@ int main(int argc, char** argv, char** envp){
     b_arg(ctx, prof_cc, "-DDRP_PROFILE=1");
     prof_cc->is_compile_command = 0;
     link_native_capture(ctx, prof_cc, native_capture);
+    b_linkinp(ctx, prof_cc, asm_interp);
     b_linkinp(ctx, prof_cc, soft_float);
     if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
         b_linkarg(ctx, prof_cc, "-lsynchronization");
@@ -110,6 +114,7 @@ int main(int argc, char** argv, char** envp){
             b_get_target(ctx, "cc_opt")->description = cc_opt->description;
             b_add_dep(ctx, all, cc_opt);
             link_native_capture(ctx, cc_opt, native_capture);
+            b_linkinp(ctx, cc_opt, asm_interp);
             if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
                 b_linkarg(ctx, cc_opt, "-lsynchronization");
             b_linkinp(ctx, cc_opt, soft_float);
@@ -131,6 +136,7 @@ int main(int argc, char** argv, char** envp){
                 }
             }
             link_native_capture(ctx, cc_cov, native_capture);
+            b_linkinp(ctx, cc_cov, asm_interp);
             if(ctx->target.compiler_flavor == COMPILER_GCC_MINGW)
                 b_linkarg(ctx, cc_cov, "-lsynchronization");
             b_linkinp(ctx, cc_cov, soft_float);
@@ -141,18 +147,19 @@ int main(int argc, char** argv, char** envp){
         const char* name;
         const char* cmd_name;
         _Bool needs_native_bridge;
+        _Bool needs_asm_interp;
         _Bool skip_self_hosted;
         _Bool needs_drc_path;
     } test_files[] = {
-        {"C/cpp_test.c", "cpp_test", "run-cpp_test", 0, 0, 0},
-        {"C/cc_lex_test.c", "cc_lex_test", "run-cc_lex_test", 0, 0, 0},
-        {"C/cc_test.c", "cc_test", "run-cc_test", 0, 0, 0},
-        {"C/ci_test.c", "ci_test", "run-ci_test", 0, 0, 0},
-        {"C/ci_oom_test.c", "ci_oom_test", "run-ci_oom_test", 0, 1, 0},
-        {"C/ci_native_test.c", "ci_native_test", "run-ci_native_test", 1, 0, 0},
-        {"C/nc_test.c", "nc_test", "run-nc_test", 1, 0, 0},
-        {"C/ci_concurrent_test.c", "ci_concurrent_test", "run-ci_concurrent_test", 1, 0, 0},
-        {"drc_test.c", "drc_test", "run-drc_test", 0, 0, 1},
+        {"C/cpp_test.c", "cpp_test", "run-cpp_test", 0, 0, 0, 0},
+        {"C/cc_lex_test.c", "cc_lex_test", "run-cc_lex_test", 0, 0, 0, 0},
+        {"C/cc_test.c", "cc_test", "run-cc_test", 0, 0, 0, 0},
+        {"C/ci_test.c", "ci_test", "run-ci_test", 0, 1, 0, 0},
+        {"C/ci_oom_test.c", "ci_oom_test", "run-ci_oom_test", 0, 1, 1, 0},
+        {"C/ci_native_test.c", "ci_native_test", "run-ci_native_test", 1, 1, 0, 0},
+        {"C/nc_test.c", "nc_test", "run-nc_test", 1, 0, 0, 0},
+        {"C/ci_concurrent_test.c", "ci_concurrent_test", "run-ci_concurrent_test", 1, 1, 0, 0},
+        {"drc_test.c", "drc_test", "run-drc_test", 0, 0, 0, 1},
     };
     {
         for(size_t i = 0; i < sizeof test_files / sizeof test_files[0]; i++){
@@ -167,6 +174,8 @@ int main(int argc, char** argv, char** envp){
             }
             if(test_files[i].needs_native_bridge)
                 link_native_capture(ctx, bin, native_capture);
+            if(test_files[i].needs_asm_interp)
+                b_linkinp(ctx, bin, asm_interp);
             b_linkinp(ctx, bin, soft_float);
             b_add_dep(ctx, all, bin);
             BuildTarget* cmd = b_cmd_target_prog(ctx, cmd_name, bin);
@@ -202,6 +211,8 @@ int main(int argc, char** argv, char** envp){
             }
             if(test_files[i].needs_native_bridge)
                 link_native_capture(ctx, cov_bin, native_capture);
+            if(test_files[i].needs_asm_interp)
+                b_linkinp(ctx, cov_bin, asm_interp);
             b_linkinp(ctx, cov_bin, soft_float);
             Atom cov_cmd_name = b_atomize_f(ctx, "run-coverage-%s", name);
             BuildTarget* cov_cmd = b_cmd_target_prog(ctx, cov_cmd_name->data, cov_bin);
@@ -486,6 +497,28 @@ link_native_capture(BuildCtx* ctx, BuildTarget* target, BuildTarget* object){
     if(os != OS_WINDOWS) return;
     if(target->compiler_flavor == COMPILER_GCC_MINGW)
         b_linkarg(ctx, target, "-lonecore");
+}
+
+static
+BuildTarget*
+build_asm_interp(BuildCtx* ctx){
+    enum CompilerFlavor flavor = ctx->target.os == OS_NATIVE ? ctx->build_compiler_flavor : ctx->target.compiler_flavor;
+    if(flavor != COMPILER_CL && flavor != COMPILER_CLANG_CL){
+        BuildTarget* obj = b_obj_target(ctx, "asm_interp", "C/asm/ci_interp.S", ctx->target.os, B_COMPILE_NO_SANITIZE | B_COMPILE_DEBUG_INFO);
+        CStringView source = obj->cmd.args.data[--obj->cmd.args.count];
+        b_args(ctx, obj, "-x", "assembler-with-cpp");
+        cmd_arg(&obj->cmd, source);
+        return obj;
+    }
+    Atom path = b_atomize_f(ctx, "%s/asm_interp.obj", ctx->obj_dir->data);
+    BuildTarget* obj = b_cmd_target(ctx, path->data, "ml64");
+    obj->is_binary = 1;
+    b_args(ctx, obj, "/nologo", "/c");
+    b_argf(ctx, obj, "/Fo%s", path->data);
+    if(flavor == COMPILER_CLANG_CL)
+        b_arg(ctx, obj, "/DCI_ASM_NATIVE_INT128");
+    b_src_inp(ctx, obj, "C/asm/ci_interp_win64.asm");
+    return obj;
 }
 
 static

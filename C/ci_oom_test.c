@@ -555,10 +555,6 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
             .module = &interp.root.cc,
             .current = &interp.root.cc.scope,
         },
-        .top_frame = {
-            .return_buf = &interp.exit_code,
-            .return_size = sizeof interp.exit_code,
-        },
     };
     LOCK_T_init(&interp.error_lock);
     LOCK_T_init(&interp.atom_lock);
@@ -599,13 +595,10 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
     err = ci_resolve_refs(&interp);
     if(err) goto cleanup;
     {
-        CiInterpFrame* frame = &interp.top_frame;
         err = ci_prepare_toplevel(&interp);
         if(err) goto cleanup;
-        while(frame->pc < frame->op_count){
-            err = ci_interp_step(&interp, frame);
-            if(err) goto cleanup;
-        }
+        err = ci_interp_run(&interp, interp.top_frame);
+        if(err) goto cleanup;
     }
     cleanup:
     msb_destroy(&log_sb);

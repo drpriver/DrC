@@ -1,13 +1,172 @@
 #ifndef C_CI_OP_LIST_H
 #define C_CI_OP_LIST_H
 
+#define CI_ALU_BINARY_OPS(X, suffix) \
+    X(ADD, suffix) \
+    X(SUB, suffix) \
+    X(MUL, suffix) \
+    X(SDIV, suffix) \
+    X(UDIV, suffix) \
+    X(SMOD, suffix) \
+    X(UMOD, suffix) \
+    X(AND, suffix) \
+    X(OR, suffix) \
+    X(XOR, suffix) \
+    X(SHL, suffix) \
+    X(ASR, suffix) \
+    X(LSR, suffix)
+
+#define CI_ALU_UNARY_OPS(X, suffix) \
+    X(NEG, suffix) \
+    X(NOT, suffix)
+
+#define CI_CMP_OPS(X, suffix) \
+    X(EQ, suffix) \
+    X(NE, suffix) \
+    X(SLT, suffix) \
+    X(ULT, suffix) \
+    X(SGT, suffix) \
+    X(UGT, suffix) \
+    X(SLE, suffix) \
+    X(ULE, suffix) \
+    X(SGE, suffix) \
+    X(UGE, suffix)
+
+#define CI_FALU_OPS(X, suffix) \
+    X(FADD, suffix) \
+    X(FSUB, suffix) \
+    X(FMUL, suffix) \
+    X(FDIV, suffix) \
+    X(FNEG, suffix)
+
+#define CI_FCMP_OPS(X, suffix) \
+    X(FEQ, suffix) \
+    X(FNE, suffix) \
+    X(FLT, suffix) \
+    X(FGT, suffix) \
+    X(FLE, suffix) \
+    X(FGE, suffix)
+
+#define CI_OPCODE_ENUM(name, suffix) CI_OP_##name##suffix,
+#define CI_OPCODE_CASE(name, suffix) case CI_OP_##name##suffix:
+
+#define CI_OPCODE_NATIVE_LIST(X) \
+    CI_ALU_BINARY_OPS(X, _IMM32) \
+    CI_ALU_BINARY_OPS(X, _IMM64) \
+    CI_ALU_BINARY_OPS(X, 8) \
+    CI_ALU_UNARY_OPS(X, 8) \
+    CI_ALU_BINARY_OPS(X, 16) \
+    CI_ALU_UNARY_OPS(X, 16) \
+    CI_ALU_BINARY_OPS(X, 32) \
+    CI_ALU_UNARY_OPS(X, 32) \
+    CI_ALU_BINARY_OPS(X, 64) \
+    CI_ALU_UNARY_OPS(X, 64) \
+    CI_ALU_BINARY_OPS(X, 128) \
+    CI_ALU_UNARY_OPS(X, 128) \
+    CI_CMP_OPS(X, 32) \
+    CI_CMP_OPS(X, 64) \
+    CI_CMP_OPS(X, 128) \
+    CI_CMP_OPS(X, _JUMP32) \
+    CI_CMP_OPS(X, _JUMP64) \
+    CI_FALU_OPS(X, _BF16) \
+    CI_FALU_OPS(X, 16) \
+    CI_FALU_OPS(X, 32) \
+    CI_FALU_OPS(X, 64) \
+    CI_FALU_OPS(X, 80) \
+    CI_FALU_OPS(X, 128) \
+    CI_FCMP_OPS(X, _BF16) \
+    CI_FCMP_OPS(X, 16) \
+    CI_FCMP_OPS(X, 32) \
+    CI_FCMP_OPS(X, 64) \
+    CI_FCMP_OPS(X, 80) \
+    CI_FCMP_OPS(X, 128) \
+    X(CHECK, ) \
+    X(PROPAGATE_ERROR, ) \
+    X(SLOT_ADDR, ) \
+    X(VAR_ADDR, ) \
+    X(TLS_ADDR, ) \
+    X(FUNC_ADDR, ) \
+    X(JUMP, ) \
+    X(RETURN, ) \
+    X(RETURN_SLOT, ) \
+    X(CLEAR_CACHE, ) \
+    X(STACK_SAVE, ) \
+    X(STACK_RESTORE, ) \
+    X(CAPTURE_BACKTRACE, ) \
+    X(FRAME_ENTER, ) \
+    X(FRAME_READY, ) \
+    X(FRAME_SAVE, ) \
+    X(FRAME_RESTORE, ) \
+    X(CALL_RESOLVE, )
+
+#define CI_OPCODE_FLAT_LIST(X) \
+    CI_CONST_OPS(X) \
+    CI_LOAD_OPS(X) \
+    CI_STORE_OPS(X) \
+    CI_STORE_IMM_OPS(X) \
+    CI_ZERO_OPS(X) \
+    CI_COPY_OPS(X) \
+    CI_MEMCOPY_OPS(X) \
+    CI_EXTEND_OPS(X) \
+    CI_OVERFLOW_OPS(X) \
+    CI_CHECKED_OPS(X) \
+    CI_TRUTH_OPS(X) \
+    CI_ITOF_OPS(X) \
+    CI_FTOI_OPS(X) \
+    CI_FTOF_OPS(X) \
+    CI_ABI_MOVE_OPS(X) \
+    CI_ABI_TRANSFER_OPS(X) \
+    CI_JUMP_FALSE_OPS(X) \
+    CI_JUMP_TRUE_OPS(X) \
+    CI_BSWAP_OPS(X) \
+    CI_BOUNDS_OPS(X) \
+    CI_INDEX_OPS(X) \
+    CI_LOAD_BITFIELD_OPS(X) \
+    CI_LOAD_BITFIELD_128_OPS(X) \
+    CI_LOAD_BITFIELD_BYTES_OPS(X) \
+    CI_LOAD_BITFIELD_BYTES_128_OPS(X) \
+    CI_STORE_BITFIELD_OPS(X) \
+    CI_STORE_BITFIELD_128_OPS(X) \
+    CI_STORE_BITFIELD_BYTES_OPS(X) \
+    CI_STORE_BITFIELD_BYTES_128_OPS(X) \
+    CI_CALL_OPS(X) \
+    CI_SWITCH_DENSE_OPS(X) \
+    CI_SWITCH_RANGE_OPS(X) \
+    CI_BUILTIN_OPS(X) \
+    CI_ALLOCA_OPS(X) \
+    CI_FENCE_OPS(X) \
+    CI_BIT_COUNT_OPS(X) \
+    CI_SINGLE_BIT_OPS(X) \
+    CI_BIT_CEIL_OPS(X) \
+    CI_BIT_FLOOR_OPS(X) \
+    CI_ROTATE_OPS(X) \
+    CI_CRC_OPS(X) \
+    CI_ATOMIC_LOAD_OPS(X) \
+    CI_ATOMIC_STORE_OPS(X) \
+    CI_ATOMIC_RMW_OPS(X) \
+    CI_ATOMIC_CAS_OPS(X) \
+    CI_VA_SYSV_OPS(X) \
+    CI_VA_ARM_OPS(X) \
+    CI_VA_ARM_INDIRECT_OPS(X) \
+    CI_VA_STACK_OPS(X) \
+    CI_ABI_GP_MOVE_OPS(X) \
+    CI_ABI_REG_MOVE_OPS(X) \
+    CI_LOAD_SLOT_BITFIELD_OPS(X) \
+    CI_LOAD_SLOT_BITFIELD_128_OPS(X) \
+    CI_LOAD_SLOT_BITFIELD_BYTES_OPS(X) \
+    CI_LOAD_SLOT_BITFIELD_BYTES_128_OPS(X) \
+    CI_BITFIELD_JUMP_OPS(X) \
+    CI_ABI_PAIR_OPS(X)
+
+// Memory families: name, byte width, destination alignment, source alignment.
+// Width 0 comes from the instruction; MEMCOPY width -1 comes from a size slot.
 #define CI_CONST_OPS(X) \
     X(CONST8, 1, 1, 1) \
     X(CONST16, 2, 1, 1) \
     X(CONST32, 4, 1, 1) \
     X(CONST64, 8, 1, 1) \
     X(CONST128, 16, 1, 1) \
-    X(CONST_N, op->constant.immsize, 1, 1)
+    X(CONST_N, 0, 1, 1)
 
 #define CI_LOAD_OPS(X) \
     X(LOAD8, 1, 1, 1) \
@@ -19,11 +178,11 @@
     X(LOAD64_U, 8, 1, 1) \
     X(LOAD128_A, 16, 16, 16) \
     X(LOAD128_U, 16, 1, 1) \
-    X(LOAD_N, op->load.slot_size, 1, 1) \
-    X(LOAD_N_A2, op->load.slot_size, 2, 2) \
-    X(LOAD_N_A4, op->load.slot_size, 4, 4) \
-    X(LOAD_N_A8, op->load.slot_size, 8, 8) \
-    X(LOAD_N_A16, op->load.slot_size, 16, 16)
+    X(LOAD_N, 0, 1, 1) \
+    X(LOAD_N_A2, 0, 2, 2) \
+    X(LOAD_N_A4, 0, 4, 4) \
+    X(LOAD_N_A8, 0, 8, 8) \
+    X(LOAD_N_A16, 0, 16, 16)
 
 #define CI_STORE_OPS(X) \
     X(STORE8, 1, 1, 1) \
@@ -35,11 +194,11 @@
     X(STORE64_U, 8, 1, 1) \
     X(STORE128_A, 16, 16, 16) \
     X(STORE128_U, 16, 1, 1) \
-    X(STORE_N, op->store.src_size, 1, 1) \
-    X(STORE_N_A2, op->store.src_size, 2, 2) \
-    X(STORE_N_A4, op->store.src_size, 4, 4) \
-    X(STORE_N_A8, op->store.src_size, 8, 8) \
-    X(STORE_N_A16, op->store.src_size, 16, 16)
+    X(STORE_N, 0, 1, 1) \
+    X(STORE_N_A2, 0, 2, 2) \
+    X(STORE_N_A4, 0, 4, 4) \
+    X(STORE_N_A8, 0, 8, 8) \
+    X(STORE_N_A16, 0, 16, 16)
 
 #define CI_STORE_IMM_OPS(X) \
     X(STORE_IMM8, 1, 1, 1) \
@@ -49,11 +208,11 @@
     X(STORE_IMM32_U, 4, 1, 1) \
     X(STORE_IMM64_A, 8, 8, 1) \
     X(STORE_IMM64_U, 8, 1, 1) \
-    X(STORE_IMM_N, op->store_imm.size, 1, 1) \
-    X(STORE_IMM_N_A2, op->store_imm.size, 2, 1) \
-    X(STORE_IMM_N_A4, op->store_imm.size, 4, 1) \
-    X(STORE_IMM_N_A8, op->store_imm.size, 8, 1) \
-    X(STORE_IMM_N_A16, op->store_imm.size, 16, 1)
+    X(STORE_IMM_N, 0, 1, 1) \
+    X(STORE_IMM_N_A2, 0, 2, 1) \
+    X(STORE_IMM_N_A4, 0, 4, 1) \
+    X(STORE_IMM_N_A8, 0, 8, 1) \
+    X(STORE_IMM_N_A16, 0, 16, 1)
 
 #define CI_ZERO_OPS(X) \
     X(ZERO8, 1, 1, 1) \
@@ -65,11 +224,11 @@
     X(ZERO64_U, 8, 1, 1) \
     X(ZERO128_A, 16, 16, 1) \
     X(ZERO128_U, 16, 1, 1) \
-    X(ZERO_N, op->zero.size, 1, 1) \
-    X(ZERO_N_A2, op->zero.size, 2, 1) \
-    X(ZERO_N_A4, op->zero.size, 4, 1) \
-    X(ZERO_N_A8, op->zero.size, 8, 1) \
-    X(ZERO_N_A16, op->zero.size, 16, 1)
+    X(ZERO_N, 0, 1, 1) \
+    X(ZERO_N_A2, 0, 2, 1) \
+    X(ZERO_N_A4, 0, 4, 1) \
+    X(ZERO_N_A8, 0, 8, 1) \
+    X(ZERO_N_A16, 0, 16, 1)
 
 #define CI_COPY_OPS(X) \
     X(COPY8, 1, 1, 1) \
@@ -81,11 +240,11 @@
     X(COPY64_U, 8, 1, 1) \
     X(COPY128_A, 16, 16, 16) \
     X(COPY128_U, 16, 1, 1) \
-    X(COPY_N, op->copy.slot_size, 1, 1) \
-    X(COPY_N_A2, op->copy.slot_size, 2, 2) \
-    X(COPY_N_A4, op->copy.slot_size, 4, 4) \
-    X(COPY_N_A8, op->copy.slot_size, 8, 8) \
-    X(COPY_N_A16, op->copy.slot_size, 16, 16)
+    X(COPY_N, 0, 1, 1) \
+    X(COPY_N_A2, 0, 2, 2) \
+    X(COPY_N_A4, 0, 4, 4) \
+    X(COPY_N_A8, 0, 8, 8) \
+    X(COPY_N_A16, 0, 16, 16)
 
 #define CI_MEMCOPY_OPS(X) \
     X(MEMCOPY8, 1, 1, 1) \
@@ -97,38 +256,38 @@
     X(MEMCOPY64_U, 8, 1, 1) \
     X(MEMCOPY128_A, 16, 16, 16) \
     X(MEMCOPY128_U, 16, 1, 1) \
-    X(MEMCOPY_N, op->memcopy.size, 1, 1) \
-    X(MEMCOPY_N_A2, op->memcopy.size, 2, 2) \
-    X(MEMCOPY_N_A4, op->memcopy.size, 4, 4) \
-    X(MEMCOPY_N_A8, op->memcopy.size, 8, 8) \
-    X(MEMCOPY_N_A16, op->memcopy.size, 16, 16) \
-    X(MEMCOPY_VAR, ci_read_uint((char*)frame->slots + op->memcopy.size, sizeof(size_t)), 1, 1) \
-    X(MEMCOPY_VAR_A2, ci_read_uint((char*)frame->slots + op->memcopy.size, sizeof(size_t)), 2, 2) \
-    X(MEMCOPY_VAR_A4, ci_read_uint((char*)frame->slots + op->memcopy.size, sizeof(size_t)), 4, 4) \
-    X(MEMCOPY_VAR_A8, ci_read_uint((char*)frame->slots + op->memcopy.size, sizeof(size_t)), 8, 8) \
-    X(MEMCOPY_VAR_A16, ci_read_uint((char*)frame->slots + op->memcopy.size, sizeof(size_t)), 16, 16)
+    X(MEMCOPY_N, 0, 1, 1) \
+    X(MEMCOPY_N_A2, 0, 2, 2) \
+    X(MEMCOPY_N_A4, 0, 4, 4) \
+    X(MEMCOPY_N_A8, 0, 8, 8) \
+    X(MEMCOPY_N_A16, 0, 16, 16) \
+    X(MEMCOPY_VAR, -1, 1, 1) \
+    X(MEMCOPY_VAR_A2, -1, 2, 2) \
+    X(MEMCOPY_VAR_A4, -1, 4, 4) \
+    X(MEMCOPY_VAR_A8, -1, 8, 8) \
+    X(MEMCOPY_VAR_A16, -1, 16, 16)
 
 #define CI_EXTEND_OPS(X) \
-    X(SEXT8_16, 1, 2, ci_uint128_from_int64(ci_read_int(src, 1))) \
-    X(ZEXT8_16, 1, 2, ci_uint128_from_uint64(ci_read_uint(src, 1))) \
-    X(SEXT8_32, 1, 4, ci_uint128_from_int64(ci_read_int(src, 1))) \
-    X(ZEXT8_32, 1, 4, ci_uint128_from_uint64(ci_read_uint(src, 1))) \
-    X(SEXT8_64, 1, 8, ci_uint128_from_int64(ci_read_int(src, 1))) \
-    X(ZEXT8_64, 1, 8, ci_uint128_from_uint64(ci_read_uint(src, 1))) \
-    X(SEXT8_128, 1, 16, ci_uint128_from_int64(ci_read_int(src, 1))) \
-    X(ZEXT8_128, 1, 16, ci_uint128_from_uint64(ci_read_uint(src, 1))) \
-    X(SEXT16_32, 2, 4, ci_uint128_from_int64(ci_read_int(src, 2))) \
-    X(ZEXT16_32, 2, 4, ci_uint128_from_uint64(ci_read_uint(src, 2))) \
-    X(SEXT16_64, 2, 8, ci_uint128_from_int64(ci_read_int(src, 2))) \
-    X(ZEXT16_64, 2, 8, ci_uint128_from_uint64(ci_read_uint(src, 2))) \
-    X(SEXT16_128, 2, 16, ci_uint128_from_int64(ci_read_int(src, 2))) \
-    X(ZEXT16_128, 2, 16, ci_uint128_from_uint64(ci_read_uint(src, 2))) \
-    X(SEXT32_64, 4, 8, ci_uint128_from_int64(ci_read_int(src, 4))) \
-    X(ZEXT32_64, 4, 8, ci_uint128_from_uint64(ci_read_uint(src, 4))) \
-    X(SEXT32_128, 4, 16, ci_uint128_from_int64(ci_read_int(src, 4))) \
-    X(ZEXT32_128, 4, 16, ci_uint128_from_uint64(ci_read_uint(src, 4))) \
-    X(SEXT64_128, 8, 16, ci_uint128_from_int64(ci_read_int(src, 8))) \
-    X(ZEXT64_128, 8, 16, ci_uint128_from_uint64(ci_read_uint(src, 8)))
+    X(SEXT8_16, 1, 2, 1) \
+    X(ZEXT8_16, 1, 2, 0) \
+    X(SEXT8_32, 1, 4, 1) \
+    X(ZEXT8_32, 1, 4, 0) \
+    X(SEXT8_64, 1, 8, 1) \
+    X(ZEXT8_64, 1, 8, 0) \
+    X(SEXT8_128, 1, 16, 1) \
+    X(ZEXT8_128, 1, 16, 0) \
+    X(SEXT16_32, 2, 4, 1) \
+    X(ZEXT16_32, 2, 4, 0) \
+    X(SEXT16_64, 2, 8, 1) \
+    X(ZEXT16_64, 2, 8, 0) \
+    X(SEXT16_128, 2, 16, 1) \
+    X(ZEXT16_128, 2, 16, 0) \
+    X(SEXT32_64, 4, 8, 1) \
+    X(ZEXT32_64, 4, 8, 0) \
+    X(SEXT32_128, 4, 16, 1) \
+    X(ZEXT32_128, 4, 16, 0) \
+    X(SEXT64_128, 8, 16, 1) \
+    X(ZEXT64_128, 8, 16, 0)
 
 #define CI_CHECKED_OPS(X) \
     X(CHECKED_ADD_S8, int8_t, int32_t, add_overflow) \
@@ -167,274 +326,277 @@
     X(OVERFLOW_U64, 64, 1)
 
 #define CI_TRUTH_OPS(X) \
-    X(ISTRUE_I8, ci_read_uint(src, 1) != 0) \
-    X(ISFALSE_I8, !(ci_read_uint(src, 1) != 0)) \
-    X(ISTRUE_I16, ci_read_uint(src, 2) != 0) \
-    X(ISFALSE_I16, !(ci_read_uint(src, 2) != 0)) \
-    X(ISTRUE_I32, ci_read_uint(src, 4) != 0) \
-    X(ISFALSE_I32, !(ci_read_uint(src, 4) != 0)) \
-    X(ISTRUE_I64, ci_read_uint(src, 8) != 0) \
-    X(ISFALSE_I64, !(ci_read_uint(src, 8) != 0)) \
-    X(ISTRUE_I128, ci_uint128_nonzero(ci_read_u128(src))) \
-    X(ISFALSE_I128, !(ci_uint128_nonzero(ci_read_u128(src)))) \
-    X(ISTRUE_F16, ci_narrow_float_nonzero((uint16_t)ci_read_uint(src, 2))) \
-    X(ISFALSE_F16, !(ci_narrow_float_nonzero((uint16_t)ci_read_uint(src, 2)))) \
-    X(ISTRUE_F32, ci_read_f32(src) != 0.0f) \
-    X(ISFALSE_F32, !(ci_read_f32(src) != 0.0f)) \
-    X(ISTRUE_F64, ci_read_f64(src) != 0.0) \
-    X(ISFALSE_F64, !(ci_read_f64(src) != 0.0)) \
-    X(ISTRUE_F80, ci_float80_nonzero(ci_float80_read(src))) \
-    X(ISFALSE_F80, !(ci_float80_nonzero(ci_float80_read(src)))) \
-    X(ISTRUE_F128, ci_float128_nonzero(ci_float128_read(src))) \
-    X(ISFALSE_F128, !(ci_float128_nonzero(ci_float128_read(src))))
+    X(ISTRUE_I8, I, 8, 0) \
+    X(ISFALSE_I8, I, 8, 1) \
+    X(ISTRUE_I16, I, 16, 0) \
+    X(ISFALSE_I16, I, 16, 1) \
+    X(ISTRUE_I32, I, 32, 0) \
+    X(ISFALSE_I32, I, 32, 1) \
+    X(ISTRUE_I64, I, 64, 0) \
+    X(ISFALSE_I64, I, 64, 1) \
+    X(ISTRUE_I128, I, 128, 0) \
+    X(ISFALSE_I128, I, 128, 1) \
+    X(ISTRUE_F16, F, 16, 0) \
+    X(ISFALSE_F16, F, 16, 1) \
+    X(ISTRUE_F32, F, 32, 0) \
+    X(ISFALSE_F32, F, 32, 1) \
+    X(ISTRUE_F64, F, 64, 0) \
+    X(ISFALSE_F64, F, 64, 1) \
+    X(ISTRUE_F80, F, 80, 0) \
+    X(ISFALSE_F80, F, 80, 1) \
+    X(ISTRUE_F128, F, 128, 0) \
+    X(ISFALSE_F128, F, 128, 1)
 
+// Conversions: name, source format, destination format (and integer result bytes for FTOI).
 #define CI_ITOF_OPS(X) \
-    X(S32_TO_F16, uint16_t, ci_float16_from_int32(( int32_t)ci_read_int(src, 4), 0), memcpy(dest, &result, 2)) \
-    X(U32_TO_F16, uint16_t, ci_float16_from_uint32(( uint32_t)ci_read_uint(src, 4), 0), memcpy(dest, &result, 2)) \
-    X(S64_TO_F16, uint16_t, ci_float16_from_int64(( int64_t)ci_read_int(src, 8), 0), memcpy(dest, &result, 2)) \
-    X(U64_TO_F16, uint16_t, ci_float16_from_uint64(( uint64_t)ci_read_uint(src, 8), 0), memcpy(dest, &result, 2)) \
-    X(S128_TO_F16, uint16_t, ci_float16_from_uint128(ci_read_u128(src), 0, 0), memcpy(dest, &result, 2)) \
-    X(U128_TO_F16, uint16_t, ci_float16_from_uint128(ci_read_u128(src), 1, 0), memcpy(dest, &result, 2)) \
-    X(S32_TO_BF16, uint16_t, ci_float16_from_int32(( int32_t)ci_read_int(src, 4), 1), memcpy(dest, &result, 2)) \
-    X(U32_TO_BF16, uint16_t, ci_float16_from_uint32(( uint32_t)ci_read_uint(src, 4), 1), memcpy(dest, &result, 2)) \
-    X(S64_TO_BF16, uint16_t, ci_float16_from_int64(( int64_t)ci_read_int(src, 8), 1), memcpy(dest, &result, 2)) \
-    X(U64_TO_BF16, uint16_t, ci_float16_from_uint64(( uint64_t)ci_read_uint(src, 8), 1), memcpy(dest, &result, 2)) \
-    X(S128_TO_BF16, uint16_t, ci_float16_from_uint128(ci_read_u128(src), 0, 1), memcpy(dest, &result, 2)) \
-    X(U128_TO_BF16, uint16_t, ci_float16_from_uint128(ci_read_u128(src), 1, 1), memcpy(dest, &result, 2)) \
-    X(S32_TO_F32, float, (float)ci_read_int(src, 4), memcpy(dest, &result, 4)) \
-    X(U32_TO_F32, float, (float)ci_read_uint(src, 4), memcpy(dest, &result, 4)) \
-    X(S64_TO_F32, float, (float)ci_read_int(src, 8), memcpy(dest, &result, 4)) \
-    X(U64_TO_F32, float, (float)ci_read_uint(src, 8), memcpy(dest, &result, 4)) \
-    X(S128_TO_F32, float, ci_uint128_to_float(ci_read_u128(src), 0), memcpy(dest, &result, 4)) \
-    X(U128_TO_F32, float, ci_uint128_to_float(ci_read_u128(src), 1), memcpy(dest, &result, 4)) \
-    X(S32_TO_F64, double, (double)ci_read_int(src, 4), memcpy(dest, &result, 8)) \
-    X(U32_TO_F64, double, (double)ci_read_uint(src, 4), memcpy(dest, &result, 8)) \
-    X(S64_TO_F64, double, (double)ci_read_int(src, 8), memcpy(dest, &result, 8)) \
-    X(U64_TO_F64, double, (double)ci_read_uint(src, 8), memcpy(dest, &result, 8)) \
-    X(S128_TO_F64, double, ci_uint128_to_double(ci_read_u128(src), 0), memcpy(dest, &result, 8)) \
-    X(U128_TO_F64, double, ci_uint128_to_double(ci_read_u128(src), 1), memcpy(dest, &result, 8)) \
-    X(S32_TO_F80, CiFloat80, ci_float80_from_uint128(ci_uint128_from_int64(ci_read_int(src, 4)), 0), ci_float80_write(dest, op->convert.slot_size, result)) \
-    X(U32_TO_F80, CiFloat80, ci_float80_from_uint128(ci_uint128_from_uint64(ci_read_uint(src, 4)), 1), ci_float80_write(dest, op->convert.slot_size, result)) \
-    X(S64_TO_F80, CiFloat80, ci_float80_from_uint128(ci_uint128_from_int64(ci_read_int(src, 8)), 0), ci_float80_write(dest, op->convert.slot_size, result)) \
-    X(U64_TO_F80, CiFloat80, ci_float80_from_uint128(ci_uint128_from_uint64(ci_read_uint(src, 8)), 1), ci_float80_write(dest, op->convert.slot_size, result)) \
-    X(S128_TO_F80, CiFloat80, ci_float80_from_uint128(ci_read_u128(src), 0), ci_float80_write(dest, op->convert.slot_size, result)) \
-    X(U128_TO_F80, CiFloat80, ci_float80_from_uint128(ci_read_u128(src), 1), ci_float80_write(dest, op->convert.slot_size, result)) \
-    X(S32_TO_F128, CiFloat128, ci_float128_from_uint128(ci_uint128_from_int64(ci_read_int(src, 4)), 0), ci_float128_write(dest, 16, result)) \
-    X(U32_TO_F128, CiFloat128, ci_float128_from_uint128(ci_uint128_from_uint64(ci_read_uint(src, 4)), 1), ci_float128_write(dest, 16, result)) \
-    X(S64_TO_F128, CiFloat128, ci_float128_from_uint128(ci_uint128_from_int64(ci_read_int(src, 8)), 0), ci_float128_write(dest, 16, result)) \
-    X(U64_TO_F128, CiFloat128, ci_float128_from_uint128(ci_uint128_from_uint64(ci_read_uint(src, 8)), 1), ci_float128_write(dest, 16, result)) \
-    X(S128_TO_F128, CiFloat128, ci_float128_from_uint128(ci_read_u128(src), 0), ci_float128_write(dest, 16, result)) \
-    X(U128_TO_F128, CiFloat128, ci_float128_from_uint128(ci_read_u128(src), 1), ci_float128_write(dest, 16, result))
+    X(S32_TO_F16, S32, F16) \
+    X(U32_TO_F16, U32, F16) \
+    X(S64_TO_F16, S64, F16) \
+    X(U64_TO_F16, U64, F16) \
+    X(S128_TO_F16, S128, F16) \
+    X(U128_TO_F16, U128, F16) \
+    X(S32_TO_BF16, S32, BF16) \
+    X(U32_TO_BF16, U32, BF16) \
+    X(S64_TO_BF16, S64, BF16) \
+    X(U64_TO_BF16, U64, BF16) \
+    X(S128_TO_BF16, S128, BF16) \
+    X(U128_TO_BF16, U128, BF16) \
+    X(S32_TO_F32, S32, F32) \
+    X(U32_TO_F32, U32, F32) \
+    X(S64_TO_F32, S64, F32) \
+    X(U64_TO_F32, U64, F32) \
+    X(S128_TO_F32, S128, F32) \
+    X(U128_TO_F32, U128, F32) \
+    X(S32_TO_F64, S32, F64) \
+    X(U32_TO_F64, U32, F64) \
+    X(S64_TO_F64, S64, F64) \
+    X(U64_TO_F64, U64, F64) \
+    X(S128_TO_F64, S128, F64) \
+    X(U128_TO_F64, U128, F64) \
+    X(S32_TO_F80, S32, F80) \
+    X(U32_TO_F80, U32, F80) \
+    X(S64_TO_F80, S64, F80) \
+    X(U64_TO_F80, U64, F80) \
+    X(S128_TO_F80, S128, F80) \
+    X(U128_TO_F80, U128, F80) \
+    X(S32_TO_F128, S32, F128) \
+    X(U32_TO_F128, U32, F128) \
+    X(S64_TO_F128, S64, F128) \
+    X(U64_TO_F128, U64, F128) \
+    X(S128_TO_F128, S128, F128) \
+    X(U128_TO_F128, U128, F128)
 
 #define CI_FTOI_OPS(X) \
-    X(F16_TO_S32, 4, ci_uint128_from_uint64((uint64_t)ci_float16_to_int32((uint16_t)ci_read_uint(src, 2), 0))) \
-    X(F16_TO_U32, 4, ci_uint128_from_uint64((uint64_t)ci_float16_to_uint32((uint16_t)ci_read_uint(src, 2), 0))) \
-    X(F16_TO_S64, 8, ci_uint128_from_uint64((uint64_t)ci_float16_to_int64((uint16_t)ci_read_uint(src, 2), 0))) \
-    X(F16_TO_U64, 8, ci_uint128_from_uint64((uint64_t)ci_float16_to_uint64((uint16_t)ci_read_uint(src, 2), 0))) \
-    X(F16_TO_I128, 16, ci_float16_to_uint128((uint16_t)ci_read_uint(src, 2), 0)) \
-    X(BF16_TO_S32, 4, ci_uint128_from_uint64((uint64_t)ci_float16_to_int32((uint16_t)ci_read_uint(src, 2), 1))) \
-    X(BF16_TO_U32, 4, ci_uint128_from_uint64((uint64_t)ci_float16_to_uint32((uint16_t)ci_read_uint(src, 2), 1))) \
-    X(BF16_TO_S64, 8, ci_uint128_from_uint64((uint64_t)ci_float16_to_int64((uint16_t)ci_read_uint(src, 2), 1))) \
-    X(BF16_TO_U64, 8, ci_uint128_from_uint64((uint64_t)ci_float16_to_uint64((uint16_t)ci_read_uint(src, 2), 1))) \
-    X(BF16_TO_I128, 16, ci_float16_to_uint128((uint16_t)ci_read_uint(src, 2), 1)) \
-    X(F32_TO_S32, 4, ci_uint128_from_uint64(ci_uint64_from_double((double)ci_read_f32(src), 0))) \
-    X(F32_TO_U32, 4, ci_uint128_from_uint64(ci_uint64_from_double((double)ci_read_f32(src), 1))) \
-    X(F32_TO_S64, 8, ci_uint128_from_uint64(ci_uint64_from_double((double)ci_read_f32(src), 0))) \
-    X(F32_TO_U64, 8, ci_uint128_from_uint64(ci_uint64_from_double((double)ci_read_f32(src), 1))) \
-    X(F32_TO_S128, 16, ci_uint128_from_double((double)ci_read_f32(src), 0)) \
-    X(F32_TO_U128, 16, ci_uint128_from_double((double)ci_read_f32(src), 1)) \
-    X(F64_TO_S32, 4, ci_uint128_from_uint64(ci_uint64_from_double(ci_read_f64(src), 0))) \
-    X(F64_TO_U32, 4, ci_uint128_from_uint64(ci_uint64_from_double(ci_read_f64(src), 1))) \
-    X(F64_TO_S64, 8, ci_uint128_from_uint64(ci_uint64_from_double(ci_read_f64(src), 0))) \
-    X(F64_TO_U64, 8, ci_uint128_from_uint64(ci_uint64_from_double(ci_read_f64(src), 1))) \
-    X(F64_TO_S128, 16, ci_uint128_from_double(ci_read_f64(src), 0)) \
-    X(F64_TO_U128, 16, ci_uint128_from_double(ci_read_f64(src), 1)) \
-    X(F80_TO_I8, 1, ci_float80_to_uint128(ci_float80_read(src))) \
-    X(F80_TO_I16, 2, ci_float80_to_uint128(ci_float80_read(src))) \
-    X(F80_TO_I32, 4, ci_float80_to_uint128(ci_float80_read(src))) \
-    X(F80_TO_I64, 8, ci_float80_to_uint128(ci_float80_read(src))) \
-    X(F80_TO_I128, 16, ci_float80_to_uint128(ci_float80_read(src))) \
-    X(F128_TO_I8, 1, ci_float128_to_uint128(ci_float128_read(src))) \
-    X(F128_TO_I16, 2, ci_float128_to_uint128(ci_float128_read(src))) \
-    X(F128_TO_I32, 4, ci_float128_to_uint128(ci_float128_read(src))) \
-    X(F128_TO_I64, 8, ci_float128_to_uint128(ci_float128_read(src))) \
-    X(F128_TO_I128, 16, ci_float128_to_uint128(ci_float128_read(src)))
+    X(F16_TO_S32, F16, S32, 4) \
+    X(F16_TO_U32, F16, U32, 4) \
+    X(F16_TO_S64, F16, S64, 8) \
+    X(F16_TO_U64, F16, U64, 8) \
+    X(F16_TO_I128, F16, I128, 16) \
+    X(BF16_TO_S32, BF16, S32, 4) \
+    X(BF16_TO_U32, BF16, U32, 4) \
+    X(BF16_TO_S64, BF16, S64, 8) \
+    X(BF16_TO_U64, BF16, U64, 8) \
+    X(BF16_TO_I128, BF16, I128, 16) \
+    X(F32_TO_S32, F32, S32, 4) \
+    X(F32_TO_U32, F32, U32, 4) \
+    X(F32_TO_S64, F32, S64, 8) \
+    X(F32_TO_U64, F32, U64, 8) \
+    X(F32_TO_S128, F32, S128, 16) \
+    X(F32_TO_U128, F32, U128, 16) \
+    X(F64_TO_S32, F64, S32, 4) \
+    X(F64_TO_U32, F64, U32, 4) \
+    X(F64_TO_S64, F64, S64, 8) \
+    X(F64_TO_U64, F64, U64, 8) \
+    X(F64_TO_S128, F64, S128, 16) \
+    X(F64_TO_U128, F64, U128, 16) \
+    X(F80_TO_I8, F80, I8, 1) \
+    X(F80_TO_I16, F80, I16, 2) \
+    X(F80_TO_I32, F80, I32, 4) \
+    X(F80_TO_I64, F80, I64, 8) \
+    X(F80_TO_I128, F80, I128, 16) \
+    X(F128_TO_I8, F128, I8, 1) \
+    X(F128_TO_I16, F128, I16, 2) \
+    X(F128_TO_I32, F128, I32, 4) \
+    X(F128_TO_I64, F128, I64, 8) \
+    X(F128_TO_I128, F128, I128, 16)
 
 #define CI_FTOF_OPS(X) \
-    X(F16_TO_BF16, uint16_t, ci_float16_from_float(ci_float16_to_float((uint16_t)ci_read_uint(src, 2), 0), 1), memcpy(dest, &result, 2)) \
-    X(F16_TO_F32, float, ci_float16_to_float((uint16_t)ci_read_uint(src, 2), 0), memcpy(dest, &result, 4)) \
-    X(F16_TO_F64, double, ci_float16_to_double((uint16_t)ci_read_uint(src, 2), 0), memcpy(dest, &result, 8)) \
-    X(F16_TO_F80, CiFloat80, ci_float16_to_float80((uint16_t)ci_read_uint(src, 2), 0), ci_float80_write(dest, op->convert.slot_size, result)) \
-    X(F16_TO_F128, CiFloat128, ci_float16_to_quad((uint16_t)ci_read_uint(src, 2), 0), ci_float128_write(dest, 16, result)) \
-    X(BF16_TO_F16, uint16_t, ci_float16_from_float(ci_float16_to_float((uint16_t)ci_read_uint(src, 2), 1), 0), memcpy(dest, &result, 2)) \
-    X(BF16_TO_F32, float, ci_float16_to_float((uint16_t)ci_read_uint(src, 2), 1), memcpy(dest, &result, 4)) \
-    X(BF16_TO_F64, double, ci_float16_to_double((uint16_t)ci_read_uint(src, 2), 1), memcpy(dest, &result, 8)) \
-    X(BF16_TO_F80, CiFloat80, ci_float16_to_float80((uint16_t)ci_read_uint(src, 2), 1), ci_float80_write(dest, op->convert.slot_size, result)) \
-    X(BF16_TO_F128, CiFloat128, ci_float16_to_quad((uint16_t)ci_read_uint(src, 2), 1), ci_float128_write(dest, 16, result)) \
-    X(F32_TO_F16, uint16_t, ci_float16_from_float(ci_read_f32(src), 0), memcpy(dest, &result, 2)) \
-    X(F32_TO_BF16, uint16_t, ci_float16_from_float(ci_read_f32(src), 1), memcpy(dest, &result, 2)) \
-    X(F32_TO_F64, double, (double)ci_read_f32(src), memcpy(dest, &result, 8)) \
-    X(F32_TO_F80, CiFloat80, ci_float80_from_float(ci_read_f32(src)), ci_float80_write(dest, op->convert.slot_size, result)) \
-    X(F32_TO_F128, CiFloat128, ci_float128_from_float(ci_read_f32(src)), ci_float128_write(dest, 16, result)) \
-    X(F64_TO_F16, uint16_t, ci_float16_from_double(ci_read_f64(src), 0), memcpy(dest, &result, 2)) \
-    X(F64_TO_BF16, uint16_t, ci_float16_from_double(ci_read_f64(src), 1), memcpy(dest, &result, 2)) \
-    X(F64_TO_F32, float, (float)ci_read_f64(src), memcpy(dest, &result, 4)) \
-    X(F64_TO_F80, CiFloat80, ci_float80_from_double(ci_read_f64(src)), ci_float80_write(dest, op->convert.slot_size, result)) \
-    X(F64_TO_F128, CiFloat128, ci_float128_from_double(ci_read_f64(src)), ci_float128_write(dest, 16, result)) \
-    X(F80_TO_F16, uint16_t, ci_float16_from_float80(ci_float80_read(src), 0), memcpy(dest, &result, 2)) \
-    X(F80_TO_BF16, uint16_t, ci_float16_from_float80(ci_float80_read(src), 1), memcpy(dest, &result, 2)) \
-    X(F80_TO_F32, float, ci_float80_to_float(ci_float80_read(src)), memcpy(dest, &result, 4)) \
-    X(F80_TO_F64, double, ci_float80_to_double(ci_float80_read(src)), memcpy(dest, &result, 8)) \
-    X(F80_TO_F128, CiFloat128, ci_float128_from_float80(ci_float80_read(src)), ci_float128_write(dest, 16, result)) \
-    X(F128_TO_F16, uint16_t, ci_float16_from_quad(ci_float128_read(src), 0), memcpy(dest, &result, 2)) \
-    X(F128_TO_BF16, uint16_t, ci_float16_from_quad(ci_float128_read(src), 1), memcpy(dest, &result, 2)) \
-    X(F128_TO_F32, float, ci_float128_to_float(ci_float128_read(src)), memcpy(dest, &result, 4)) \
-    X(F128_TO_F64, double, ci_float128_to_double(ci_float128_read(src)), memcpy(dest, &result, 8)) \
-    X(F128_TO_F80, CiFloat80, ci_float80_from_float128(ci_float128_read(src)), ci_float80_write(dest, op->convert.slot_size, result))
+    X(F16_TO_BF16, F16, BF16) \
+    X(F16_TO_F32, F16, F32) \
+    X(F16_TO_F64, F16, F64) \
+    X(F16_TO_F80, F16, F80) \
+    X(F16_TO_F128, F16, F128) \
+    X(BF16_TO_F16, BF16, F16) \
+    X(BF16_TO_F32, BF16, F32) \
+    X(BF16_TO_F64, BF16, F64) \
+    X(BF16_TO_F80, BF16, F80) \
+    X(BF16_TO_F128, BF16, F128) \
+    X(F32_TO_F16, F32, F16) \
+    X(F32_TO_BF16, F32, BF16) \
+    X(F32_TO_F64, F32, F64) \
+    X(F32_TO_F80, F32, F80) \
+    X(F32_TO_F128, F32, F128) \
+    X(F64_TO_F16, F64, F16) \
+    X(F64_TO_BF16, F64, BF16) \
+    X(F64_TO_F32, F64, F32) \
+    X(F64_TO_F80, F64, F80) \
+    X(F64_TO_F128, F64, F128) \
+    X(F80_TO_F16, F80, F16) \
+    X(F80_TO_BF16, F80, BF16) \
+    X(F80_TO_F32, F80, F32) \
+    X(F80_TO_F64, F80, F64) \
+    X(F80_TO_F128, F80, F128) \
+    X(F128_TO_F16, F128, F16) \
+    X(F128_TO_BF16, F128, BF16) \
+    X(F128_TO_F32, F128, F32) \
+    X(F128_TO_F64, F128, F64) \
+    X(F128_TO_F80, F128, F80)
 
+// name, incoming, write, operation, byte width, alignment, extension source bytes
 #define CI_ABI_MOVE_OPS(X) \
-    X(ABI_READ_IN8, frame->incoming, 1, 1, memcpy(slot, reg, 1)) \
-    X(ABI_READ_IN16, frame->incoming, 2, 1, memcpy(slot, reg, 2)) \
-    X(ABI_READ_IN16_A, frame->incoming, 2, 2, memcpy(slot, reg, 2)) \
-    X(ABI_READ_IN32, frame->incoming, 4, 1, memcpy(slot, reg, 4)) \
-    X(ABI_READ_IN32_A, frame->incoming, 4, 4, memcpy(slot, reg, 4)) \
-    X(ABI_READ_IN64, frame->incoming, 8, 1, memcpy(slot, reg, 8)) \
-    X(ABI_READ_IN64_A, frame->incoming, 8, 8, memcpy(slot, reg, 8)) \
-    X(ABI_READ_IN128, frame->incoming, 16, 1, memcpy(slot, reg, 16)) \
-    X(ABI_READ_IN128_A, frame->incoming, 16, 16, memcpy(slot, reg, 16)) \
-    X(ABI_READ_IN_N, frame->incoming, op->abi_move.size, 1, memcpy(slot, reg, op->abi_move.size)) \
-    X(ABI_READ_IN_N_A2, frame->incoming, op->abi_move.size, 2, memcpy(slot, reg, op->abi_move.size)) \
-    X(ABI_READ_IN_N_A4, frame->incoming, op->abi_move.size, 4, memcpy(slot, reg, op->abi_move.size)) \
-    X(ABI_READ_IN_N_A8, frame->incoming, op->abi_move.size, 8, memcpy(slot, reg, op->abi_move.size)) \
-    X(ABI_READ_IN_N_A16, frame->incoming, op->abi_move.size, 16, memcpy(slot, reg, op->abi_move.size)) \
-    X(ABI_READ_OUT8, &frame->stack->registers, 1, 1, memcpy(slot, reg, 1)) \
-    X(ABI_READ_OUT16, &frame->stack->registers, 2, 1, memcpy(slot, reg, 2)) \
-    X(ABI_READ_OUT16_A, &frame->stack->registers, 2, 2, memcpy(slot, reg, 2)) \
-    X(ABI_READ_OUT32, &frame->stack->registers, 4, 1, memcpy(slot, reg, 4)) \
-    X(ABI_READ_OUT32_A, &frame->stack->registers, 4, 4, memcpy(slot, reg, 4)) \
-    X(ABI_READ_OUT64, &frame->stack->registers, 8, 1, memcpy(slot, reg, 8)) \
-    X(ABI_READ_OUT64_A, &frame->stack->registers, 8, 8, memcpy(slot, reg, 8)) \
-    X(ABI_READ_OUT128, &frame->stack->registers, 16, 1, memcpy(slot, reg, 16)) \
-    X(ABI_READ_OUT128_A, &frame->stack->registers, 16, 16, memcpy(slot, reg, 16)) \
-    X(ABI_READ_OUT_N, &frame->stack->registers, op->abi_move.size, 1, memcpy(slot, reg, op->abi_move.size)) \
-    X(ABI_READ_OUT_N_A2, &frame->stack->registers, op->abi_move.size, 2, memcpy(slot, reg, op->abi_move.size)) \
-    X(ABI_READ_OUT_N_A4, &frame->stack->registers, op->abi_move.size, 4, memcpy(slot, reg, op->abi_move.size)) \
-    X(ABI_READ_OUT_N_A8, &frame->stack->registers, op->abi_move.size, 8, memcpy(slot, reg, op->abi_move.size)) \
-    X(ABI_READ_OUT_N_A16, &frame->stack->registers, op->abi_move.size, 16, memcpy(slot, reg, op->abi_move.size)) \
-    X(ABI_WRITE_OUT8, &frame->stack->registers, 1, 1, memcpy(reg, slot, 1)) \
-    X(ABI_WRITE_OUT16, &frame->stack->registers, 2, 1, memcpy(reg, slot, 2)) \
-    X(ABI_WRITE_OUT16_A, &frame->stack->registers, 2, 2, memcpy(reg, slot, 2)) \
-    X(ABI_WRITE_OUT32, &frame->stack->registers, 4, 1, memcpy(reg, slot, 4)) \
-    X(ABI_WRITE_OUT32_A, &frame->stack->registers, 4, 4, memcpy(reg, slot, 4)) \
-    X(ABI_WRITE_OUT64, &frame->stack->registers, 8, 1, memcpy(reg, slot, 8)) \
-    X(ABI_WRITE_OUT64_A, &frame->stack->registers, 8, 8, memcpy(reg, slot, 8)) \
-    X(ABI_WRITE_OUT128, &frame->stack->registers, 16, 1, memcpy(reg, slot, 16)) \
-    X(ABI_WRITE_OUT128_A, &frame->stack->registers, 16, 16, memcpy(reg, slot, 16)) \
-    X(ABI_WRITE_OUT_N, &frame->stack->registers, op->abi_move.size, 1, memcpy(reg, slot, op->abi_move.size)) \
-    X(ABI_WRITE_OUT_N_A2, &frame->stack->registers, op->abi_move.size, 2, memcpy(reg, slot, op->abi_move.size)) \
-    X(ABI_WRITE_OUT_N_A4, &frame->stack->registers, op->abi_move.size, 4, memcpy(reg, slot, op->abi_move.size)) \
-    X(ABI_WRITE_OUT_N_A8, &frame->stack->registers, op->abi_move.size, 8, memcpy(reg, slot, op->abi_move.size)) \
-    X(ABI_WRITE_OUT_N_A16, &frame->stack->registers, op->abi_move.size, 16, memcpy(reg, slot, op->abi_move.size)) \
-    X(ABI_WRITE_SEXT8, &frame->stack->registers, 8, 1, uint64_t value = (uint64_t)ci_read_int(slot, 1); memcpy(reg, &value, 8)) \
-    X(ABI_WRITE_SEXT16, &frame->stack->registers, 8, 1, uint64_t value = (uint64_t)ci_read_int(slot, 2); memcpy(reg, &value, 8)) \
-    X(ABI_WRITE_SEXT16_A, &frame->stack->registers, 8, 2, uint64_t value = (uint64_t)ci_read_int(slot, 2); memcpy(reg, &value, 8)) \
-    X(ABI_WRITE_SEXT32, &frame->stack->registers, 8, 1, uint64_t value = (uint64_t)ci_read_int(slot, 4); memcpy(reg, &value, 8)) \
-    X(ABI_WRITE_SEXT32_A, &frame->stack->registers, 8, 4, uint64_t value = (uint64_t)ci_read_int(slot, 4); memcpy(reg, &value, 8)) \
-    X(ABI_WRITE_ZEXT8, &frame->stack->registers, 8, 1, uint64_t value = (uint64_t)ci_read_uint(slot, 1); memcpy(reg, &value, 8)) \
-    X(ABI_WRITE_ZEXT16, &frame->stack->registers, 8, 1, uint64_t value = (uint64_t)ci_read_uint(slot, 2); memcpy(reg, &value, 8)) \
-    X(ABI_WRITE_ZEXT16_A, &frame->stack->registers, 8, 2, uint64_t value = (uint64_t)ci_read_uint(slot, 2); memcpy(reg, &value, 8)) \
-    X(ABI_WRITE_ZEXT32, &frame->stack->registers, 8, 1, uint64_t value = (uint64_t)ci_read_uint(slot, 4); memcpy(reg, &value, 8)) \
-    X(ABI_WRITE_ZEXT32_A, &frame->stack->registers, 8, 4, uint64_t value = (uint64_t)ci_read_uint(slot, 4); memcpy(reg, &value, 8))
+    X(ABI_READ_IN8, 1, 0, COPY, 1, 1, 0) \
+    X(ABI_READ_IN16, 1, 0, COPY, 2, 1, 0) \
+    X(ABI_READ_IN16_A, 1, 0, COPY, 2, 2, 0) \
+    X(ABI_READ_IN32, 1, 0, COPY, 4, 1, 0) \
+    X(ABI_READ_IN32_A, 1, 0, COPY, 4, 4, 0) \
+    X(ABI_READ_IN64, 1, 0, COPY, 8, 1, 0) \
+    X(ABI_READ_IN64_A, 1, 0, COPY, 8, 8, 0) \
+    X(ABI_READ_IN128, 1, 0, COPY, 16, 1, 0) \
+    X(ABI_READ_IN128_A, 1, 0, COPY, 16, 16, 0) \
+    X(ABI_READ_IN_N, 1, 0, COPY, 0, 1, 0) \
+    X(ABI_READ_IN_N_A2, 1, 0, COPY, 0, 2, 0) \
+    X(ABI_READ_IN_N_A4, 1, 0, COPY, 0, 4, 0) \
+    X(ABI_READ_IN_N_A8, 1, 0, COPY, 0, 8, 0) \
+    X(ABI_READ_IN_N_A16, 1, 0, COPY, 0, 16, 0) \
+    X(ABI_READ_OUT8, 0, 0, COPY, 1, 1, 0) \
+    X(ABI_READ_OUT16, 0, 0, COPY, 2, 1, 0) \
+    X(ABI_READ_OUT16_A, 0, 0, COPY, 2, 2, 0) \
+    X(ABI_READ_OUT32, 0, 0, COPY, 4, 1, 0) \
+    X(ABI_READ_OUT32_A, 0, 0, COPY, 4, 4, 0) \
+    X(ABI_READ_OUT64, 0, 0, COPY, 8, 1, 0) \
+    X(ABI_READ_OUT64_A, 0, 0, COPY, 8, 8, 0) \
+    X(ABI_READ_OUT128, 0, 0, COPY, 16, 1, 0) \
+    X(ABI_READ_OUT128_A, 0, 0, COPY, 16, 16, 0) \
+    X(ABI_READ_OUT_N, 0, 0, COPY, 0, 1, 0) \
+    X(ABI_READ_OUT_N_A2, 0, 0, COPY, 0, 2, 0) \
+    X(ABI_READ_OUT_N_A4, 0, 0, COPY, 0, 4, 0) \
+    X(ABI_READ_OUT_N_A8, 0, 0, COPY, 0, 8, 0) \
+    X(ABI_READ_OUT_N_A16, 0, 0, COPY, 0, 16, 0) \
+    X(ABI_WRITE_OUT8, 0, 1, COPY, 1, 1, 0) \
+    X(ABI_WRITE_OUT16, 0, 1, COPY, 2, 1, 0) \
+    X(ABI_WRITE_OUT16_A, 0, 1, COPY, 2, 2, 0) \
+    X(ABI_WRITE_OUT32, 0, 1, COPY, 4, 1, 0) \
+    X(ABI_WRITE_OUT32_A, 0, 1, COPY, 4, 4, 0) \
+    X(ABI_WRITE_OUT64, 0, 1, COPY, 8, 1, 0) \
+    X(ABI_WRITE_OUT64_A, 0, 1, COPY, 8, 8, 0) \
+    X(ABI_WRITE_OUT128, 0, 1, COPY, 16, 1, 0) \
+    X(ABI_WRITE_OUT128_A, 0, 1, COPY, 16, 16, 0) \
+    X(ABI_WRITE_OUT_N, 0, 1, COPY, 0, 1, 0) \
+    X(ABI_WRITE_OUT_N_A2, 0, 1, COPY, 0, 2, 0) \
+    X(ABI_WRITE_OUT_N_A4, 0, 1, COPY, 0, 4, 0) \
+    X(ABI_WRITE_OUT_N_A8, 0, 1, COPY, 0, 8, 0) \
+    X(ABI_WRITE_OUT_N_A16, 0, 1, COPY, 0, 16, 0) \
+    X(ABI_WRITE_SEXT8, 0, 1, SIGN_EXTEND, 8, 1, 1) \
+    X(ABI_WRITE_SEXT16, 0, 1, SIGN_EXTEND, 8, 1, 2) \
+    X(ABI_WRITE_SEXT16_A, 0, 1, SIGN_EXTEND, 8, 2, 2) \
+    X(ABI_WRITE_SEXT32, 0, 1, SIGN_EXTEND, 8, 1, 4) \
+    X(ABI_WRITE_SEXT32_A, 0, 1, SIGN_EXTEND, 8, 4, 4) \
+    X(ABI_WRITE_ZEXT8, 0, 1, ZERO_EXTEND, 8, 1, 1) \
+    X(ABI_WRITE_ZEXT16, 0, 1, ZERO_EXTEND, 8, 1, 2) \
+    X(ABI_WRITE_ZEXT16_A, 0, 1, ZERO_EXTEND, 8, 2, 2) \
+    X(ABI_WRITE_ZEXT32, 0, 1, ZERO_EXTEND, 8, 1, 4) \
+    X(ABI_WRITE_ZEXT32_A, 0, 1, ZERO_EXTEND, 8, 4, 4)
 
+// name, operation, source address mode, destination address mode, byte width, alignment
 #define CI_ABI_TRANSFER_OPS(X) \
-    X(ABI_COPY_SLOT_TO_REG_PTR_8, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 1);) \
-    X(ABI_COPY_SLOT_TO_REG_PTR_16, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 2);) \
-    X(ABI_COPY_SLOT_TO_REG_PTR_16_A, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 2), CI_ALIGNED(source, 2), 2);) \
-    X(ABI_COPY_SLOT_TO_REG_PTR_32, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 4);) \
-    X(ABI_COPY_SLOT_TO_REG_PTR_32_A, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 4), CI_ALIGNED(source, 4), 4);) \
-    X(ABI_COPY_SLOT_TO_REG_PTR_64, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 8);) \
-    X(ABI_COPY_SLOT_TO_REG_PTR_64_A, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 8), CI_ALIGNED(source, 8), 8);) \
-    X(ABI_COPY_SLOT_TO_REG_PTR_128, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 16);) \
-    X(ABI_COPY_SLOT_TO_REG_PTR_128_A, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 16), CI_ALIGNED(source, 16), 16);) \
-    X(ABI_COPY_SLOT_TO_REG_PTR_N, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), op->abi_transfer.size);) \
-    X(ABI_COPY_SLOT_TO_REG_PTR_N_A2, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 2), CI_ALIGNED(source, 2), op->abi_transfer.size);) \
-    X(ABI_COPY_SLOT_TO_REG_PTR_N_A4, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 4), CI_ALIGNED(source, 4), op->abi_transfer.size);) \
-    X(ABI_COPY_SLOT_TO_REG_PTR_N_A8, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 8), CI_ALIGNED(source, 8), op->abi_transfer.size);) \
-    X(ABI_COPY_SLOT_TO_REG_PTR_N_A16, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 16), CI_ALIGNED(source, 16), op->abi_transfer.size);) \
-    X(ABI_COPY_INCOMING_PTR_TO_SLOT_8, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 1);) \
-    X(ABI_COPY_INCOMING_PTR_TO_SLOT_16, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 2);) \
-    X(ABI_COPY_INCOMING_PTR_TO_SLOT_16_A, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 2), CI_ALIGNED(source, 2), 2);) \
-    X(ABI_COPY_INCOMING_PTR_TO_SLOT_32, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 4);) \
-    X(ABI_COPY_INCOMING_PTR_TO_SLOT_32_A, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 4), CI_ALIGNED(source, 4), 4);) \
-    X(ABI_COPY_INCOMING_PTR_TO_SLOT_64, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 8);) \
-    X(ABI_COPY_INCOMING_PTR_TO_SLOT_64_A, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 8), CI_ALIGNED(source, 8), 8);) \
-    X(ABI_COPY_INCOMING_PTR_TO_SLOT_128, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 16);) \
-    X(ABI_COPY_INCOMING_PTR_TO_SLOT_128_A, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 16), CI_ALIGNED(source, 16), 16);) \
-    X(ABI_COPY_INCOMING_PTR_TO_SLOT_N, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), op->abi_transfer.size);) \
-    X(ABI_COPY_INCOMING_PTR_TO_SLOT_N_A2, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 2), CI_ALIGNED(source, 2), op->abi_transfer.size);) \
-    X(ABI_COPY_INCOMING_PTR_TO_SLOT_N_A4, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 4), CI_ALIGNED(source, 4), op->abi_transfer.size);) \
-    X(ABI_COPY_INCOMING_PTR_TO_SLOT_N_A8, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 8), CI_ALIGNED(source, 8), op->abi_transfer.size);) \
-    X(ABI_COPY_INCOMING_PTR_TO_SLOT_N_A16, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 16), CI_ALIGNED(source, 16), op->abi_transfer.size);) \
-    X(ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_8, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; memcpy(&source, source, sizeof source); void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 1);) \
-    X(ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_16, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; memcpy(&source, source, sizeof source); void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 2);) \
-    X(ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_16_A, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; memcpy(&source, source, sizeof source); void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 2), CI_ALIGNED(source, 2), 2);) \
-    X(ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_32, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; memcpy(&source, source, sizeof source); void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 4);) \
-    X(ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_32_A, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; memcpy(&source, source, sizeof source); void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 4), CI_ALIGNED(source, 4), 4);) \
-    X(ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_64, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; memcpy(&source, source, sizeof source); void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 8);) \
-    X(ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_64_A, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; memcpy(&source, source, sizeof source); void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 8), CI_ALIGNED(source, 8), 8);) \
-    X(ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_128, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; memcpy(&source, source, sizeof source); void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 16);) \
-    X(ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_128_A, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; memcpy(&source, source, sizeof source); void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 16), CI_ALIGNED(source, 16), 16);) \
-    X(ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_N, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; memcpy(&source, source, sizeof source); void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), op->abi_transfer.size);) \
-    X(ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_N_A2, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; memcpy(&source, source, sizeof source); void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 2), CI_ALIGNED(source, 2), op->abi_transfer.size);) \
-    X(ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_N_A4, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; memcpy(&source, source, sizeof source); void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 4), CI_ALIGNED(source, 4), op->abi_transfer.size);) \
-    X(ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_N_A8, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; memcpy(&source, source, sizeof source); void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 8), CI_ALIGNED(source, 8), op->abi_transfer.size);) \
-    X(ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_N_A16, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; memcpy(&source, source, sizeof source); void* destination = (char*)frame->slots + op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 16), CI_ALIGNED(source, 16), op->abi_transfer.size);) \
-    X(ABI_COPY_SLOT_TO_SLOT_PTR_8, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 1);) \
-    X(ABI_COPY_SLOT_TO_SLOT_PTR_16, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 2);) \
-    X(ABI_COPY_SLOT_TO_SLOT_PTR_16_A, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 2), CI_ALIGNED(source, 2), 2);) \
-    X(ABI_COPY_SLOT_TO_SLOT_PTR_32, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 4);) \
-    X(ABI_COPY_SLOT_TO_SLOT_PTR_32_A, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 4), CI_ALIGNED(source, 4), 4);) \
-    X(ABI_COPY_SLOT_TO_SLOT_PTR_64, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 8);) \
-    X(ABI_COPY_SLOT_TO_SLOT_PTR_64_A, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 8), CI_ALIGNED(source, 8), 8);) \
-    X(ABI_COPY_SLOT_TO_SLOT_PTR_128, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), 16);) \
-    X(ABI_COPY_SLOT_TO_SLOT_PTR_128_A, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 16), CI_ALIGNED(source, 16), 16);) \
-    X(ABI_COPY_SLOT_TO_SLOT_PTR_N, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 1), CI_ALIGNED(source, 1), op->abi_transfer.size);) \
-    X(ABI_COPY_SLOT_TO_SLOT_PTR_N_A2, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 2), CI_ALIGNED(source, 2), op->abi_transfer.size);) \
-    X(ABI_COPY_SLOT_TO_SLOT_PTR_N_A4, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 4), CI_ALIGNED(source, 4), op->abi_transfer.size);) \
-    X(ABI_COPY_SLOT_TO_SLOT_PTR_N_A8, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 8), CI_ALIGNED(source, 8), op->abi_transfer.size);) \
-    X(ABI_COPY_SLOT_TO_SLOT_PTR_N_A16, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 16), CI_ALIGNED(source, 16), op->abi_transfer.size);) \
-    X(ABI_COPY_INCOMING_TO_INCOMING_PTR_64_A, void* source = (char*)frame->incoming + op->abi_transfer.src_reg.capture_offset; void* destination; memcpy(&destination, (char*)(frame->incoming) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memmove(CI_ALIGNED(destination, 8), CI_ALIGNED(source, 8), 8);) \
-    X(ABI_ADDRESS_REG_PTR_TO_REG_PTR, void* source; memcpy(&source, (char*)(&frame->stack->registers) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)(&frame->stack->registers) + op->abi_transfer.dst_reg.capture_offset; memcpy(CI_ALIGNED(destination, 1), &source, sizeof source);) \
-    X(ABI_ADDRESS_REG_PTR_TO_REG_PTR_A, void* source; memcpy(&source, (char*)(&frame->stack->registers) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)(&frame->stack->registers) + op->abi_transfer.dst_reg.capture_offset; memcpy(CI_ALIGNED(destination, 8), &source, sizeof source);) \
-    X(ABI_ADDRESS_REG_PTR_TO_REG_PTR_PTR, void* source; memcpy(&source, (char*)(&frame->stack->registers) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memcpy(CI_ALIGNED(destination, 1), &source, sizeof source);) \
-    X(ABI_ADDRESS_REG_PTR_TO_REG_PTR_PTR_A, void* source; memcpy(&source, (char*)(&frame->stack->registers) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination; memcpy(&destination, (char*)(&frame->stack->registers) + op->abi_transfer.dst_base.capture_offset, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memcpy(CI_ALIGNED(destination, 8), &source, sizeof source);) \
-    X(ABI_ADDRESS_SLOT_PTR_TO_REG_PTR, void* source; memcpy(&source, (char*)frame->slots + op->abi_transfer.src_pointer, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)(&frame->stack->registers) + op->abi_transfer.dst_reg.capture_offset; memcpy(CI_ALIGNED(destination, 1), &source, sizeof source);) \
-    X(ABI_ADDRESS_SLOT_PTR_TO_REG_PTR_A, void* source; memcpy(&source, (char*)frame->slots + op->abi_transfer.src_pointer, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination = (char*)(&frame->stack->registers) + op->abi_transfer.dst_reg.capture_offset; memcpy(CI_ALIGNED(destination, 8), &source, sizeof source);) \
-    X(ABI_ADDRESS_SLOT_TO_REG_PTR, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination = (char*)(&frame->stack->registers) + op->abi_transfer.dst_reg.capture_offset; memcpy(CI_ALIGNED(destination, 1), &source, sizeof source);) \
-    X(ABI_ADDRESS_SLOT_TO_REG_PTR_A, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination = (char*)(&frame->stack->registers) + op->abi_transfer.dst_reg.capture_offset; memcpy(CI_ALIGNED(destination, 8), &source, sizeof source);) \
-    X(ABI_ADDRESS_SLOT_TO_SLOT_PTR, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memcpy(CI_ALIGNED(destination, 1), &source, sizeof source);) \
-    X(ABI_ADDRESS_SLOT_TO_SLOT_PTR_A, void* source = (char*)frame->slots + op->abi_transfer.src; void* destination = (char*)frame->slots + op->abi_transfer.dst; memcpy(CI_ALIGNED(destination, 8), &source, sizeof source);) \
-    X(ABI_ADDRESS_INCOMING_PTR_TO_SLOT_PTR_PTR, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memcpy(CI_ALIGNED(destination, 1), &source, sizeof source);) \
-    X(ABI_ADDRESS_INCOMING_PTR_TO_SLOT_PTR_PTR_A, void* source; memcpy(&source, (char*)(frame->incoming) + op->abi_transfer.src_base.capture_offset, sizeof source); source = (char*)source + (int32_t)op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memcpy(CI_ALIGNED(destination, 8), &source, sizeof source);) \
-    X(ABI_ADDRESS_INCOMING_SAVE_TO_SLOT_PTR_PTR, void* source = (char*)frame->incoming + op->abi_transfer.src_base.capture_offset + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memcpy(CI_ALIGNED(destination, 1), &source, sizeof source);) \
-    X(ABI_ADDRESS_INCOMING_SAVE_TO_SLOT_PTR_PTR_A, void* source = (char*)frame->incoming + op->abi_transfer.src_base.capture_offset + op->abi_transfer.src; void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; memcpy(CI_ALIGNED(destination, 8), &source, sizeof source);) \
-    X(ABI_ZERO_SLOT_8, void* destination = (char*)frame->slots + op->abi_transfer.dst; memset(CI_ALIGNED(destination, 1), 0, 1);) \
-    X(ABI_ZERO_SLOT_16, void* destination = (char*)frame->slots + op->abi_transfer.dst; memset(CI_ALIGNED(destination, 1), 0, 2);) \
-    X(ABI_ZERO_SLOT_16_A, void* destination = (char*)frame->slots + op->abi_transfer.dst; memset(CI_ALIGNED(destination, 2), 0, 2);) \
-    X(ABI_ZERO_SLOT_32, void* destination = (char*)frame->slots + op->abi_transfer.dst; memset(CI_ALIGNED(destination, 1), 0, 4);) \
-    X(ABI_ZERO_SLOT_32_A, void* destination = (char*)frame->slots + op->abi_transfer.dst; memset(CI_ALIGNED(destination, 4), 0, 4);) \
-    X(ABI_ZERO_SLOT_64, void* destination = (char*)frame->slots + op->abi_transfer.dst; memset(CI_ALIGNED(destination, 1), 0, 8);) \
-    X(ABI_ZERO_SLOT_64_A, void* destination = (char*)frame->slots + op->abi_transfer.dst; memset(CI_ALIGNED(destination, 8), 0, 8);) \
-    X(ABI_ZERO_SLOT_128, void* destination = (char*)frame->slots + op->abi_transfer.dst; memset(CI_ALIGNED(destination, 1), 0, 16);) \
-    X(ABI_ZERO_SLOT_128_A, void* destination = (char*)frame->slots + op->abi_transfer.dst; memset(CI_ALIGNED(destination, 16), 0, 16);) \
-    X(ABI_ZERO_SLOT_N, void* destination = (char*)frame->slots + op->abi_transfer.dst; memset(CI_ALIGNED(destination, 1), 0, op->abi_transfer.size);) \
-    X(ABI_ZERO_SLOT_N_A2, void* destination = (char*)frame->slots + op->abi_transfer.dst; memset(CI_ALIGNED(destination, 2), 0, op->abi_transfer.size);) \
-    X(ABI_ZERO_SLOT_N_A4, void* destination = (char*)frame->slots + op->abi_transfer.dst; memset(CI_ALIGNED(destination, 4), 0, op->abi_transfer.size);) \
-    X(ABI_ZERO_SLOT_N_A8, void* destination = (char*)frame->slots + op->abi_transfer.dst; memset(CI_ALIGNED(destination, 8), 0, op->abi_transfer.size);) \
-    X(ABI_ZERO_SLOT_N_A16, void* destination = (char*)frame->slots + op->abi_transfer.dst; memset(CI_ALIGNED(destination, 16), 0, op->abi_transfer.size);) \
-    X(ABI_CONSTANT_REG_8, void* destination = (char*)(&frame->stack->registers) + op->abi_transfer.dst_reg.capture_offset; uint32_t value = op->abi_transfer.immediate; memcpy(CI_ALIGNED(destination, 1), &value, 1);) \
-    X(ABI_CONSTANT_SLOT_PTR_32, void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; uint32_t value = op->abi_transfer.immediate; memcpy(CI_ALIGNED(destination, 1), &value, 4);) \
-    X(ABI_CONSTANT_SLOT_PTR_32_A, void* destination; memcpy(&destination, (char*)frame->slots + op->abi_transfer.dst_pointer, sizeof destination); destination = (char*)destination + (int32_t)op->abi_transfer.dst; uint32_t value = op->abi_transfer.immediate; memcpy(CI_ALIGNED(destination, 4), &value, 4);)
+    X(ABI_COPY_SLOT_TO_REG_PTR_8, COPY, SLOT, REG_PTR, 1, 1) \
+    X(ABI_COPY_SLOT_TO_REG_PTR_16, COPY, SLOT, REG_PTR, 2, 1) \
+    X(ABI_COPY_SLOT_TO_REG_PTR_16_A, COPY, SLOT, REG_PTR, 2, 2) \
+    X(ABI_COPY_SLOT_TO_REG_PTR_32, COPY, SLOT, REG_PTR, 4, 1) \
+    X(ABI_COPY_SLOT_TO_REG_PTR_32_A, COPY, SLOT, REG_PTR, 4, 4) \
+    X(ABI_COPY_SLOT_TO_REG_PTR_64, COPY, SLOT, REG_PTR, 8, 1) \
+    X(ABI_COPY_SLOT_TO_REG_PTR_64_A, COPY, SLOT, REG_PTR, 8, 8) \
+    X(ABI_COPY_SLOT_TO_REG_PTR_128, COPY, SLOT, REG_PTR, 16, 1) \
+    X(ABI_COPY_SLOT_TO_REG_PTR_128_A, COPY, SLOT, REG_PTR, 16, 16) \
+    X(ABI_COPY_SLOT_TO_REG_PTR_N, COPY, SLOT, REG_PTR, 0, 1) \
+    X(ABI_COPY_SLOT_TO_REG_PTR_N_A2, COPY, SLOT, REG_PTR, 0, 2) \
+    X(ABI_COPY_SLOT_TO_REG_PTR_N_A4, COPY, SLOT, REG_PTR, 0, 4) \
+    X(ABI_COPY_SLOT_TO_REG_PTR_N_A8, COPY, SLOT, REG_PTR, 0, 8) \
+    X(ABI_COPY_SLOT_TO_REG_PTR_N_A16, COPY, SLOT, REG_PTR, 0, 16) \
+    X(ABI_COPY_REG_PTR_TO_SLOT_8, COPY, REG_PTR, SLOT, 1, 1) \
+    X(ABI_COPY_REG_PTR_TO_SLOT_16, COPY, REG_PTR, SLOT, 2, 1) \
+    X(ABI_COPY_REG_PTR_TO_SLOT_16_A, COPY, REG_PTR, SLOT, 2, 2) \
+    X(ABI_COPY_REG_PTR_TO_SLOT_32, COPY, REG_PTR, SLOT, 4, 1) \
+    X(ABI_COPY_REG_PTR_TO_SLOT_32_A, COPY, REG_PTR, SLOT, 4, 4) \
+    X(ABI_COPY_REG_PTR_TO_SLOT_64, COPY, REG_PTR, SLOT, 8, 1) \
+    X(ABI_COPY_REG_PTR_TO_SLOT_64_A, COPY, REG_PTR, SLOT, 8, 8) \
+    X(ABI_COPY_REG_PTR_TO_SLOT_128, COPY, REG_PTR, SLOT, 16, 1) \
+    X(ABI_COPY_REG_PTR_TO_SLOT_128_A, COPY, REG_PTR, SLOT, 16, 16) \
+    X(ABI_COPY_REG_PTR_TO_SLOT_N, COPY, REG_PTR, SLOT, 0, 1) \
+    X(ABI_COPY_REG_PTR_TO_SLOT_N_A2, COPY, REG_PTR, SLOT, 0, 2) \
+    X(ABI_COPY_REG_PTR_TO_SLOT_N_A4, COPY, REG_PTR, SLOT, 0, 4) \
+    X(ABI_COPY_REG_PTR_TO_SLOT_N_A8, COPY, REG_PTR, SLOT, 0, 8) \
+    X(ABI_COPY_REG_PTR_TO_SLOT_N_A16, COPY, REG_PTR, SLOT, 0, 16) \
+    X(ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_8, COPY, REG_PTR_INDIRECT, SLOT, 1, 1) \
+    X(ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_16, COPY, REG_PTR_INDIRECT, SLOT, 2, 1) \
+    X(ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_16_A, COPY, REG_PTR_INDIRECT, SLOT, 2, 2) \
+    X(ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_32, COPY, REG_PTR_INDIRECT, SLOT, 4, 1) \
+    X(ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_32_A, COPY, REG_PTR_INDIRECT, SLOT, 4, 4) \
+    X(ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_64, COPY, REG_PTR_INDIRECT, SLOT, 8, 1) \
+    X(ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_64_A, COPY, REG_PTR_INDIRECT, SLOT, 8, 8) \
+    X(ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_128, COPY, REG_PTR_INDIRECT, SLOT, 16, 1) \
+    X(ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_128_A, COPY, REG_PTR_INDIRECT, SLOT, 16, 16) \
+    X(ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_N, COPY, REG_PTR_INDIRECT, SLOT, 0, 1) \
+    X(ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_N_A2, COPY, REG_PTR_INDIRECT, SLOT, 0, 2) \
+    X(ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_N_A4, COPY, REG_PTR_INDIRECT, SLOT, 0, 4) \
+    X(ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_N_A8, COPY, REG_PTR_INDIRECT, SLOT, 0, 8) \
+    X(ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_N_A16, COPY, REG_PTR_INDIRECT, SLOT, 0, 16) \
+    X(ABI_COPY_SLOT_TO_SLOT_PTR_8, COPY, SLOT, SLOT_PTR, 1, 1) \
+    X(ABI_COPY_SLOT_TO_SLOT_PTR_16, COPY, SLOT, SLOT_PTR, 2, 1) \
+    X(ABI_COPY_SLOT_TO_SLOT_PTR_16_A, COPY, SLOT, SLOT_PTR, 2, 2) \
+    X(ABI_COPY_SLOT_TO_SLOT_PTR_32, COPY, SLOT, SLOT_PTR, 4, 1) \
+    X(ABI_COPY_SLOT_TO_SLOT_PTR_32_A, COPY, SLOT, SLOT_PTR, 4, 4) \
+    X(ABI_COPY_SLOT_TO_SLOT_PTR_64, COPY, SLOT, SLOT_PTR, 8, 1) \
+    X(ABI_COPY_SLOT_TO_SLOT_PTR_64_A, COPY, SLOT, SLOT_PTR, 8, 8) \
+    X(ABI_COPY_SLOT_TO_SLOT_PTR_128, COPY, SLOT, SLOT_PTR, 16, 1) \
+    X(ABI_COPY_SLOT_TO_SLOT_PTR_128_A, COPY, SLOT, SLOT_PTR, 16, 16) \
+    X(ABI_COPY_SLOT_TO_SLOT_PTR_N, COPY, SLOT, SLOT_PTR, 0, 1) \
+    X(ABI_COPY_SLOT_TO_SLOT_PTR_N_A2, COPY, SLOT, SLOT_PTR, 0, 2) \
+    X(ABI_COPY_SLOT_TO_SLOT_PTR_N_A4, COPY, SLOT, SLOT_PTR, 0, 4) \
+    X(ABI_COPY_SLOT_TO_SLOT_PTR_N_A8, COPY, SLOT, SLOT_PTR, 0, 8) \
+    X(ABI_COPY_SLOT_TO_SLOT_PTR_N_A16, COPY, SLOT, SLOT_PTR, 0, 16) \
+    X(ABI_COPY_INCOMING_TO_INCOMING_PTR_64_A, COPY, INCOMING, INCOMING_PTR, 8, 8) \
+    X(ABI_ADDRESS_REG_PTR_TO_REG_PTR, ADDRESS, REG_PTR, REG, 0, 1) \
+    X(ABI_ADDRESS_REG_PTR_TO_REG_PTR_A, ADDRESS, REG_PTR, REG, 0, 8) \
+    X(ABI_ADDRESS_REG_PTR_TO_REG_PTR_PTR, ADDRESS, REG_PTR, REG_PTR, 0, 1) \
+    X(ABI_ADDRESS_REG_PTR_TO_REG_PTR_PTR_A, ADDRESS, REG_PTR, REG_PTR, 0, 8) \
+    X(ABI_ADDRESS_SLOT_PTR_TO_REG_PTR, ADDRESS, SLOT_PTR, REG, 0, 1) \
+    X(ABI_ADDRESS_SLOT_PTR_TO_REG_PTR_A, ADDRESS, SLOT_PTR, REG, 0, 8) \
+    X(ABI_ADDRESS_SLOT_TO_REG_PTR, ADDRESS, SLOT, REG, 0, 1) \
+    X(ABI_ADDRESS_SLOT_TO_REG_PTR_A, ADDRESS, SLOT, REG, 0, 8) \
+    X(ABI_ADDRESS_SLOT_TO_SLOT_PTR, ADDRESS, SLOT, SLOT, 0, 1) \
+    X(ABI_ADDRESS_SLOT_TO_SLOT_PTR_A, ADDRESS, SLOT, SLOT, 0, 8) \
+    X(ABI_ADDRESS_INCOMING_PTR_TO_SLOT_PTR_PTR, ADDRESS, INCOMING_PTR, SLOT_PTR, 0, 1) \
+    X(ABI_ADDRESS_INCOMING_PTR_TO_SLOT_PTR_PTR_A, ADDRESS, INCOMING_PTR, SLOT_PTR, 0, 8) \
+    X(ABI_ADDRESS_INCOMING_SAVE_TO_SLOT_PTR_PTR, ADDRESS, INCOMING_SAVE, SLOT_PTR, 0, 1) \
+    X(ABI_ADDRESS_INCOMING_SAVE_TO_SLOT_PTR_PTR_A, ADDRESS, INCOMING_SAVE, SLOT_PTR, 0, 8) \
+    X(ABI_ZERO_SLOT_8, ZERO, SLOT, SLOT, 1, 1) \
+    X(ABI_ZERO_SLOT_16, ZERO, SLOT, SLOT, 2, 1) \
+    X(ABI_ZERO_SLOT_16_A, ZERO, SLOT, SLOT, 2, 2) \
+    X(ABI_ZERO_SLOT_32, ZERO, SLOT, SLOT, 4, 1) \
+    X(ABI_ZERO_SLOT_32_A, ZERO, SLOT, SLOT, 4, 4) \
+    X(ABI_ZERO_SLOT_64, ZERO, SLOT, SLOT, 8, 1) \
+    X(ABI_ZERO_SLOT_64_A, ZERO, SLOT, SLOT, 8, 8) \
+    X(ABI_ZERO_SLOT_128, ZERO, SLOT, SLOT, 16, 1) \
+    X(ABI_ZERO_SLOT_128_A, ZERO, SLOT, SLOT, 16, 16) \
+    X(ABI_ZERO_SLOT_N, ZERO, SLOT, SLOT, 0, 1) \
+    X(ABI_ZERO_SLOT_N_A2, ZERO, SLOT, SLOT, 0, 2) \
+    X(ABI_ZERO_SLOT_N_A4, ZERO, SLOT, SLOT, 0, 4) \
+    X(ABI_ZERO_SLOT_N_A8, ZERO, SLOT, SLOT, 0, 8) \
+    X(ABI_ZERO_SLOT_N_A16, ZERO, SLOT, SLOT, 0, 16) \
+    X(ABI_CONSTANT_REG_8, CONSTANT, SLOT, REG, 1, 1) \
+    X(ABI_CONSTANT_SLOT_PTR_32, CONSTANT, SLOT, SLOT_PTR, 4, 1) \
+    X(ABI_CONSTANT_SLOT_PTR_32_A, CONSTANT, SLOT, SLOT_PTR, 4, 4)
 
 #define CI_JUMP_FALSE_OPS(X) \
     X(JZ8, 1) \
@@ -451,45 +613,45 @@
     X(JNZ128, 16)
 
 #define CI_BSWAP_OPS(X) \
-    X(BSWAP16, 2, bswap16((uint16_t)ci_read_uint(src, 2))) \
-    X(BSWAP32, 4, bswap32((uint32_t)ci_read_uint(src, 4))) \
-    X(BSWAP64, 8, bswap64(ci_read_uint(src, 8)))
+    X(BSWAP16, 2, uint16_t, bswap16) \
+    X(BSWAP32, 4, uint32_t, bswap32) \
+    X(BSWAP64, 8, uint64_t, bswap64)
 
 #define CI_BOUNDS_OPS(X) \
-    X(BOUNDS32, 4, >=, op->bounds.index_signed) \
-    X(BOUNDS_INCLUSIVE32, 4, >, op->bounds.index_signed) \
-    X(BOUNDS64, 8, >=, op->bounds.index_signed) \
-    X(BOUNDS_INCLUSIVE64, 8, >, op->bounds.index_signed)
+    X(BOUNDS32, 4, >=) \
+    X(BOUNDS_INCLUSIVE32, 4, >) \
+    X(BOUNDS64, 8, >=) \
+    X(BOUNDS_INCLUSIVE64, 8, >)
 
 #define CI_INDEX_OPS(X) \
-    X(INDEX32_S8, 4, (uint64_t)ci_read_int(src, 1)) \
-    X(INDEX32_U8, 4, ci_read_uint(src, 1)) \
-    X(INDEX32_S16, 4, (uint64_t)ci_read_int(src, 2)) \
-    X(INDEX32_U16, 4, ci_read_uint(src, 2)) \
-    X(INDEX32, 4, ci_read_uint(src, 4)) \
-    X(INDEX64_S8, 8, (uint64_t)ci_read_int(src, 1)) \
-    X(INDEX64_U8, 8, ci_read_uint(src, 1)) \
-    X(INDEX64_S16, 8, (uint64_t)ci_read_int(src, 2)) \
-    X(INDEX64_U16, 8, ci_read_uint(src, 2)) \
-    X(INDEX64_S32, 8, (uint64_t)ci_read_int(src, 4)) \
-    X(INDEX64_U32, 8, ci_read_uint(src, 4)) \
-    X(INDEX64, 8, ci_read_uint(src, 8))
+    X(INDEX32_S8, 4, 1, 1) \
+    X(INDEX32_U8, 4, 1, 0) \
+    X(INDEX32_S16, 4, 2, 1) \
+    X(INDEX32_U16, 4, 2, 0) \
+    X(INDEX32, 4, 4, 0) \
+    X(INDEX64_S8, 8, 1, 1) \
+    X(INDEX64_U8, 8, 1, 0) \
+    X(INDEX64_S16, 8, 2, 1) \
+    X(INDEX64_U16, 8, 2, 0) \
+    X(INDEX64_S32, 8, 4, 1) \
+    X(INDEX64_U32, 8, 4, 0) \
+    X(INDEX64, 8, 8, 0)
 
 #define CI_LOAD_BITFIELD_OPS(X) \
-    X(LDBF_U8, 1, ci_bitfield_extend(ci_bitfield_read(CI_ALIGNED(ptr + op->load_bf.offset, 1), 1, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 0), 1) \
-    X(LDBF_S8, 1, ci_bitfield_extend(ci_bitfield_read(CI_ALIGNED(ptr + op->load_bf.offset, 1), 1, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 1), 1) \
-    X(LDBF_U16, 2, ci_bitfield_extend(ci_bitfield_read(CI_ALIGNED(ptr + op->load_bf.offset, 1), 2, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 0), 1) \
-    X(LDBF_U16_A, 2, ci_bitfield_extend(ci_bitfield_read(CI_ALIGNED(ptr + op->load_bf.offset, 2), 2, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 0), 2) \
-    X(LDBF_S16, 2, ci_bitfield_extend(ci_bitfield_read(CI_ALIGNED(ptr + op->load_bf.offset, 1), 2, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 1), 1) \
-    X(LDBF_S16_A, 2, ci_bitfield_extend(ci_bitfield_read(CI_ALIGNED(ptr + op->load_bf.offset, 2), 2, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 1), 2) \
-    X(LDBF_U32, 4, ci_bitfield_extend(ci_bitfield_read(CI_ALIGNED(ptr + op->load_bf.offset, 1), 4, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 0), 1) \
-    X(LDBF_U32_A, 4, ci_bitfield_extend(ci_bitfield_read(CI_ALIGNED(ptr + op->load_bf.offset, 4), 4, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 0), 4) \
-    X(LDBF_S32, 4, ci_bitfield_extend(ci_bitfield_read(CI_ALIGNED(ptr + op->load_bf.offset, 1), 4, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 1), 1) \
-    X(LDBF_S32_A, 4, ci_bitfield_extend(ci_bitfield_read(CI_ALIGNED(ptr + op->load_bf.offset, 4), 4, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 1), 4) \
-    X(LDBF_U64, 8, ci_bitfield_extend(ci_bitfield_read(CI_ALIGNED(ptr + op->load_bf.offset, 1), 8, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 0), 1) \
-    X(LDBF_U64_A, 8, ci_bitfield_extend(ci_bitfield_read(CI_ALIGNED(ptr + op->load_bf.offset, 8), 8, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 0), 8) \
-    X(LDBF_S64, 8, ci_bitfield_extend(ci_bitfield_read(CI_ALIGNED(ptr + op->load_bf.offset, 1), 8, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 1), 1) \
-    X(LDBF_S64_A, 8, ci_bitfield_extend(ci_bitfield_read(CI_ALIGNED(ptr + op->load_bf.offset, 8), 8, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 1), 8)
+    X(LDBF_U8, 1, 0, 1) \
+    X(LDBF_S8, 1, 1, 1) \
+    X(LDBF_U16, 2, 0, 1) \
+    X(LDBF_U16_A, 2, 0, 2) \
+    X(LDBF_S16, 2, 1, 1) \
+    X(LDBF_S16_A, 2, 1, 2) \
+    X(LDBF_U32, 4, 0, 1) \
+    X(LDBF_U32_A, 4, 0, 4) \
+    X(LDBF_S32, 4, 1, 1) \
+    X(LDBF_S32_A, 4, 1, 4) \
+    X(LDBF_U64, 8, 0, 1) \
+    X(LDBF_U64_A, 8, 0, 8) \
+    X(LDBF_S64, 8, 1, 1) \
+    X(LDBF_S64_A, 8, 1, 8)
 
 #define CI_LOAD_BITFIELD_128_OPS(X) \
     X(LDBF_U128, 1, 1) \
@@ -498,14 +660,14 @@
     X(LDBF_S128_A, 0, 16)
 
 #define CI_LOAD_BITFIELD_BYTES_OPS(X) \
-    X(LDBFB_U8, 1, ci_bitfield_extend(ci_bitfield_read_bytes(ptr + op->load_bf.offset, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 0)) \
-    X(LDBFB_S8, 1, ci_bitfield_extend(ci_bitfield_read_bytes(ptr + op->load_bf.offset, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 1)) \
-    X(LDBFB_U16, 2, ci_bitfield_extend(ci_bitfield_read_bytes(ptr + op->load_bf.offset, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 0)) \
-    X(LDBFB_S16, 2, ci_bitfield_extend(ci_bitfield_read_bytes(ptr + op->load_bf.offset, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 1)) \
-    X(LDBFB_U32, 4, ci_bitfield_extend(ci_bitfield_read_bytes(ptr + op->load_bf.offset, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 0)) \
-    X(LDBFB_S32, 4, ci_bitfield_extend(ci_bitfield_read_bytes(ptr + op->load_bf.offset, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 1)) \
-    X(LDBFB_U64, 8, ci_bitfield_extend(ci_bitfield_read_bytes(ptr + op->load_bf.offset, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 0)) \
-    X(LDBFB_S64, 8, ci_bitfield_extend(ci_bitfield_read_bytes(ptr + op->load_bf.offset, op->load_bf.bit_offset, op->load_bf.bit_width), op->load_bf.bit_width, 1))
+    X(LDBFB_U8, 1, 0) \
+    X(LDBFB_S8, 1, 1) \
+    X(LDBFB_U16, 2, 0) \
+    X(LDBFB_S16, 2, 1) \
+    X(LDBFB_U32, 4, 0) \
+    X(LDBFB_S32, 4, 1) \
+    X(LDBFB_U64, 8, 0) \
+    X(LDBFB_S64, 8, 1)
 
 #define CI_LOAD_BITFIELD_BYTES_128_OPS(X) \
     X(LDBFB_U128, 1) \
@@ -534,8 +696,8 @@
     X(STBFB128, 0)
 
 #define CI_CALL_OPS(X) \
-    X(CALL_DIRECT, func = d->func; fn = func->native_func;) \
-    X(CALL_INDIRECT, memcpy(&fn, (char*)frame->slots + op->call.args_slot - CI_INDIRECT_CALL_PREFIX_SIZE, sizeof fn); func = ci_closure_map_get(ci, (void*)fn);)
+    X(CALL_DIRECT, 0) \
+    X(CALL_INDIRECT, 1)
 
 #define CI_SWITCH_DENSE_OPS(X) \
     X(SWITCH_DENSE, 0)
@@ -545,88 +707,88 @@
     X(SWITCH_UNSIGNED, 0)
 
 #define CI_BUILTIN_OPS(X) \
-    X(TRAP, return ci_error(ci, op->loc, "__builtin_trap");) \
-    X(UNREACHABLE, return ci_error(ci, op->loc, "__builtin_unreachable reached");) \
-    X(ABORT, return ci_error(ci, op->loc, "__builtin_abort called");) \
-    X(DEBUGTRAP, ) \
-    X(BACKTRACE, ci_backtrace(ci, frame, 0);) \
-    X(READCYCLECOUNTER, uint64_t ticks = performance_counter(); memcpy((char*)frame->slots + op->builtin.slot, &ticks, 8);) \
-    X(READCYCLECOUNTER_DISCARD, (void)performance_counter();)
+    X(TRAP, ERROR, "__builtin_trap") \
+    X(UNREACHABLE, ERROR, "__builtin_unreachable reached") \
+    X(ABORT, ERROR, "__builtin_abort called") \
+    X(DEBUGTRAP, NOOP, 0) \
+    X(BACKTRACE, BACKTRACE, 0) \
+    X(READCYCLECOUNTER, COUNTER, 1) \
+    X(READCYCLECOUNTER_DISCARD, COUNTER, 0)
 
 #define CI_ALLOCA_OPS(X) \
     X(STACK_ALLOC, ci_stack_alloc) \
     X(STACK_ZALLOC, ci_stack_zalloc)
 
 #define CI_FENCE_OPS(X) \
-    X(THREAD_FENCE, CI_THREAD_FENCE();) \
-    X(SIGNAL_FENCE, )
+    X(THREAD_FENCE, 1) \
+    X(SIGNAL_FENCE, 0)
 
 #define CI_BIT_COUNT_OPS(X) \
-    X(FFS8, 8, UINT64_MAX >> 56, (lo || hi) ? cc_bit_builtin_ctz(lo, hi, 8) + 1 : 0) \
-    X(FFS16, 16, UINT64_MAX >> 48, (lo || hi) ? cc_bit_builtin_ctz(lo, hi, 16) + 1 : 0) \
-    X(FFS32, 32, UINT64_MAX >> 32, (lo || hi) ? cc_bit_builtin_ctz(lo, hi, 32) + 1 : 0) \
-    X(FFS64, 64, UINT64_MAX >> 0, (lo || hi) ? cc_bit_builtin_ctz(lo, hi, 64) + 1 : 0) \
-    X(FFS128, 128, UINT64_MAX, (lo || hi) ? cc_bit_builtin_ctz(lo, hi, 128) + 1 : 0) \
-    X(CLRSB8, 8, UINT64_MAX >> 56, (lo >> 7) ? cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 56), ~hi, 8) - 1 : cc_bit_builtin_clz(lo, hi, 8) - 1) \
-    X(CLRSB16, 16, UINT64_MAX >> 48, (lo >> 15) ? cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 48), ~hi, 16) - 1 : cc_bit_builtin_clz(lo, hi, 16) - 1) \
-    X(CLRSB32, 32, UINT64_MAX >> 32, (lo >> 31) ? cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 32), ~hi, 32) - 1 : cc_bit_builtin_clz(lo, hi, 32) - 1) \
-    X(CLRSB64, 64, UINT64_MAX >> 0, (lo >> 63) ? cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 0), ~hi, 64) - 1 : cc_bit_builtin_clz(lo, hi, 64) - 1) \
-    X(CLRSB128, 128, UINT64_MAX, (hi >> 63) ? cc_bit_builtin_clz(lo ^ UINT64_MAX, ~hi, 128) - 1 : cc_bit_builtin_clz(lo, hi, 128) - 1) \
-    X(PARITY8, 8, UINT64_MAX >> 56, (popcount_64(lo) + popcount_64(hi)) & 1) \
-    X(PARITY16, 16, UINT64_MAX >> 48, (popcount_64(lo) + popcount_64(hi)) & 1) \
-    X(PARITY32, 32, UINT64_MAX >> 32, (popcount_64(lo) + popcount_64(hi)) & 1) \
-    X(PARITY64, 64, UINT64_MAX >> 0, (popcount_64(lo) + popcount_64(hi)) & 1) \
-    X(PARITY128, 128, UINT64_MAX, (popcount_64(lo) + popcount_64(hi)) & 1) \
-    X(CLZ8, 8, UINT64_MAX >> 56, cc_bit_builtin_clz(lo, hi, 8)) \
-    X(CLZ16, 16, UINT64_MAX >> 48, cc_bit_builtin_clz(lo, hi, 16)) \
-    X(CLZ32, 32, UINT64_MAX >> 32, cc_bit_builtin_clz(lo, hi, 32)) \
-    X(CLZ64, 64, UINT64_MAX >> 0, cc_bit_builtin_clz(lo, hi, 64)) \
-    X(CLZ128, 128, UINT64_MAX, cc_bit_builtin_clz(lo, hi, 128)) \
-    X(CTZ8, 8, UINT64_MAX >> 56, cc_bit_builtin_ctz(lo, hi, 8)) \
-    X(CTZ16, 16, UINT64_MAX >> 48, cc_bit_builtin_ctz(lo, hi, 16)) \
-    X(CTZ32, 32, UINT64_MAX >> 32, cc_bit_builtin_ctz(lo, hi, 32)) \
-    X(CTZ64, 64, UINT64_MAX >> 0, cc_bit_builtin_ctz(lo, hi, 64)) \
-    X(CTZ128, 128, UINT64_MAX, cc_bit_builtin_ctz(lo, hi, 128)) \
-    X(POPCOUNT8, 8, UINT64_MAX >> 56, popcount_64(lo) + popcount_64(hi)) \
-    X(POPCOUNT16, 16, UINT64_MAX >> 48, popcount_64(lo) + popcount_64(hi)) \
-    X(POPCOUNT32, 32, UINT64_MAX >> 32, popcount_64(lo) + popcount_64(hi)) \
-    X(POPCOUNT64, 64, UINT64_MAX >> 0, popcount_64(lo) + popcount_64(hi)) \
-    X(POPCOUNT128, 128, UINT64_MAX, popcount_64(lo) + popcount_64(hi)) \
-    X(BIT_WIDTH8, 8, UINT64_MAX >> 56, 8 - cc_bit_builtin_clz(lo, hi, 8)) \
-    X(BIT_WIDTH16, 16, UINT64_MAX >> 48, 16 - cc_bit_builtin_clz(lo, hi, 16)) \
-    X(BIT_WIDTH32, 32, UINT64_MAX >> 32, 32 - cc_bit_builtin_clz(lo, hi, 32)) \
-    X(BIT_WIDTH64, 64, UINT64_MAX >> 0, 64 - cc_bit_builtin_clz(lo, hi, 64)) \
-    X(BIT_WIDTH128, 128, UINT64_MAX, 128 - cc_bit_builtin_clz(lo, hi, 128)) \
-    X(COUNT_ZEROS8, 8, UINT64_MAX >> 56, 8 - (popcount_64(lo) + popcount_64(hi))) \
-    X(COUNT_ZEROS16, 16, UINT64_MAX >> 48, 16 - (popcount_64(lo) + popcount_64(hi))) \
-    X(COUNT_ZEROS32, 32, UINT64_MAX >> 32, 32 - (popcount_64(lo) + popcount_64(hi))) \
-    X(COUNT_ZEROS64, 64, UINT64_MAX >> 0, 64 - (popcount_64(lo) + popcount_64(hi))) \
-    X(COUNT_ZEROS128, 128, UINT64_MAX, 128 - (popcount_64(lo) + popcount_64(hi))) \
-    X(FIRST_LEADING_ONE8, 8, UINT64_MAX >> 56, (lo || hi) ? cc_bit_builtin_clz(lo, hi, 8) + 1 : 0) \
-    X(FIRST_LEADING_ONE16, 16, UINT64_MAX >> 48, (lo || hi) ? cc_bit_builtin_clz(lo, hi, 16) + 1 : 0) \
-    X(FIRST_LEADING_ONE32, 32, UINT64_MAX >> 32, (lo || hi) ? cc_bit_builtin_clz(lo, hi, 32) + 1 : 0) \
-    X(FIRST_LEADING_ONE64, 64, UINT64_MAX >> 0, (lo || hi) ? cc_bit_builtin_clz(lo, hi, 64) + 1 : 0) \
-    X(FIRST_LEADING_ONE128, 128, UINT64_MAX, (lo || hi) ? cc_bit_builtin_clz(lo, hi, 128) + 1 : 0) \
-    X(FIRST_LEADING_ZERO8, 8, UINT64_MAX >> 56, cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 56), ~hi, 8) == 8 ? 0 : cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 56), ~hi, 8) + 1) \
-    X(FIRST_LEADING_ZERO16, 16, UINT64_MAX >> 48, cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 48), ~hi, 16) == 16 ? 0 : cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 48), ~hi, 16) + 1) \
-    X(FIRST_LEADING_ZERO32, 32, UINT64_MAX >> 32, cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 32), ~hi, 32) == 32 ? 0 : cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 32), ~hi, 32) + 1) \
-    X(FIRST_LEADING_ZERO64, 64, UINT64_MAX >> 0, cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 0), ~hi, 64) == 64 ? 0 : cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 0), ~hi, 64) + 1) \
-    X(FIRST_LEADING_ZERO128, 128, UINT64_MAX, cc_bit_builtin_clz(lo ^ UINT64_MAX, ~hi, 128) == 128 ? 0 : cc_bit_builtin_clz(lo ^ UINT64_MAX, ~hi, 128) + 1) \
-    X(FIRST_TRAILING_ZERO8, 8, UINT64_MAX >> 56, cc_bit_builtin_ctz(lo ^ (UINT64_MAX >> 56), ~hi, 8) == 8 ? 0 : cc_bit_builtin_ctz(lo ^ (UINT64_MAX >> 56), ~hi, 8) + 1) \
-    X(FIRST_TRAILING_ZERO16, 16, UINT64_MAX >> 48, cc_bit_builtin_ctz(lo ^ (UINT64_MAX >> 48), ~hi, 16) == 16 ? 0 : cc_bit_builtin_ctz(lo ^ (UINT64_MAX >> 48), ~hi, 16) + 1) \
-    X(FIRST_TRAILING_ZERO32, 32, UINT64_MAX >> 32, cc_bit_builtin_ctz(lo ^ (UINT64_MAX >> 32), ~hi, 32) == 32 ? 0 : cc_bit_builtin_ctz(lo ^ (UINT64_MAX >> 32), ~hi, 32) + 1) \
-    X(FIRST_TRAILING_ZERO64, 64, UINT64_MAX >> 0, cc_bit_builtin_ctz(lo ^ (UINT64_MAX >> 0), ~hi, 64) == 64 ? 0 : cc_bit_builtin_ctz(lo ^ (UINT64_MAX >> 0), ~hi, 64) + 1) \
-    X(FIRST_TRAILING_ZERO128, 128, UINT64_MAX, cc_bit_builtin_ctz(lo ^ UINT64_MAX, ~hi, 128) == 128 ? 0 : cc_bit_builtin_ctz(lo ^ UINT64_MAX, ~hi, 128) + 1) \
-    X(LEADING_ONES8, 8, UINT64_MAX >> 56, cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 56), ~hi, 8)) \
-    X(LEADING_ONES16, 16, UINT64_MAX >> 48, cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 48), ~hi, 16)) \
-    X(LEADING_ONES32, 32, UINT64_MAX >> 32, cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 32), ~hi, 32)) \
-    X(LEADING_ONES64, 64, UINT64_MAX >> 0, cc_bit_builtin_clz(lo ^ (UINT64_MAX >> 0), ~hi, 64)) \
-    X(LEADING_ONES128, 128, UINT64_MAX, cc_bit_builtin_clz(lo ^ UINT64_MAX, ~hi, 128)) \
-    X(TRAILING_ONES8, 8, UINT64_MAX >> 56, cc_bit_builtin_ctz(lo ^ (UINT64_MAX >> 56), ~hi, 8)) \
-    X(TRAILING_ONES16, 16, UINT64_MAX >> 48, cc_bit_builtin_ctz(lo ^ (UINT64_MAX >> 48), ~hi, 16)) \
-    X(TRAILING_ONES32, 32, UINT64_MAX >> 32, cc_bit_builtin_ctz(lo ^ (UINT64_MAX >> 32), ~hi, 32)) \
-    X(TRAILING_ONES64, 64, UINT64_MAX >> 0, cc_bit_builtin_ctz(lo ^ (UINT64_MAX >> 0), ~hi, 64)) \
-    X(TRAILING_ONES128, 128, UINT64_MAX, cc_bit_builtin_ctz(lo ^ UINT64_MAX, ~hi, 128))
+    X(FFS8, 8, FFS) \
+    X(FFS16, 16, FFS) \
+    X(FFS32, 32, FFS) \
+    X(FFS64, 64, FFS) \
+    X(FFS128, 128, FFS) \
+    X(CLRSB8, 8, CLRSB) \
+    X(CLRSB16, 16, CLRSB) \
+    X(CLRSB32, 32, CLRSB) \
+    X(CLRSB64, 64, CLRSB) \
+    X(CLRSB128, 128, CLRSB) \
+    X(PARITY8, 8, PARITY) \
+    X(PARITY16, 16, PARITY) \
+    X(PARITY32, 32, PARITY) \
+    X(PARITY64, 64, PARITY) \
+    X(PARITY128, 128, PARITY) \
+    X(CLZ8, 8, CLZ) \
+    X(CLZ16, 16, CLZ) \
+    X(CLZ32, 32, CLZ) \
+    X(CLZ64, 64, CLZ) \
+    X(CLZ128, 128, CLZ) \
+    X(CTZ8, 8, CTZ) \
+    X(CTZ16, 16, CTZ) \
+    X(CTZ32, 32, CTZ) \
+    X(CTZ64, 64, CTZ) \
+    X(CTZ128, 128, CTZ) \
+    X(POPCOUNT8, 8, POPCOUNT) \
+    X(POPCOUNT16, 16, POPCOUNT) \
+    X(POPCOUNT32, 32, POPCOUNT) \
+    X(POPCOUNT64, 64, POPCOUNT) \
+    X(POPCOUNT128, 128, POPCOUNT) \
+    X(BIT_WIDTH8, 8, BIT_WIDTH) \
+    X(BIT_WIDTH16, 16, BIT_WIDTH) \
+    X(BIT_WIDTH32, 32, BIT_WIDTH) \
+    X(BIT_WIDTH64, 64, BIT_WIDTH) \
+    X(BIT_WIDTH128, 128, BIT_WIDTH) \
+    X(COUNT_ZEROS8, 8, COUNT_ZEROS) \
+    X(COUNT_ZEROS16, 16, COUNT_ZEROS) \
+    X(COUNT_ZEROS32, 32, COUNT_ZEROS) \
+    X(COUNT_ZEROS64, 64, COUNT_ZEROS) \
+    X(COUNT_ZEROS128, 128, COUNT_ZEROS) \
+    X(FIRST_LEADING_ONE8, 8, FIRST_LEADING_ONE) \
+    X(FIRST_LEADING_ONE16, 16, FIRST_LEADING_ONE) \
+    X(FIRST_LEADING_ONE32, 32, FIRST_LEADING_ONE) \
+    X(FIRST_LEADING_ONE64, 64, FIRST_LEADING_ONE) \
+    X(FIRST_LEADING_ONE128, 128, FIRST_LEADING_ONE) \
+    X(FIRST_LEADING_ZERO8, 8, FIRST_LEADING_ZERO) \
+    X(FIRST_LEADING_ZERO16, 16, FIRST_LEADING_ZERO) \
+    X(FIRST_LEADING_ZERO32, 32, FIRST_LEADING_ZERO) \
+    X(FIRST_LEADING_ZERO64, 64, FIRST_LEADING_ZERO) \
+    X(FIRST_LEADING_ZERO128, 128, FIRST_LEADING_ZERO) \
+    X(FIRST_TRAILING_ZERO8, 8, FIRST_TRAILING_ZERO) \
+    X(FIRST_TRAILING_ZERO16, 16, FIRST_TRAILING_ZERO) \
+    X(FIRST_TRAILING_ZERO32, 32, FIRST_TRAILING_ZERO) \
+    X(FIRST_TRAILING_ZERO64, 64, FIRST_TRAILING_ZERO) \
+    X(FIRST_TRAILING_ZERO128, 128, FIRST_TRAILING_ZERO) \
+    X(LEADING_ONES8, 8, LEADING_ONES) \
+    X(LEADING_ONES16, 16, LEADING_ONES) \
+    X(LEADING_ONES32, 32, LEADING_ONES) \
+    X(LEADING_ONES64, 64, LEADING_ONES) \
+    X(LEADING_ONES128, 128, LEADING_ONES) \
+    X(TRAILING_ONES8, 8, TRAILING_ONES) \
+    X(TRAILING_ONES16, 16, TRAILING_ONES) \
+    X(TRAILING_ONES32, 32, TRAILING_ONES) \
+    X(TRAILING_ONES64, 64, TRAILING_ONES) \
+    X(TRAILING_ONES128, 128, TRAILING_ONES)
 
 #define CI_SINGLE_BIT_OPS(X) \
     X(HAS_SINGLE_BIT8, 8) \
@@ -636,30 +798,30 @@
     X(HAS_SINGLE_BIT128, 128)
 
 #define CI_BIT_CEIL_OPS(X) \
-    X(BIT_CEIL8, 8, UINT64_MAX >> 56, if(!hi && lo <= 1) result = ci_uint128_from_uint64(1); else { uint32_t n = 8 - cc_bit_builtin_clz((lo - 1) & (UINT64_MAX >> 56), hi - (lo == 0), 8); if(n < 8) result = cc_bit_builtin_power(n); }) \
-    X(BIT_CEIL16, 16, UINT64_MAX >> 48, if(!hi && lo <= 1) result = ci_uint128_from_uint64(1); else { uint32_t n = 16 - cc_bit_builtin_clz((lo - 1) & (UINT64_MAX >> 48), hi - (lo == 0), 16); if(n < 16) result = cc_bit_builtin_power(n); }) \
-    X(BIT_CEIL32, 32, UINT64_MAX >> 32, if(!hi && lo <= 1) result = ci_uint128_from_uint64(1); else { uint32_t n = 32 - cc_bit_builtin_clz((lo - 1) & (UINT64_MAX >> 32), hi - (lo == 0), 32); if(n < 32) result = cc_bit_builtin_power(n); }) \
-    X(BIT_CEIL64, 64, UINT64_MAX >> 0, if(!hi && lo <= 1) result = ci_uint128_from_uint64(1); else { uint32_t n = 64 - cc_bit_builtin_clz((lo - 1) & (UINT64_MAX >> 0), hi - (lo == 0), 64); if(n < 64) result = cc_bit_builtin_power(n); }) \
-    X(BIT_CEIL128, 128, UINT64_MAX, if(!hi && lo <= 1) result = ci_uint128_from_uint64(1); else { uint32_t n = 128 - cc_bit_builtin_clz((lo - 1) & UINT64_MAX, hi - (lo == 0), 128); if(n < 128) result = cc_bit_builtin_power(n); })
+    X(BIT_CEIL8, 8) \
+    X(BIT_CEIL16, 16) \
+    X(BIT_CEIL32, 32) \
+    X(BIT_CEIL64, 64) \
+    X(BIT_CEIL128, 128)
 
 #define CI_BIT_FLOOR_OPS(X) \
-    X(BIT_FLOOR8, 8, UINT64_MAX >> 56, if(lo || hi) result = cc_bit_builtin_power(8 - cc_bit_builtin_clz(lo, hi, 8) - 1);) \
-    X(BIT_FLOOR16, 16, UINT64_MAX >> 48, if(lo || hi) result = cc_bit_builtin_power(16 - cc_bit_builtin_clz(lo, hi, 16) - 1);) \
-    X(BIT_FLOOR32, 32, UINT64_MAX >> 32, if(lo || hi) result = cc_bit_builtin_power(32 - cc_bit_builtin_clz(lo, hi, 32) - 1);) \
-    X(BIT_FLOOR64, 64, UINT64_MAX >> 0, if(lo || hi) result = cc_bit_builtin_power(64 - cc_bit_builtin_clz(lo, hi, 64) - 1);) \
-    X(BIT_FLOOR128, 128, UINT64_MAX, if(lo || hi) result = cc_bit_builtin_power(128 - cc_bit_builtin_clz(lo, hi, 128) - 1);)
+    X(BIT_FLOOR8, 8) \
+    X(BIT_FLOOR16, 16) \
+    X(BIT_FLOOR32, 32) \
+    X(BIT_FLOOR64, 64) \
+    X(BIT_FLOOR128, 128)
 
 #define CI_ROTATE_OPS(X) \
-    X(ROTL8, 8, ci_uint128_shl(value, shift), ci_uint128_shr(value, (8 - shift) % 8)) \
-    X(ROTR8, 8, ci_uint128_shr(value, shift), ci_uint128_shl(value, (8 - shift) % 8)) \
-    X(ROTL16, 16, ci_uint128_shl(value, shift), ci_uint128_shr(value, (16 - shift) % 16)) \
-    X(ROTR16, 16, ci_uint128_shr(value, shift), ci_uint128_shl(value, (16 - shift) % 16)) \
-    X(ROTL32, 32, ci_uint128_shl(value, shift), ci_uint128_shr(value, (32 - shift) % 32)) \
-    X(ROTR32, 32, ci_uint128_shr(value, shift), ci_uint128_shl(value, (32 - shift) % 32)) \
-    X(ROTL64, 64, ci_uint128_shl(value, shift), ci_uint128_shr(value, (64 - shift) % 64)) \
-    X(ROTR64, 64, ci_uint128_shr(value, shift), ci_uint128_shl(value, (64 - shift) % 64)) \
-    X(ROTL128, 128, ci_uint128_shl(value, shift), ci_uint128_shr(value, (128 - shift) % 128)) \
-    X(ROTR128, 128, ci_uint128_shr(value, shift), ci_uint128_shl(value, (128 - shift) % 128))
+    X(ROTL8, 8, ci_uint128_shl, ci_uint128_shr) \
+    X(ROTR8, 8, ci_uint128_shr, ci_uint128_shl) \
+    X(ROTL16, 16, ci_uint128_shl, ci_uint128_shr) \
+    X(ROTR16, 16, ci_uint128_shr, ci_uint128_shl) \
+    X(ROTL32, 32, ci_uint128_shl, ci_uint128_shr) \
+    X(ROTR32, 32, ci_uint128_shr, ci_uint128_shl) \
+    X(ROTL64, 64, ci_uint128_shl, ci_uint128_shr) \
+    X(ROTR64, 64, ci_uint128_shr, ci_uint128_shl) \
+    X(ROTL128, 128, ci_uint128_shl, ci_uint128_shr) \
+    X(ROTR128, 128, ci_uint128_shr, ci_uint128_shl)
 
 #define CI_CRC_OPS(X) \
     X(CRC32C8, 1) \
@@ -724,16 +886,313 @@
     X(VA_ARG_SYSV, 0)
 
 #define CI_VA_ARM_OPS(X) \
-    X(VA_ARG_ARM, ) \
-    X(VA_ARG_ARM_ALIGN16, go = (go + 15) & ~15;)
+    X(VA_ARG_ARM, 1) \
+    X(VA_ARG_ARM_ALIGN16, 16)
 
 #define CI_VA_ARM_INDIRECT_OPS(X) \
     X(VA_ARG_ARM_INDIRECT, 0)
 
 #define CI_VA_STACK_OPS(X) \
-    X(VA_ARG_STACK, (void**)ap, ) \
-    X(VA_ARG_STACK_INDIRECT, (void**)ap, memcpy(&source, source, sizeof source);) \
-    X(VA_ARG_SYSV_STACK, &((NcSysvVaListTag*)ap)->overflow_arg_area, ) \
-    X(VA_ARG_ARM_STACK, &((NcAapcs64VaList*)ap)->__stack, )
+    X(VA_ARG_STACK, STACK, 0) \
+    X(VA_ARG_STACK_INDIRECT, STACK, 1) \
+    X(VA_ARG_SYSV_STACK, SYSV, 0) \
+    X(VA_ARG_ARM_STACK, ARM, 0)
+
+// name, write, GP register index, slot alignment
+#define CI_ABI_GP_MOVE_OPS(X) \
+    X(ABI_READ_GP0_64, 0, 0, 1) \
+    X(ABI_READ_GP0_64_A, 0, 0, 8) \
+    X(ABI_WRITE_GP0_64, 1, 0, 1) \
+    X(ABI_WRITE_GP0_64_A, 1, 0, 8) \
+    X(ABI_READ_GP1_64, 0, 1, 1) \
+    X(ABI_READ_GP1_64_A, 0, 1, 8) \
+    X(ABI_WRITE_GP1_64, 1, 1, 1) \
+    X(ABI_WRITE_GP1_64_A, 1, 1, 8) \
+    X(ABI_READ_GP2_64, 0, 2, 1) \
+    X(ABI_READ_GP2_64_A, 0, 2, 8) \
+    X(ABI_WRITE_GP2_64, 1, 2, 1) \
+    X(ABI_WRITE_GP2_64_A, 1, 2, 8) \
+    X(ABI_READ_GP3_64, 0, 3, 1) \
+    X(ABI_READ_GP3_64_A, 0, 3, 8) \
+    X(ABI_WRITE_GP3_64, 1, 3, 1) \
+    X(ABI_WRITE_GP3_64_A, 1, 3, 8) \
+    X(ABI_READ_GP4_64, 0, 4, 1) \
+    X(ABI_READ_GP4_64_A, 0, 4, 8) \
+    X(ABI_WRITE_GP4_64, 1, 4, 1) \
+    X(ABI_WRITE_GP4_64_A, 1, 4, 8) \
+    X(ABI_READ_GP5_64, 0, 5, 1) \
+    X(ABI_READ_GP5_64_A, 0, 5, 8) \
+    X(ABI_WRITE_GP5_64, 1, 5, 1) \
+    X(ABI_WRITE_GP5_64_A, 1, 5, 8) \
+    X(ABI_READ_GP6_64, 0, 6, 1) \
+    X(ABI_READ_GP6_64_A, 0, 6, 8) \
+    X(ABI_WRITE_GP6_64, 1, 6, 1) \
+    X(ABI_WRITE_GP6_64_A, 1, 6, 8) \
+    X(ABI_READ_GP7_64, 0, 7, 1) \
+    X(ABI_READ_GP7_64_A, 0, 7, 8) \
+    X(ABI_WRITE_GP7_64, 1, 7, 1) \
+    X(ABI_WRITE_GP7_64_A, 1, 7, 8)
+
+#define CI_ABI_REG_MOVE_OPS(X) \
+    X(ABI_READ_GP0_8, 0, 0, 1, 1) \
+    X(ABI_WRITE_GP0_8, 1, 0, 1, 1) \
+    X(ABI_READ_GP0_32, 0, 0, 4, 1) \
+    X(ABI_READ_GP0_32_A, 0, 0, 4, 4) \
+    X(ABI_WRITE_GP0_32, 1, 0, 4, 1) \
+    X(ABI_WRITE_GP0_32_A, 1, 0, 4, 4) \
+    X(ABI_SEXT_GP0_8, 1, 0, 1, 1) \
+    X(ABI_ZEXT_GP0_8, 1, 0, 1, 1) \
+    X(ABI_SEXT_GP0_32, 1, 0, 4, 1) \
+    X(ABI_SEXT_GP0_32_A, 1, 0, 4, 4) \
+    X(ABI_ZEXT_GP0_32, 1, 0, 4, 1) \
+    X(ABI_ZEXT_GP0_32_A, 1, 0, 4, 4) \
+    X(ABI_READ_GP1_8, 0, 1, 1, 1) \
+    X(ABI_WRITE_GP1_8, 1, 1, 1, 1) \
+    X(ABI_READ_GP1_32, 0, 1, 4, 1) \
+    X(ABI_READ_GP1_32_A, 0, 1, 4, 4) \
+    X(ABI_WRITE_GP1_32, 1, 1, 4, 1) \
+    X(ABI_WRITE_GP1_32_A, 1, 1, 4, 4) \
+    X(ABI_SEXT_GP1_8, 1, 1, 1, 1) \
+    X(ABI_ZEXT_GP1_8, 1, 1, 1, 1) \
+    X(ABI_SEXT_GP1_32, 1, 1, 4, 1) \
+    X(ABI_SEXT_GP1_32_A, 1, 1, 4, 4) \
+    X(ABI_ZEXT_GP1_32, 1, 1, 4, 1) \
+    X(ABI_ZEXT_GP1_32_A, 1, 1, 4, 4) \
+    X(ABI_READ_GP2_8, 0, 2, 1, 1) \
+    X(ABI_WRITE_GP2_8, 1, 2, 1, 1) \
+    X(ABI_READ_GP2_32, 0, 2, 4, 1) \
+    X(ABI_READ_GP2_32_A, 0, 2, 4, 4) \
+    X(ABI_WRITE_GP2_32, 1, 2, 4, 1) \
+    X(ABI_WRITE_GP2_32_A, 1, 2, 4, 4) \
+    X(ABI_SEXT_GP2_8, 1, 2, 1, 1) \
+    X(ABI_ZEXT_GP2_8, 1, 2, 1, 1) \
+    X(ABI_SEXT_GP2_32, 1, 2, 4, 1) \
+    X(ABI_SEXT_GP2_32_A, 1, 2, 4, 4) \
+    X(ABI_ZEXT_GP2_32, 1, 2, 4, 1) \
+    X(ABI_ZEXT_GP2_32_A, 1, 2, 4, 4) \
+    X(ABI_READ_GP3_8, 0, 3, 1, 1) \
+    X(ABI_WRITE_GP3_8, 1, 3, 1, 1) \
+    X(ABI_READ_GP3_32, 0, 3, 4, 1) \
+    X(ABI_READ_GP3_32_A, 0, 3, 4, 4) \
+    X(ABI_WRITE_GP3_32, 1, 3, 4, 1) \
+    X(ABI_WRITE_GP3_32_A, 1, 3, 4, 4) \
+    X(ABI_SEXT_GP3_8, 1, 3, 1, 1) \
+    X(ABI_ZEXT_GP3_8, 1, 3, 1, 1) \
+    X(ABI_SEXT_GP3_32, 1, 3, 4, 1) \
+    X(ABI_SEXT_GP3_32_A, 1, 3, 4, 4) \
+    X(ABI_ZEXT_GP3_32, 1, 3, 4, 1) \
+    X(ABI_ZEXT_GP3_32_A, 1, 3, 4, 4) \
+    X(ABI_READ_GP4_8, 0, 4, 1, 1) \
+    X(ABI_WRITE_GP4_8, 1, 4, 1, 1) \
+    X(ABI_READ_GP4_32, 0, 4, 4, 1) \
+    X(ABI_READ_GP4_32_A, 0, 4, 4, 4) \
+    X(ABI_WRITE_GP4_32, 1, 4, 4, 1) \
+    X(ABI_WRITE_GP4_32_A, 1, 4, 4, 4) \
+    X(ABI_SEXT_GP4_8, 1, 4, 1, 1) \
+    X(ABI_ZEXT_GP4_8, 1, 4, 1, 1) \
+    X(ABI_SEXT_GP4_32, 1, 4, 4, 1) \
+    X(ABI_SEXT_GP4_32_A, 1, 4, 4, 4) \
+    X(ABI_ZEXT_GP4_32, 1, 4, 4, 1) \
+    X(ABI_ZEXT_GP4_32_A, 1, 4, 4, 4) \
+    X(ABI_READ_GP5_8, 0, 5, 1, 1) \
+    X(ABI_WRITE_GP5_8, 1, 5, 1, 1) \
+    X(ABI_READ_GP5_32, 0, 5, 4, 1) \
+    X(ABI_READ_GP5_32_A, 0, 5, 4, 4) \
+    X(ABI_WRITE_GP5_32, 1, 5, 4, 1) \
+    X(ABI_WRITE_GP5_32_A, 1, 5, 4, 4) \
+    X(ABI_SEXT_GP5_8, 1, 5, 1, 1) \
+    X(ABI_ZEXT_GP5_8, 1, 5, 1, 1) \
+    X(ABI_SEXT_GP5_32, 1, 5, 4, 1) \
+    X(ABI_SEXT_GP5_32_A, 1, 5, 4, 4) \
+    X(ABI_ZEXT_GP5_32, 1, 5, 4, 1) \
+    X(ABI_ZEXT_GP5_32_A, 1, 5, 4, 4) \
+    X(ABI_READ_GP6_8, 0, 6, 1, 1) \
+    X(ABI_WRITE_GP6_8, 1, 6, 1, 1) \
+    X(ABI_READ_GP6_32, 0, 6, 4, 1) \
+    X(ABI_READ_GP6_32_A, 0, 6, 4, 4) \
+    X(ABI_WRITE_GP6_32, 1, 6, 4, 1) \
+    X(ABI_WRITE_GP6_32_A, 1, 6, 4, 4) \
+    X(ABI_SEXT_GP6_8, 1, 6, 1, 1) \
+    X(ABI_ZEXT_GP6_8, 1, 6, 1, 1) \
+    X(ABI_SEXT_GP6_32, 1, 6, 4, 1) \
+    X(ABI_SEXT_GP6_32_A, 1, 6, 4, 4) \
+    X(ABI_ZEXT_GP6_32, 1, 6, 4, 1) \
+    X(ABI_ZEXT_GP6_32_A, 1, 6, 4, 4) \
+    X(ABI_READ_GP7_8, 0, 7, 1, 1) \
+    X(ABI_WRITE_GP7_8, 1, 7, 1, 1) \
+    X(ABI_READ_GP7_32, 0, 7, 4, 1) \
+    X(ABI_READ_GP7_32_A, 0, 7, 4, 4) \
+    X(ABI_WRITE_GP7_32, 1, 7, 4, 1) \
+    X(ABI_WRITE_GP7_32_A, 1, 7, 4, 4) \
+    X(ABI_SEXT_GP7_8, 1, 7, 1, 1) \
+    X(ABI_ZEXT_GP7_8, 1, 7, 1, 1) \
+    X(ABI_SEXT_GP7_32, 1, 7, 4, 1) \
+    X(ABI_SEXT_GP7_32_A, 1, 7, 4, 4) \
+    X(ABI_ZEXT_GP7_32, 1, 7, 4, 1) \
+    X(ABI_ZEXT_GP7_32_A, 1, 7, 4, 4) \
+    X(ABI_READ_FP0_32, 0, 0, 4, 1) \
+    X(ABI_READ_FP0_32_A, 0, 0, 4, 4) \
+    X(ABI_WRITE_FP0_32, 1, 0, 4, 1) \
+    X(ABI_WRITE_FP0_32_A, 1, 0, 4, 4) \
+    X(ABI_READ_FP0_64, 0, 0, 8, 1) \
+    X(ABI_READ_FP0_64_A, 0, 0, 8, 8) \
+    X(ABI_WRITE_FP0_64, 1, 0, 8, 1) \
+    X(ABI_WRITE_FP0_64_A, 1, 0, 8, 8) \
+    X(ABI_READ_FP0_128, 0, 0, 16, 1) \
+    X(ABI_READ_FP0_128_A, 0, 0, 16, 16) \
+    X(ABI_WRITE_FP0_128, 1, 0, 16, 1) \
+    X(ABI_WRITE_FP0_128_A, 1, 0, 16, 16) \
+    X(ABI_READ_FP1_32, 0, 1, 4, 1) \
+    X(ABI_READ_FP1_32_A, 0, 1, 4, 4) \
+    X(ABI_WRITE_FP1_32, 1, 1, 4, 1) \
+    X(ABI_WRITE_FP1_32_A, 1, 1, 4, 4) \
+    X(ABI_READ_FP1_64, 0, 1, 8, 1) \
+    X(ABI_READ_FP1_64_A, 0, 1, 8, 8) \
+    X(ABI_WRITE_FP1_64, 1, 1, 8, 1) \
+    X(ABI_WRITE_FP1_64_A, 1, 1, 8, 8) \
+    X(ABI_READ_FP1_128, 0, 1, 16, 1) \
+    X(ABI_READ_FP1_128_A, 0, 1, 16, 16) \
+    X(ABI_WRITE_FP1_128, 1, 1, 16, 1) \
+    X(ABI_WRITE_FP1_128_A, 1, 1, 16, 16) \
+    X(ABI_READ_FP2_32, 0, 2, 4, 1) \
+    X(ABI_READ_FP2_32_A, 0, 2, 4, 4) \
+    X(ABI_WRITE_FP2_32, 1, 2, 4, 1) \
+    X(ABI_WRITE_FP2_32_A, 1, 2, 4, 4) \
+    X(ABI_READ_FP2_64, 0, 2, 8, 1) \
+    X(ABI_READ_FP2_64_A, 0, 2, 8, 8) \
+    X(ABI_WRITE_FP2_64, 1, 2, 8, 1) \
+    X(ABI_WRITE_FP2_64_A, 1, 2, 8, 8) \
+    X(ABI_READ_FP2_128, 0, 2, 16, 1) \
+    X(ABI_READ_FP2_128_A, 0, 2, 16, 16) \
+    X(ABI_WRITE_FP2_128, 1, 2, 16, 1) \
+    X(ABI_WRITE_FP2_128_A, 1, 2, 16, 16) \
+    X(ABI_READ_FP3_32, 0, 3, 4, 1) \
+    X(ABI_READ_FP3_32_A, 0, 3, 4, 4) \
+    X(ABI_WRITE_FP3_32, 1, 3, 4, 1) \
+    X(ABI_WRITE_FP3_32_A, 1, 3, 4, 4) \
+    X(ABI_READ_FP3_64, 0, 3, 8, 1) \
+    X(ABI_READ_FP3_64_A, 0, 3, 8, 8) \
+    X(ABI_WRITE_FP3_64, 1, 3, 8, 1) \
+    X(ABI_WRITE_FP3_64_A, 1, 3, 8, 8) \
+    X(ABI_READ_FP3_128, 0, 3, 16, 1) \
+    X(ABI_READ_FP3_128_A, 0, 3, 16, 16) \
+    X(ABI_WRITE_FP3_128, 1, 3, 16, 1) \
+    X(ABI_WRITE_FP3_128_A, 1, 3, 16, 16) \
+    X(ABI_READ_FP4_32, 0, 4, 4, 1) \
+    X(ABI_READ_FP4_32_A, 0, 4, 4, 4) \
+    X(ABI_WRITE_FP4_32, 1, 4, 4, 1) \
+    X(ABI_WRITE_FP4_32_A, 1, 4, 4, 4) \
+    X(ABI_READ_FP4_64, 0, 4, 8, 1) \
+    X(ABI_READ_FP4_64_A, 0, 4, 8, 8) \
+    X(ABI_WRITE_FP4_64, 1, 4, 8, 1) \
+    X(ABI_WRITE_FP4_64_A, 1, 4, 8, 8) \
+    X(ABI_READ_FP4_128, 0, 4, 16, 1) \
+    X(ABI_READ_FP4_128_A, 0, 4, 16, 16) \
+    X(ABI_WRITE_FP4_128, 1, 4, 16, 1) \
+    X(ABI_WRITE_FP4_128_A, 1, 4, 16, 16) \
+    X(ABI_READ_FP5_32, 0, 5, 4, 1) \
+    X(ABI_READ_FP5_32_A, 0, 5, 4, 4) \
+    X(ABI_WRITE_FP5_32, 1, 5, 4, 1) \
+    X(ABI_WRITE_FP5_32_A, 1, 5, 4, 4) \
+    X(ABI_READ_FP5_64, 0, 5, 8, 1) \
+    X(ABI_READ_FP5_64_A, 0, 5, 8, 8) \
+    X(ABI_WRITE_FP5_64, 1, 5, 8, 1) \
+    X(ABI_WRITE_FP5_64_A, 1, 5, 8, 8) \
+    X(ABI_READ_FP5_128, 0, 5, 16, 1) \
+    X(ABI_READ_FP5_128_A, 0, 5, 16, 16) \
+    X(ABI_WRITE_FP5_128, 1, 5, 16, 1) \
+    X(ABI_WRITE_FP5_128_A, 1, 5, 16, 16) \
+    X(ABI_READ_FP6_32, 0, 6, 4, 1) \
+    X(ABI_READ_FP6_32_A, 0, 6, 4, 4) \
+    X(ABI_WRITE_FP6_32, 1, 6, 4, 1) \
+    X(ABI_WRITE_FP6_32_A, 1, 6, 4, 4) \
+    X(ABI_READ_FP6_64, 0, 6, 8, 1) \
+    X(ABI_READ_FP6_64_A, 0, 6, 8, 8) \
+    X(ABI_WRITE_FP6_64, 1, 6, 8, 1) \
+    X(ABI_WRITE_FP6_64_A, 1, 6, 8, 8) \
+    X(ABI_READ_FP6_128, 0, 6, 16, 1) \
+    X(ABI_READ_FP6_128_A, 0, 6, 16, 16) \
+    X(ABI_WRITE_FP6_128, 1, 6, 16, 1) \
+    X(ABI_WRITE_FP6_128_A, 1, 6, 16, 16) \
+    X(ABI_READ_FP7_32, 0, 7, 4, 1) \
+    X(ABI_READ_FP7_32_A, 0, 7, 4, 4) \
+    X(ABI_WRITE_FP7_32, 1, 7, 4, 1) \
+    X(ABI_WRITE_FP7_32_A, 1, 7, 4, 4) \
+    X(ABI_READ_FP7_64, 0, 7, 8, 1) \
+    X(ABI_READ_FP7_64_A, 0, 7, 8, 8) \
+    X(ABI_WRITE_FP7_64, 1, 7, 8, 1) \
+    X(ABI_WRITE_FP7_64_A, 1, 7, 8, 8) \
+    X(ABI_READ_FP7_128, 0, 7, 16, 1) \
+    X(ABI_READ_FP7_128_A, 0, 7, 16, 16) \
+    X(ABI_WRITE_FP7_128, 1, 7, 16, 1) \
+    X(ABI_WRITE_FP7_128_A, 1, 7, 16, 16)
+
+#define CI_LOAD_SLOT_BITFIELD_OPS(X) \
+    X(LDBFS_U8, 1, 0, 1) \
+    X(LDBFS_S8, 1, 1, 1) \
+    X(LDBFS_U16, 2, 0, 1) \
+    X(LDBFS_U16_A, 2, 0, 2) \
+    X(LDBFS_S16, 2, 1, 1) \
+    X(LDBFS_S16_A, 2, 1, 2) \
+    X(LDBFS_U32, 4, 0, 1) \
+    X(LDBFS_U32_A, 4, 0, 4) \
+    X(LDBFS_S32, 4, 1, 1) \
+    X(LDBFS_S32_A, 4, 1, 4) \
+    X(LDBFS_U64, 8, 0, 1) \
+    X(LDBFS_U64_A, 8, 0, 8) \
+    X(LDBFS_S64, 8, 1, 1) \
+    X(LDBFS_S64_A, 8, 1, 8)
+
+#define CI_LOAD_SLOT_BITFIELD_128_OPS(X) \
+    X(LDBFS_U128, 1, 1) \
+    X(LDBFS_U128_A, 1, 16) \
+    X(LDBFS_S128, 0, 1) \
+    X(LDBFS_S128_A, 0, 16)
+
+#define CI_LOAD_SLOT_BITFIELD_BYTES_OPS(X) \
+    X(LDBFBS_U8, 1, 0) \
+    X(LDBFBS_S8, 1, 1) \
+    X(LDBFBS_U16, 2, 0) \
+    X(LDBFBS_S16, 2, 1) \
+    X(LDBFBS_U32, 4, 0) \
+    X(LDBFBS_S32, 4, 1) \
+    X(LDBFBS_U64, 8, 0) \
+    X(LDBFBS_S64, 8, 1)
+
+#define CI_LOAD_SLOT_BITFIELD_BYTES_128_OPS(X) \
+    X(LDBFBS_U128, 1) \
+    X(LDBFBS_S128, 0)
+
+#define CI_BITFIELD_JUMP_OPS(X) \
+    X(BF_JZ8, 1, 0, 0) \
+    X(BF_JNZ8, 1, 0, 1) \
+    X(BF_JZ16, 2, 0, 0) \
+    X(BF_JNZ16, 2, 0, 1) \
+    X(BF_JZ32, 4, 0, 0) \
+    X(BF_JNZ32, 4, 0, 1) \
+    X(BF_JZ64, 8, 0, 0) \
+    X(BF_JNZ64, 8, 0, 1) \
+    X(BF_JZ_BYTES, 0, 0, 0) \
+    X(BF_JNZ_BYTES, 0, 0, 1) \
+    X(BFS_JZ8, 1, 1, 0) \
+    X(BFS_JNZ8, 1, 1, 1) \
+    X(BFS_JZ16, 2, 1, 0) \
+    X(BFS_JNZ16, 2, 1, 1) \
+    X(BFS_JZ32, 4, 1, 0) \
+    X(BFS_JNZ32, 4, 1, 1) \
+    X(BFS_JZ64, 8, 1, 0) \
+    X(BFS_JNZ64, 8, 1, 1) \
+    X(BFS_JZ_BYTES, 0, 1, 0) \
+    X(BFS_JNZ_BYTES, 0, 1, 1)
+
+#define CI_ABI_PAIR_OPS(X) \
+    X(ABI_READ_GP01_64, 0, 0, 1) \
+    X(ABI_READ_GP01_64_A, 0, 0, 8) \
+    X(ABI_READ_GP01_64_CONTIG, 0, 1, 1) \
+    X(ABI_READ_GP01_64_CONTIG_A, 0, 1, 8) \
+    X(ABI_WRITE_GP01_64, 1, 0, 1) \
+    X(ABI_WRITE_GP01_64_A, 1, 0, 8) \
+    X(ABI_WRITE_GP01_64_CONTIG, 1, 1, 1) \
+    X(ABI_WRITE_GP01_64_CONTIG_A, 1, 1, 8)
 
 #endif

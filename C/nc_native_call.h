@@ -653,6 +653,11 @@ nc_destroy_closure(Allocator al, NcClosure *closure);
 
 
 
+#ifndef NO_NATIVE_CALL
+static int nc_create_thunk(void*, void (*)(void), void (*_Nullable* _Nonnull)(void));
+static void nc_destroy_thunk(void (*)(void));
+#endif
+
 // shared inline helpers, not really part of the API
 static inline
 size_t

@@ -46,7 +46,7 @@ static CiOpKind ci_truth_kind(uint32_t size, uint32_t floating, _Bool negate);
 static CiOpKind ci_itof_kind(uint32_t size, uint32_t fmt, _Bool bf, _Bool uns);
 static CiOpKind ci_ftoi_kind(uint32_t fmt, _Bool bf, uint32_t size, _Bool uns);
 static CiOpKind ci_ftof_kind(uint32_t frame_alignment, uint32_t sf, _Bool sb, uint32_t df, _Bool db, uint32_t size, uint32_t dst, uint32_t src);
-static CiOpKind ci_abi_move_kind(_Bool incoming, _Bool write, CiAbiTransfer action, uint32_t size, uint32_t source_size, uint32_t alignment);
+static CiOpKind ci_abi_move_kind(CiAbiRegister reg, _Bool incoming, _Bool write, CiAbiTransfer action, uint32_t size, uint32_t source_size, uint32_t alignment);
 static CiOpKind ci_abi_transfer_kind(CiAbiTransfer action, CiAbiAddress destination, CiAbiAddress source, uint32_t size, uint32_t alignment);
 static CiOpKind ci_jz_kind(uint32_t size);
 static CiOpKind ci_jnz_kind(uint32_t size);
@@ -87,7 +87,7 @@ struct CiBackpatchTarget {
         uintptr_t levels; // Remaining loops/switches to exit before patching the jump
                           // we only use 8 bits of this if you need to smuggle some bits in.
     };
-    size_t byteoffset;
+    size_t instruction; // branch awaiting a label, break, or continue
     SrcLoc loc;
 };
 #ifndef MARRAY_CIBACKPATCHTARGET
@@ -260,7 +260,7 @@ ci_abi_address_alignment(uint32_t frame_alignment, CiAbiAddressSpec address){
 
 static
 int
-ci_abi_emit(uint32_t frame_alignment, Marray(CiOp)* out, Allocator al, SrcLoc loc, CcTarget target, CiAbiTransfer operation, CiAbiAddressSpec dst, CiAbiAddressSpec src, uint32_t size){
+ci_abi_emit(uint32_t frame_alignment, ByteBuilder* out, Allocator al, SrcLoc loc, CcTarget target, CiAbiTransfer operation, CiAbiAddressSpec dst, CiAbiAddressSpec src, uint32_t size){
     dst = ci_abi_resolve_address(target, dst);
     if(operation != CI_ABI_CONSTANT && operation != CI_ABI_ZERO)
         src = ci_abi_resolve_address(target, src);
@@ -271,8 +271,8 @@ ci_abi_emit(uint32_t frame_alignment, Marray(CiOp)* out, Allocator al, SrcLoc lo
     || (dst.mode == CI_ABI_SLOT && (src.mode == CI_ABI_REG || src.mode == CI_ABI_INCOMING) && operation == CI_ABI_COPY)){
         _Bool write = dst.mode == CI_ABI_REG;
         uint32_t width = operation == CI_ABI_COPY? size : 8;
-        return ma_push(CiOp)(out, al, (CiOp){.abi_move = {
-            .kind = ci_abi_move_kind(src.mode == CI_ABI_INCOMING, write, operation, width, size, alignment),
+        return ci_code_push(out, al, (CiOp){.abi_move = {
+            .kind = ci_abi_move_kind(write ? dst.reg : src.reg, src.mode == CI_ABI_INCOMING, write, operation, width, size, alignment),
             .write = write,
             .incoming = src.mode == CI_ABI_INCOMING,
             .operation = operation,
@@ -295,19 +295,19 @@ ci_abi_emit(uint32_t frame_alignment, Marray(CiOp)* out, Allocator al, SrcLoc lo
         .size=size,
         .loc=loc
     }};
-    return ma_push(CiOp)(out, al, op);
+    return ci_code_push(out, al, op);
 }
 
 static
 int
-ci_lower_abi_argument(uint32_t frame_alignment, Marray(CiOp)* out, Allocator al, const NcCallPlan* p, uint32_t index, uint32_t slot, _Bool incoming, SrcLoc loc){
+ci_lower_abi_argument(uint32_t frame_alignment, ByteBuilder* out, Allocator al, const NcCallPlan* p, uint32_t index, uint32_t slot, _Bool incoming, SrcLoc loc){
     NcAbiArgument a = p->args[index];
     NcAbiType t = a.type;
     if(t.mode == NC_ABI_IGNORED) return 0;
     int err;
     _Bool write = !incoming;
-    CiAbiAddress regs = incoming? CI_ABI_INCOMING : CI_ABI_REG;
-    CiAbiAddress ptr = incoming? CI_ABI_INCOMING_PTR : CI_ABI_REG_PTR;
+    CiAbiAddress regs = CI_ABI_REG;
+    CiAbiAddress ptr = CI_ABI_REG_PTR;
     CiAbiAddressSpec value = {.mode = CI_ABI_SLOT, .offset = slot};
     switch(p->target){
         case CC_TARGET_X86_64_LINUX:
@@ -328,10 +328,10 @@ ci_lower_abi_argument(uint32_t frame_alignment, Marray(CiOp)* out, Allocator al,
                         operation = CI_ABI_SIGN_EXTEND;
                     else if(extend)
                         operation = CI_ABI_ZERO_EXTEND;
-                    return ma_push(CiOp)(out, al, (CiOp){.abi_move = {
-                        .kind = ci_abi_move_kind(incoming, write, operation, extend? 8 : t.size, t.size, min_u32(ci_slot_alignment(frame_alignment, slot), cc_offset_alignment(4, (reg).capture_offset))),
+                    return ci_code_push(out, al, (CiOp){.abi_move = {
+                        .kind = ci_abi_move_kind(reg, 0, write, operation, extend? 8 : t.size, t.size, min_u32(ci_slot_alignment(frame_alignment, slot), cc_offset_alignment(4, (reg).capture_offset))),
                         .write = write,
-                        .incoming = incoming,
+                        .incoming = 0,
                         .operation = operation,
                         .source_size = t.size,
                         .size = extend? 8 : t.size,
@@ -409,10 +409,10 @@ ci_lower_abi_argument(uint32_t frame_alignment, Marray(CiOp)* out, Allocator al,
                         operation = CI_ABI_SIGN_EXTEND;
                     else if(extend)
                         operation = CI_ABI_ZERO_EXTEND;
-                    return ma_push(CiOp)(out, al, (CiOp){.abi_move = {
-                        .kind = ci_abi_move_kind(incoming, write, operation, extend? 8 : t.size, t.size, min_u32(ci_slot_alignment(frame_alignment, slot), cc_offset_alignment(4, (reg).capture_offset))),
+                    return ci_code_push(out, al, (CiOp){.abi_move = {
+                        .kind = ci_abi_move_kind(reg, 0, write, operation, extend? 8 : t.size, t.size, min_u32(ci_slot_alignment(frame_alignment, slot), cc_offset_alignment(4, (reg).capture_offset))),
                         .write = write,
-                        .incoming = incoming,
+                        .incoming = 0,
                         .operation = operation,
                         .source_size = t.size, .size = extend? 8 : t.size,
                         .slot = slot,
@@ -442,7 +442,7 @@ ci_lower_abi_argument(uint32_t frame_alignment, Marray(CiOp)* out, Allocator al,
                 CiAbiAddressSpec source;
                 if(a.on_stack)
                     source = (CiAbiAddressSpec){
-                        .mode = incoming? CI_ABI_INCOMING_PTR_INDIRECT : CI_ABI_REG_PTR_INDIRECT,
+                        .mode = CI_ABI_REG_PTR_INDIRECT,
                         .base = {.bank = CI_ABI_STACK_BASE},
                         .offset = a.stack_offset,
                     };
@@ -519,10 +519,10 @@ ci_lower_abi_argument(uint32_t frame_alignment, Marray(CiOp)* out, Allocator al,
                         operation = CI_ABI_SIGN_EXTEND;
                     else if(extend)
                         operation = CI_ABI_ZERO_EXTEND;
-                    return ma_push(CiOp)(out, al, (CiOp){.abi_move = {
-                        .kind = ci_abi_move_kind(incoming, write, operation, extend? 8 : t.size, t.size, min_u32(ci_slot_alignment(frame_alignment, slot), cc_offset_alignment(4, (reg).capture_offset))),
+                    return ci_code_push(out, al, (CiOp){.abi_move = {
+                        .kind = ci_abi_move_kind(reg, 0, write, operation, extend? 8 : t.size, t.size, min_u32(ci_slot_alignment(frame_alignment, slot), cc_offset_alignment(4, (reg).capture_offset))),
                         .write = write,
-                        .incoming = incoming,
+                        .incoming = 0,
                         .operation = operation,
                         .source_size = t.size, .size = extend? 8 : t.size, .slot = slot, .reg = reg, .loc = loc,
                     }});
@@ -547,7 +547,7 @@ ci_lower_abi_argument(uint32_t frame_alignment, Marray(CiOp)* out, Allocator al,
                 CiAbiAddressSpec source;
                 if(a.on_stack)
                     source = (CiAbiAddressSpec){
-                        .mode = incoming? CI_ABI_INCOMING_PTR_INDIRECT : CI_ABI_REG_PTR_INDIRECT,
+                        .mode = CI_ABI_REG_PTR_INDIRECT,
                         .base = {.bank = CI_ABI_STACK_BASE}, .offset = a.stack_offset,
                     };
                 else
@@ -608,10 +608,10 @@ ci_lower_abi_argument(uint32_t frame_alignment, Marray(CiOp)* out, Allocator al,
                 if(!piece.value_offset && piece.size == t.size && (fp || piece.bank == NC_ABI_GP) && !(write && fp && p->is_variadic)){
                     CiAbiRegister reg = {.bank = fp? CI_ABI_FP : CI_ABI_GP, .index = a.gp};
                     reg = ci_abi_resolve_register(p->target, reg);
-                    return ma_push(CiOp)(out, al, (CiOp){.abi_move = {
-                        .kind = ci_abi_move_kind(incoming, write, CI_ABI_COPY, t.size, t.size, min_u32(ci_slot_alignment(frame_alignment, slot), cc_offset_alignment(4, (reg).capture_offset))),
+                    return ci_code_push(out, al, (CiOp){.abi_move = {
+                        .kind = ci_abi_move_kind(reg, 0, write, CI_ABI_COPY, t.size, t.size, min_u32(ci_slot_alignment(frame_alignment, slot), cc_offset_alignment(4, (reg).capture_offset))),
                         .write = write,
-                        .incoming = incoming,
+                        .incoming = 0,
                         .operation = CI_ABI_COPY,
                         .source_size = t.size,
                         .size = t.size,
@@ -642,7 +642,7 @@ ci_lower_abi_argument(uint32_t frame_alignment, Marray(CiOp)* out, Allocator al,
                 CiAbiAddressSpec source;
                 if(a.on_stack)
                     source = (CiAbiAddressSpec){
-                        .mode = incoming? CI_ABI_INCOMING_PTR_INDIRECT : CI_ABI_REG_PTR_INDIRECT,
+                        .mode = CI_ABI_REG_PTR_INDIRECT,
                         .base = {.bank = CI_ABI_STACK_BASE}, .offset = a.stack_offset,
                     };
                 else
@@ -703,12 +703,57 @@ ci_lower_abi_argument(uint32_t frame_alignment, Marray(CiOp)* out, Allocator al,
 }
 
 static
+void
+ci_pair_abi_moves(ByteBuilder* out, size_t start){
+    CiOp* ops = ci_code_ops(out);
+    size_t count = ci_code_count(out), dest = start;
+    static const CiOpKind kinds[2][2][2] = {
+        {
+            {CI_OP_ABI_READ_GP01_64, CI_OP_ABI_READ_GP01_64_A},
+            {CI_OP_ABI_READ_GP01_64_CONTIG, CI_OP_ABI_READ_GP01_64_CONTIG_A},
+        },
+        {
+            {CI_OP_ABI_WRITE_GP01_64, CI_OP_ABI_WRITE_GP01_64_A},
+            {CI_OP_ABI_WRITE_GP01_64_CONTIG, CI_OP_ABI_WRITE_GP01_64_CONTIG_A},
+        },
+    };
+    for(size_t i = start; i < count; i++){
+        CiOp first = ops[i];
+        if(i + 1 < count && ci_op_family(first.kind) == CI_F_ABI_MOVE
+            && ci_op_family(ops[i + 1].kind) == CI_F_ABI_MOVE){
+            CiOp second = ops[i + 1];
+            if(!first.abi_move.incoming && !second.abi_move.incoming
+            && first.abi_move.operation == CI_ABI_COPY && second.abi_move.operation == CI_ABI_COPY
+            && first.abi_move.size == 8 && second.abi_move.size == 8
+            && first.abi_move.write == second.abi_move.write
+            && (first.abi_move.reg.bank == CI_ABI_GP || first.abi_move.reg.bank == CI_ABI_RESULT_GP)
+            && first.abi_move.reg.bank == second.abi_move.reg.bank
+            && first.abi_move.reg.index == 0 && second.abi_move.reg.index == 1){
+                _Bool contiguous = first.abi_move.slot <= UINT32_MAX - 8 && second.abi_move.slot == first.abi_move.slot + 8;
+                _Bool aligned = (first.kind == CI_OP_ABI_READ_GP0_64_A || first.kind == CI_OP_ABI_WRITE_GP0_64_A) && (second.kind == CI_OP_ABI_READ_GP1_64_A || second.kind == CI_OP_ABI_WRITE_GP1_64_A);
+                first = (CiOp){.abi_pair = {
+                    .kind = kinds[first.abi_move.write][contiguous][aligned],
+                    .write = first.abi_move.write,
+                    .slot0 = first.abi_move.slot, .slot1 = second.abi_move.slot,
+                    .reg0 = first.abi_move.reg, .reg1 = second.abi_move.reg,
+                    .loc = first.loc,
+                }};
+                i++;
+            }
+        }
+        ops[dest++] = first;
+    }
+    ci_code_truncate(out, dest);
+}
+
+static
 int
-ci_lower_abi_result(uint32_t frame_alignment, Marray(CiOp)* out, Allocator al, const NcCallPlan* p, uint32_t slot, _Bool write, SrcLoc loc){
+ci_lower_abi_result(uint32_t frame_alignment, ByteBuilder* out, Allocator al, const NcCallPlan* p, uint32_t slot, _Bool write, SrcLoc loc){
     NcAbiType t = p->result;
     if(t.mode == NC_ABI_IGNORED || t.mode == NC_ABI_INDIRECT)
         return 0;
     int err;
+    size_t moves_start = ci_code_count(out);
     if(!write && ci_abi_has_padding(t)){
         CiAbiAddressSpec dst = {.mode = CI_ABI_SLOT, .offset = slot},
                          src = {.immediate = 0};
@@ -747,13 +792,15 @@ ci_lower_abi_result(uint32_t frame_alignment, Marray(CiOp)* out, Allocator al, c
         err = ci_abi_emit(frame_alignment, out, al, loc, p->target, action, destination, source, piece.size);
         if(err) return err;
     }
+    ci_pair_abi_moves(out, moves_start);
     return 0;
 }
 
 typedef struct CiLowerSwitch CiLowerSwitch;
 struct CiLowerSwitch {
     Marray(CcSwitchEntry) entries;
-    uint32_t default_target;
+    size_t instruction; // switch origin for all case displacements
+    int32_t default_target;
     _Bool has_default;
 };
 
@@ -782,7 +829,7 @@ struct CiInlineState {
 };
 struct CiLowerCtx {
     Allocator a;
-    Marray(CiOp)* out;
+    ByteBuilder* out;
     AtomMap(uintptr_t)* labels; // label -> op index + 1
     CiLowerSwitch* _Nullable sw; // innermost switch being lowered
     uint32_t temp; // top of the local + temp slot stack; statements save/restore
@@ -908,6 +955,12 @@ struct CiLowerVal {
 };
 #define CI_NO_SLOT UINT32_MAX
 
+static
+int32_t
+ci_jump_offset(size_t instruction, size_t destination){
+    return (int32_t)((int64_t)destination - (int64_t)instruction);
+}
+
 static const CcTargetConfig* ci_target(const CiInterpreter*);
 static int ci_lower_stmt(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode*_Nullable n);
 static int ci_try_preinit_global(CiInterpreter*, CiLowerCtx*, CcExpr*, _Bool*);
@@ -915,17 +968,17 @@ static int ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n
 static
 int
 ci_lower_inline_return(CiLowerCtx* ctx, SrcLoc loc){
-    int err = ma_push(CiOp)(
+    int err = ci_code_push(
         ctx->out,
         ctx->a,
         (CiOp){.jump={
             .kind=CI_OP_JUMP,
-            .jump=ctx->inline_state->returns,
+            .patch_next=ctx->inline_state->returns,
             .loc=loc,
         }}
     );
     if(err) return err;
-    ctx->inline_state->returns = (uint32_t)ctx->out->count;
+    ctx->inline_state->returns = (uint32_t)ci_code_count(ctx->out);
     return 0;
 }
 
@@ -968,7 +1021,8 @@ static int ci_pointer_offset(CiInterpreter*, CiLowerCtx*, CcExpr*, uint64_t, uin
 static int ci_lower_materialize_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr* out);
 static int ci_addr_to_value(CiLowerCtx* ctx, CiLowerAddr a, uint32_t dest, uint32_t size, uint32_t align, SrcLoc loc, CiLowerVal* out);
 static int ci_lower_bitfield_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAddr* out);
-static int ci_emit_load_bitfield(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_t dest, uint32_t size);
+static int ci_lower_bitfield_source(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAddr* out, _Bool* from_slot);
+static int ci_emit_load_bitfield(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_t dest, uint32_t size, _Bool from_slot);
 static int ci_emit_store_bitfield(CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_t src, uint32_t size);
 static int ci_lower_whole_byte_bitfield(CiLowerCtx*, CiOp*);
 static
@@ -1096,7 +1150,7 @@ static int ci_alloc_slot(CiLowerCtx*, uint32_t sz, uint32_t align, uint32_t* slo
 static
 int
 ci_emit_integer_conversion(CiLowerCtx* ctx, uint32_t dst, uint32_t dsz, uint32_t src, uint32_t ssz, _Bool uns, SrcLoc loc){
-    return ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.convert = {
+    return ci_code_push(ctx->out, ctx->a, (CiOp){.convert = {
         .kind = ci_integer_conversion_kind(ctx->frame_alignment, ssz, dsz, uns, dst, src),
         .slot = dst,
         .slot_size = dsz,
@@ -1120,7 +1174,7 @@ ci_emit_conversion(CiLowerCtx* ctx, uint32_t dst, uint32_t dsz, uint32_t src, ui
         if(err) return err;
         err = ci_emit_integer_conversion(ctx, wide, 16, src, ssz, uns, loc);
         if(err) return err;
-        err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.checked = {
+        err = ci_code_push(ctx->out, ctx->a, (CiOp){.checked = {
             .kind = ci_overflow_kind(dsz, bound || uns),
             .src = wide,
             .res_size = dsz,
@@ -1129,7 +1183,7 @@ ci_emit_conversion(CiLowerCtx* ctx, uint32_t dst, uint32_t dsz, uint32_t src, ui
             .loc = loc,
         }});
         if(err) return err;
-        err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.istrue = {
+        err = ci_code_push(ctx->out, ctx->a, (CiOp){.istrue = {
             .kind = CI_OP_ISFALSE_I8,
             .src = overflow,
             .src_size = 1,
@@ -1139,7 +1193,7 @@ ci_emit_conversion(CiLowerCtx* ctx, uint32_t dst, uint32_t dsz, uint32_t src, ui
             .loc = loc,
         }});
         if(err) return err;
-        err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.check = {
+        err = ci_code_push(ctx->out, ctx->a, (CiOp){.check = {
             .kind = CI_OP_CHECK,
             .src = overflow,
             .loc = loc,
@@ -1169,7 +1223,7 @@ ci_emit_conversion(CiLowerCtx* ctx, uint32_t dst, uint32_t dsz, uint32_t src, ui
     else if(sf) kind = ci_ftoi_kind(sf, sb, dsz, uns);
     else if(df) kind = ci_itof_kind(ssz, df, db, uns);
     else kind = ci_integer_conversion_kind(ctx->frame_alignment, ssz, dsz, uns, dst, src);
-    return ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.convert = {
+    return ci_code_push(ctx->out, ctx->a, (CiOp){.convert = {
         .kind = kind,
         .slot = dst,
         .slot_size = dsz,
@@ -1213,7 +1267,7 @@ ci_emit_checked(CiLowerCtx* ctx, CiCheckedOp operation, uint32_t dst, uint32_t d
             err = ci_alloc_slot(ctx, width, width, &result);
             if(err) return err;
         }
-        err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.checked = {
+        err = ci_code_push(ctx->out, ctx->a, (CiOp){.checked = {
             .kind = ci_checked_kind(operation, width, uns),
             .op = operation,
             .result = result,
@@ -1235,7 +1289,7 @@ ci_emit_checked(CiLowerCtx* ctx, CiCheckedOp operation, uint32_t dst, uint32_t d
         err = ci_emit_integer_conversion(ctx, restored, width, dst, dsz, du, loc);
         if(err) return err;
         if(width == 2){
-            err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.alu = {
+            err = ci_code_push(ctx->out, ctx->a, (CiOp){.alu = {
                 .kind = CI_OP_XOR16,
                 .slot = restored,
                 .src = result,
@@ -1243,7 +1297,7 @@ ci_emit_checked(CiLowerCtx* ctx, CiCheckedOp operation, uint32_t dst, uint32_t d
                 .loc = loc,
             }});
             if(err) return err;
-            err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.istrue = {
+            err = ci_code_push(ctx->out, ctx->a, (CiOp){.istrue = {
                 .kind = CI_OP_ISTRUE_I16,
                 .slot = narrowed,
                 .slot_size = 1,
@@ -1252,7 +1306,7 @@ ci_emit_checked(CiLowerCtx* ctx, CiCheckedOp operation, uint32_t dst, uint32_t d
             }});
         }
         else {
-            err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.cmp = {
+            err = ci_code_push(ctx->out, ctx->a, (CiOp){.cmp = {
                 .kind = width == 4? CI_OP_NE32 : CI_OP_NE64,
                 .slot = narrowed,
                 .slot_size = 1,
@@ -1262,7 +1316,7 @@ ci_emit_checked(CiLowerCtx* ctx, CiCheckedOp operation, uint32_t dst, uint32_t d
             }});
         }
         if(err) return err;
-        return ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.alu = {
+        return ci_code_push(ctx->out, ctx->a, (CiOp){.alu = {
             .kind = CI_OP_OR8,
             .slot = overflow,
             .src = overflow,
@@ -1281,7 +1335,7 @@ ci_emit_checked(CiLowerCtx* ctx, CiCheckedOp operation, uint32_t dst, uint32_t d
     if(err) return err;
     err = ci_emit_integer_conversion(ctx, b, 16, src2, ssz2, su2, loc);
     if(err) return err;
-    err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.alu = {
+    err = ci_code_push(ctx->out, ctx->a, (CiOp){.alu = {
         .kind = operation == CI_CHK_ADD? CI_OP_ADD128 : operation == CI_CHK_SUB? CI_OP_SUB128 : CI_OP_MUL128,
         .slot = result,
         .src = a,
@@ -1289,7 +1343,7 @@ ci_emit_checked(CiLowerCtx* ctx, CiCheckedOp operation, uint32_t dst, uint32_t d
         .loc = loc,
     }});
     if(err) return err;
-    err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.checked = {
+    err = ci_code_push(ctx->out, ctx->a, (CiOp){.checked = {
         .kind = ci_overflow_kind(dsz, du),
         .src = result,
         .overflow = overflow,
@@ -1377,7 +1431,7 @@ ci_lower_global_storage_addr(CiLowerCtx* ctx, CcVariable* var, uint32_t* slot){
     if(err) return err;
     err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, slot);
     if(err) return err;
-    return ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.var_addr={
+    return ci_code_push(ctx->out, ctx->a, (CiOp){.var_addr={
         .kind=CI_OP_VAR_ADDR,
         .slot=*slot,
         .slot_size=ctx->ptr_size,
@@ -1391,31 +1445,8 @@ int
 ci_lower_cleanups(CiInterpreter* ci, CiLowerCtx* ctx, CcCleanupRange range){
     for(CcDefer* d = range.first; d != range.stop; d = d->prev){
         if(d->vm_scope){
-            if(d->stack_mark){
-                uint32_t temp = ctx->temp;
-                uint32_t mark = ci_variable_slot(ctx,(CcVariable*_Nonnull)d->stack_mark);
-                int err;
-                if(!d->stack_mark->automatic){
-                    uint32_t addr;
-                    err = ci_lower_global_storage_addr(ctx, (CcVariable*)d->stack_mark, &addr);
-                    if(err) return err;
-                    err = ci_alloc_slot(ctx, sizeof(CiStackMark), _Alignof(CiStackMark), &mark);
-                    if(err) return err;
-                    err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.load={
-                        .kind=ci_load_kind(ctx->frame_alignment, sizeof(CiStackMark), 0, mark),
-                        .slot=mark,
-                        .slot_size=sizeof(CiStackMark),
-                        .src=addr,
-                        .loc=d->stack_mark->loc,
-                    }});
-                    if(err) return err;
-                }
-                err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.stack_restore={
-                    .kind=CI_OP_STACK_RESTORE,
-                    .slot=mark,
-                    .loc=d->stack_mark->loc,
-                }});
-                ctx->temp = temp;
+            if(d->saves_stack){
+                int err = ci_code_push(ctx->out, ctx->a, (CiOp){.kind = CI_OP_STACK_RESTORE});
                 if(err) return err;
             }
             continue;
@@ -1496,26 +1527,16 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             if(n->vla.object->alignment > alignment)
                 alignment = n->vla.object->alignment;
             uint32_t slot = ci_variable_slot(ctx, n->vla.object);
-            uint32_t mark = ci_variable_slot(ctx, n->vla.mark),
-                     addr = 0,
-                     mark_addr = 0;
+            uint32_t addr = 0;
             if(!n->vla.object->automatic){
                 err = ci_lower_global_storage_addr(ctx, n->vla.object, &addr);
                 if(err) return err;
-                err = ci_lower_global_storage_addr(ctx, n->vla.mark, &mark_addr);
-                if(err) return err;
                 err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &slot);
                 if(err) return err;
-                err = ci_alloc_slot(ctx, sizeof(CiStackMark), _Alignof(CiStackMark), &mark);
-                if(err) return err;
             }
-            err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.stack_save={
-                .kind=CI_OP_STACK_SAVE,
-                .slot=mark,
-                .loc=n->loc,
-            }});
+            err = ci_code_push(ctx->out, ctx->a, (CiOp){.kind = CI_OP_STACK_SAVE, .loc = n->loc});
             if(err) return err;
-            err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.alloca={
+            err = ci_code_push(ctx->out, ctx->a, (CiOp){.alloca={
                 .kind= (n->zero_initialize)? CI_OP_STACK_ZALLOC : CI_OP_STACK_ALLOC,
                 .zero_initialize=n->zero_initialize,
                 .slot=slot,
@@ -1525,19 +1546,11 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             }});
             if(err) return err;
             if(!n->vla.object->automatic){
-                err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.store={
+                err = ci_code_push(ctx->out, ctx->a, (CiOp){.store={
                     .kind=ci_store_kind(ctx->frame_alignment, ctx->ptr_size, 0, slot),
                     .slot=addr,
                     .src=slot,
                     .src_size=ctx->ptr_size,
-                    .loc=n->loc,
-                }});
-                if(err) return err;
-                err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.store={
-                    .kind=ci_store_kind(ctx->frame_alignment, sizeof(CiStackMark), 0, mark),
-                    .slot=mark_addr,
-                    .src=mark,
-                    .src_size=sizeof(CiStackMark),
                     .loc=n->loc,
                 }});
                 if(err) return err;
@@ -1590,14 +1603,14 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             err = ci_lower_stmt(ci, ctx, n->stmts[0]);
             if(err) return err;
             if(!n->stmts[1]){
-                ci_patch_branches(ctx, chain, (uint32_t)ctx->out->count);
+                ci_patch_branches(ctx, chain, (uint32_t)ci_code_count(ctx->out));
             }
             else if(n->stmts[0] && n->stmts[0]->no_fallthrough){
-                ci_patch_branches(ctx, chain, (uint32_t)ctx->out->count);
+                ci_patch_branches(ctx, chain, (uint32_t)ci_code_count(ctx->out));
                 return ci_lower_stmt(ci, ctx, n->stmts[1]);
             }
             else {
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .jump = {
@@ -1605,11 +1618,11 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                         .loc = n->loc,
                     }
                 };
-                ci_patch_branches(ctx, chain, (uint32_t)ctx->out->count);
-                ptrdiff_t jump = (char*)&op->jump.jump - (char*)ctx->out->data;
+                ci_patch_branches(ctx, chain, (uint32_t)ci_code_count(ctx->out));
+                size_t jump = (size_t)(op - ci_code_ops(ctx->out));
                 err = ci_lower_stmt(ci, ctx, n->stmts[1]);
                 if(err) return err;
-                *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
+                ci_code_ops(ctx->out)[jump].jump.jump = ci_jump_offset(jump, ci_code_count(ctx->out));
             }
             return 0;
         }
@@ -1621,7 +1634,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                 if(folded > 0) return folded;
                 if(!folded && !truth) return 0;
             }
-            uint32_t cond_idx = (uint32_t)ctx->out->count;
+            uint32_t cond_idx = (uint32_t)ci_code_count(ctx->out);
             CiOp* op;
             uint32_t chain = 0;
             err = ci_lower_branch(ci, ctx, cond, 0, n->loc, &chain);
@@ -1629,16 +1642,16 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             size_t backpatch_start = ctx->backpatches.count;
             err = ci_lower_stmt(ci, ctx, n->stmts[0]);
             if(err) return err;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .jump = {
                     .kind = CI_OP_JUMP,
                     .loc = n->loc,
-                    .jump = cond_idx,
+                    .jump = ci_jump_offset((size_t)(op - ci_code_ops(ctx->out)), cond_idx),
                 }
             };
-            uint32_t break_idx = (uint32_t)ctx->out->count;
+            uint32_t break_idx = (uint32_t)ci_code_count(ctx->out);
             ci_patch_branches(ctx, chain, break_idx);
             ci_backpatch_break_continue(ctx, backpatch_start, break_idx, cond_idx);
             return 0;
@@ -1646,15 +1659,15 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
         case CC_STMT_DOWHILE:{
             CcExpr* cond = n->exprs[0];
             size_t backpatch_start = ctx->backpatches.count;
-            uint32_t body_start = (uint32_t)ctx->out->count;
+            uint32_t body_start = (uint32_t)ci_code_count(ctx->out);
             err = ci_lower_stmt(ci, ctx, n->stmts[0]);
             if(err) return err;
-            uint32_t cond_idx = (uint32_t)ctx->out->count;
+            uint32_t cond_idx = (uint32_t)ci_code_count(ctx->out);
             uint32_t chain = 0;
             err = ci_lower_branch(ci, ctx, cond, 1, n->loc, &chain);
             if(err) return err;
             ci_patch_branches(ctx, chain, body_start);
-            ci_backpatch_break_continue(ctx, backpatch_start, (uint32_t)ctx->out->count, cond_idx);
+            ci_backpatch_break_continue(ctx, backpatch_start, (uint32_t)ci_code_count(ctx->out), cond_idx);
             return 0;
         }
         case CC_STMT_FOR:{
@@ -1679,7 +1692,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                 if(folded > 0) return folded;
                 if(!folded && !truth) return 0; // initializer was still evaluated
             }
-            uint32_t top_idx = (uint32_t)ctx->out->count;
+            uint32_t top_idx = (uint32_t)ci_code_count(ctx->out);
             uint32_t chain = 0;
             if(cond){
                 err = ci_lower_branch(ci, ctx, cond, 0, n->loc, &chain);
@@ -1687,21 +1700,21 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             }
             err = ci_lower_stmt(ci, ctx, n->stmts[1]); // body
             if(err) return err;
-            uint32_t continue_idx = (uint32_t)ctx->out->count;
+            uint32_t continue_idx = (uint32_t)ci_code_count(ctx->out);
             if(inc){
                 err = ci_lower_expr_discard(ci, ctx, inc);
                 if(err) return err;
             }
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .jump = {
                     .kind = CI_OP_JUMP,
                     .loc = n->loc,
-                    .jump = top_idx,
+                    .jump = ci_jump_offset((size_t)(op - ci_code_ops(ctx->out)), top_idx),
                 }
             };
-            uint32_t break_idx = (uint32_t)ctx->out->count;
+            uint32_t break_idx = (uint32_t)ci_code_count(ctx->out);
             ci_patch_branches(ctx, chain, break_idx);
             ci_backpatch_break_continue(ctx, backpatch_start, break_idx, continue_idx);
             return 0;
@@ -1725,7 +1738,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                 v.size = 8;
             }
             CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .switch_ = {
@@ -1736,9 +1749,9 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                     .is_unsigned = is_unsigned,
                 }
             };
-            uint32_t sw_idx = (uint32_t)(op - ctx->out->data);
+            uint32_t sw_idx = (uint32_t)(op - ci_code_ops(ctx->out));
             size_t backpatch_start = ctx->backpatches.count;
-            CiLowerSwitch sw = {0};
+            CiLowerSwitch sw = {.instruction = sw_idx};
             {
                 CiLowerSwitch* prev = ctx->sw;
                 ctx->sw = &sw;
@@ -1765,9 +1778,9 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                 table->count = sw.entries.count;
                 if(sw.entries.count)
                     memcpy(table->data, sw.entries.data, sw.entries.count * sizeof(CcSwitchEntry));
-                uint32_t break_target = (uint32_t)ctx->out->count;
-                CiOp* swop = &ctx->out->data[sw_idx];
-                swop->switch_.jump = sw.has_default? sw.default_target : break_target;
+                uint32_t break_target = (uint32_t)ci_code_count(ctx->out);
+                CiOp* swop = &ci_code_ops(ctx->out)[sw_idx];
+                swop->switch_.jump = sw.has_default? sw.default_target : ci_jump_offset(sw_idx, break_target);
                 swop->switch_.table = table;
                 swop->switch_.is_dense = is_dense;
                 if(is_dense) swop->kind = CI_OP_SWITCH_DENSE;
@@ -1781,7 +1794,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             if(!ctx->sw)
                 return ci_ice(ci, n->loc, "case label outside of switch in lowering%s", "");
             if(!n->case_empty){
-                CcSwitchEntry entry = {.low = n->case_.low, .high = n->case_.high, .target = (uint32_t)ctx->out->count};
+                CcSwitchEntry entry = {.low = n->case_.low, .high = n->case_.high, .target = ci_jump_offset(ctx->sw->instruction, ci_code_count(ctx->out))};
                 err = ma_push(CcSwitchEntry)(&ctx->sw->entries, ctx->a, entry);
                 if(err) return CI_OOM_ERROR;
             }
@@ -1791,7 +1804,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             if(!ctx->sw)
                 return ci_ice(ci, n->loc, "default label outside of switch in lowering%s", "");
             ctx->sw->has_default = 1;
-            ctx->sw->default_target = (uint32_t)ctx->out->count;
+            ctx->sw->default_target = ci_jump_offset(ctx->sw->instruction, ci_code_count(ctx->out));
             return ci_lower_stmt(ci, ctx, n->stmts[0]);
         }
         case CC_STMT_RETURN:{
@@ -1841,7 +1854,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                     return n == inline_state->tail_return? 0 : ci_lower_inline_return(ctx, n->loc);
                 }
                 if(!ctx->function_abi){
-                    return ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.return_slot = {
+                    return ci_code_push(ctx->out, ctx->a, (CiOp){.return_slot = {
                         .kind = CI_OP_RETURN_SLOT,
                         .src = v.slot,
                         .src_size = v.size,
@@ -1892,25 +1905,25 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                     err = ci_lower_abi_result(ctx->frame_alignment, ctx->out, ctx->a, p, v.slot, 1, n->loc);
                     if(err) return err;
                 }
-                return ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.kind = CI_OP_RETURN, .loc = n->loc});
+                return ci_code_push(ctx->out, ctx->a, (CiOp){.kind = ctx->function_abi ? CI_OP_FRAME_RESTORE : CI_OP_RETURN, .loc = n->loc});
             }
             err = ci_lower_cleanups(ci, ctx, cleanup);
             if(err) return err;
             if(inline_state) return n == inline_state->tail_return? 0 : ci_lower_inline_return(ctx, n->loc);
-            return ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.kind = CI_OP_RETURN, .loc = n->loc});
+            return ci_code_push(ctx->out, ctx->a, (CiOp){.kind = ctx->function_abi ? CI_OP_FRAME_RESTORE : CI_OP_RETURN, .loc = n->loc});
         }
         case CC_STMT_BREAK:
         case CC_STMT_CONTINUE:{
             err = ci_lower_cleanups(ci, ctx, n->cleanup);
             if(err) return err;
             CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){.jump = {.kind = CI_OP_JUMP, .loc = n->loc}};
             CiBackpatchTarget t = {
                 .kind = n->kind == CC_STMT_BREAK? CI_BP_BREAK : CI_BP_CONTINUE,
                 .levels = n->jump_levels,
-                .byteoffset = (size_t)((char*)&op->jump.jump - (char*)ctx->out->data),
+                .instruction = (size_t)(op - ci_code_ops(ctx->out)),
                 .loc = n->loc,
             };
             err = ma_push(CiBackpatchTarget)(&ctx->backpatches, ctx->a, t);
@@ -1923,7 +1936,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
                 if(err) return err;
             }
             CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .jump = {
@@ -1934,7 +1947,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             CiBackpatchTarget t = {
                 .kind = CI_BP_LABEL,
                 .label = n->label,
-                .byteoffset = (size_t)((char*)&op->jump.jump - (char*)ctx->out->data),
+                .instruction = (size_t)(op - ci_code_ops(ctx->out)),
                 .loc = n->loc,
             };
             err = ma_push(CiBackpatchTarget)(&ctx->backpatches, ctx->a, t);
@@ -1945,7 +1958,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             void* existing = AM_get(ctx->labels, n->label);
             if(existing)
                 return ci_ice(ci, n->loc, "Duplicate label '%.*s'", n->label->length, n->label->data);
-            err = AM_put(ctx->labels, ctx->a, n->label, (void*)(uintptr_t)(ctx->out->count + 1));
+            err = AM_put(ctx->labels, ctx->a, n->label, (void*)(uintptr_t)(ci_code_count(ctx->out) + 1));
             if(err) return CI_OOM_ERROR;
             return ci_lower_stmt(ci, ctx, n->stmts[0]);
         }
@@ -1973,7 +1986,7 @@ ci_scale_pointer_index(CiInterpreter* ci, CiLowerCtx* ctx, CcQualType type, SrcL
     err = ci_alloc_slot(ctx, ctx->size_size, ctx->size_size, out);
     if(err) return err;
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){.alu = {
         .kind = ci_flat_integer_kind(ci_integer_alu_base(ctx->size_size), CC_EXPR_MUL, 1),
@@ -1981,6 +1994,65 @@ ci_scale_pointer_index(CiInterpreter* ci, CiLowerCtx* ctx, CcQualType type, SrcL
         .src = index,
         .src2 = stride.slot,
         .loc = loc,
+    }};
+    return 0;
+}
+
+static
+CcExpr*
+ci_pointer_index_operand(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* index, CcQualType pointee, _Bool subtract){
+    if(subtract
+    || index->kind != CC_EXPR_CAST
+    || cc_expr_has_runtime_check(index)
+    || !ccqt_is_integer(index->lhs->type))
+        return index;
+    uint32_t stride, source_size, target_size;
+    if(cc_type_sizeof_complete(ci_target(ci), pointee, &stride, NULL)
+    || cc_type_sizeof_complete(ci_target(ci), index->lhs->type, &source_size, NULL)
+    || cc_type_sizeof_complete(ci_target(ci), index->type, &target_size, NULL))
+        return index;
+    if(source_size >= ctx->ptr_size || target_size != ctx->ptr_size)
+        return index;
+    return index->lhs;
+}
+
+static
+int
+ci_emit_pointer_offset(CiInterpreter* ci, CiLowerCtx* ctx, CcQualType pointee, SrcLoc loc, uint32_t dest, uint32_t base, uint32_t index, uint32_t index_size, _Bool index_unsigned, _Bool subtract){
+    uint32_t scale;
+    int err;
+    CiOp* op;
+    if(cc_type_sizeof_complete(ci_target(ci), pointee, &scale, NULL)){
+        err = ci_scale_pointer_index(ci, ctx, pointee, loc, index, &index);
+        if(err) return err;
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){.alu = {
+            .kind = ci_flat_integer_kind(ci_integer_alu_base(ctx->ptr_size), subtract ? CC_EXPR_SUB : CC_EXPR_ADD, 1),
+            .slot = dest, .src = base, .src2 = index, .loc = loc,
+        }};
+        return 0;
+    }
+    if(subtract){
+        uint32_t negative;
+        err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &negative);
+        if(err) return err;
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){.alu = {
+            .kind = ci_flat_integer_kind(ci_integer_alu_base(ctx->ptr_size), CC_EXPR_NEG, 1),
+            .slot = negative, .src = index, .loc = loc,
+        }};
+        index = negative;
+        index_size = ctx->ptr_size;
+        index_unsigned = 1;
+    }
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
+    if(err) return err;
+    *op = (CiOp){.index = {
+        .kind = ci_index_kind(ctx->ptr_size, index_size, index_unsigned),
+        .ptr_size = ctx->ptr_size, .index_size = index_size, .index_unsigned = index_unsigned,
+        .slot = dest, .base = base, .index = index, .scale = scale, .loc = loc,
     }};
     return 0;
 }
@@ -2001,7 +2073,7 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
     }
     CiOp* op;
     if(zero){
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .zero = {
@@ -2054,7 +2126,7 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
         CiLowerVal v;
         err = ci_lower_expr(ci, ctx, value, CI_NO_SLOT, &v);
         if(err) return err;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         if(entry_loc.bit_width){
             *op = (CiOp){
@@ -2141,11 +2213,11 @@ ci_lower_promoted_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32
     }
     CiOp* op;
     if(bitfield){
-        err = ci_emit_load_bitfield(ci, ctx, lhs, a, old, size);
+        err = ci_emit_load_bitfield(ci, ctx, lhs, a, old, size, 0);
         if(err) return err;
     }
     else {
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         if(atomic) *op = (CiOp){.atomic_load = {.is_volatile = lhs->type.is_volatile, .kind = ci_atomic_load_kind(size),
             .memorder = CC_MO_SEQ_CST, .slot = old, .slot_size = size,
@@ -2161,11 +2233,11 @@ ci_lower_promoted_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32
             .loc = e->loc
         }};
     }
-    uint32_t loop = (uint32_t)ctx->out->count;
+    uint32_t loop = (uint32_t)ci_code_count(ctx->out);
     err = ci_convert_scalar(ctx, (CiLowerVal){.slot = old, .size = size}, lhs->type,
                             arithmetic, promoted, arithmetic_size, e->loc);
     if(err) return err;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     if(ci_falu_type(arithmetic)){
         CcExprKind fop;
@@ -2194,22 +2266,22 @@ ci_lower_promoted_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32
         err = ci_emit_store_bitfield(ctx, lhs, a, cur, size);
         if(err) return err;
         if(out){
-            err = ci_emit_load_bitfield(ci, ctx, lhs, a, cur, size);
+            err = ci_emit_load_bitfield(ci, ctx, lhs, a, cur, size, 0);
             if(err) return err;
         }
     }
     else {
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         if(atomic){
             *op = (CiOp){.atomic_cas = {.is_volatile = lhs->type.is_volatile, .kind = ci_atomic_cas_kind(size, 1),
                 .memorder = CC_MO_SEQ_CST, .fail_memorder = CC_MO_SEQ_CST, .weak = 1,
                 .size = size, .slot = ok, .src = a.slot, .expected = old,
                 .desired = cur, .offset = a.disp, .loc = e->loc}};
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){.jump_false = {.kind = ci_jz_kind(1), .slot = ok,
-                .slot_size = 1, .jump = loop, .loc = e->loc}};
+                .slot_size = 1, .jump = ci_jump_offset((size_t)(op - ci_code_ops(ctx->out)), loop), .loc = e->loc}};
         }
         else *op = (CiOp){.store = {
             .is_volatile = lhs->type.is_volatile,
@@ -2329,13 +2401,13 @@ ci_lower_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, 
         CiLowerAddr a;
         err = ci_lower_bitfield_addr(ci, ctx, lhs, &a);
         if(err) return err;
-        err = ci_emit_load_bitfield(ci, ctx, lhs, a, cur, size);
+        err = ci_emit_load_bitfield(ci, ctx, lhs, a, cur, size, 0);
         if(err) return err;
         CiLowerVal r;
         err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &r);
         if(err) return err;
         CiOp* op;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .alu = {
@@ -2351,7 +2423,7 @@ ci_lower_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, 
         // the expression's value is the stored bits, re-read
         // truncated and extended
         if(out){
-            err = ci_emit_load_bitfield(ci, ctx, lhs, a, cur, size);
+            err = ci_emit_load_bitfield(ci, ctx, lhs, a, cur, size, 0);
             if(err) return err;
         }
         ctx->temp = keep; // free rhs and address scratch; cur survives
@@ -2392,7 +2464,7 @@ ci_lower_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, 
     if(is_mem){
         err = ci_lower_addr(ci, ctx, lhs, 0, &a); // access
         if(err) return err;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .load = {
@@ -2425,17 +2497,21 @@ ci_lower_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, 
         return ci_lower_expr(ci, ctx, lhs, dest, (CiLowerVal*)out);
     }
     CiLowerVal r = {0};
+    CcExpr* index_operand = is_ptr ? ci_pointer_index_operand(ci, ctx, rhs, ccqt_as_ptr(e->type)->pointee, e->kind == CC_EXPR_SUBASSIGN) : rhs;
     if(!use_imm){
-        err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &r);
+        err = ci_lower_expr(ci, ctx, index_operand, CI_NO_SLOT, &r);
         if(err) return err;
     }
     if(is_ptr){
-        err = ci_scale_pointer_index(ci, ctx, ccqt_as_ptr(e->type)->pointee, e->loc, r.slot, &r.slot);
+        err = ci_emit_pointer_offset(
+            ci, ctx, ccqt_as_ptr(e->type)->pointee, e->loc,
+            cur, cur, r.slot, r.size,
+            ccqt_is_unsigned(index_operand->type, ctx->char_is_unsigned),
+            e->kind == CC_EXPR_SUBASSIGN);
         if(err) return err;
-        r.size = ctx->ptr_size;
-        op_unsigned = 1;
+        goto compound_store;
     }
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     if(simplified == CI_IMMEDIATE_CONSTANT){
         *op = (CiOp){.constant={.kind=ci_const_kind(size), .slot=cur,
@@ -2478,8 +2554,9 @@ ci_lower_compound(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, 
             }
         };
     }
+    compound_store:
     if(is_mem){
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .store = {
@@ -2522,7 +2599,7 @@ ci_lower_constant(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, const CiFoldVal
         .canonical=ccqt_is_integer(value->type) && !value->bits[1] && value->bits[0] <= 1
     };
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){.constant={
         .kind=ci_const_kind(value->sz),
@@ -2537,14 +2614,30 @@ ci_lower_constant(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, const CiFoldVal
 
 static
 _Bool
-ci_expr_is_boolean(CcExpr* e){
+ci_expr_is_boolean(CiLowerCtx* ctx, CcExpr* e){
     if(ccqt_is_bool(e->type)) return 1;
+    if(cc_expr_field_bit_width(e) == 1 && ccqt_is_unsigned(e->type, ctx->char_is_unsigned))
+        return 1;
     switch((uint32_t)e->kind){
         case CC_EXPR_LOGNOT: case CC_EXPR_LOGAND: case CC_EXPR_LOGOR:
         case CC_EXPR_EQ: case CC_EXPR_NE: case CC_EXPR_LT: case CC_EXPR_LE:
         case CC_EXPR_GT: case CC_EXPR_GE: return 1;
         default: return 0;
     }
+}
+
+static
+int
+ci_lower_boolean_value(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, uint32_t size){
+    uint32_t source_size;
+    int err = cc_expr_sizeof_as_uint(&ci->parser, e, &source_size);
+    if(err) return err;
+    CiLowerVal value;
+    if(e->kind != CC_EXPR_BLOB && ci_expr_is_boolean(ctx, e) && source_size == size)
+        return ci_lower_expr(ci, ctx, e, dest, &value);
+    err = ci_lower_expr(ci, ctx, e, CI_NO_SLOT, &value);
+    if(err) return err;
+    return ci_lower_istrue(ctx, &value, e->type, dest, size, 0, e->loc);
 }
 
 static
@@ -2565,7 +2658,7 @@ ci_lower_assign_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
         err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &v);
         if(err) return err;
         CiOp* op;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){.store = {
             .is_volatile = lhs->type.is_volatile,
@@ -2577,7 +2670,7 @@ ci_lower_assign_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
             .src_size = rsz,
             .loc = e->loc
         }};
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){.zero = {
             .is_volatile = lhs->type.is_volatile,
@@ -2589,7 +2682,7 @@ ci_lower_assign_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
             .loc = e->loc
         }};
         if(out){
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){.load = {
                 .is_volatile = lhs->type.is_volatile,
@@ -2617,7 +2710,7 @@ ci_lower_assign_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
         err = ci_lower_atomic_operand(ci, ctx, rhs, &v, size, e->loc);
         if(err) return err;
         CiOp* op;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .atomic_store = {
@@ -2683,7 +2776,7 @@ ci_lower_assign_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
         err = ci_emit_store_bitfield(ctx, lhs, a, v.slot, size);
         if(err) return err;
         if(!out) return 0;
-        err = ci_emit_load_bitfield(ci, ctx, lhs, a, dest, size);
+        err = ci_emit_load_bitfield(ci, ctx, lhs, a, dest, size, 0);
         if(err) return err;
         out->slot = dest;
         return 0;
@@ -2694,7 +2787,7 @@ ci_lower_assign_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
     err = ci_lower_expr(ci, ctx, rhs, dest, &v);
     if(err) return err;
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .store = {
@@ -2770,7 +2863,7 @@ ci_emit_check(CiLowerCtx* ctx, uint32_t src, uint32_t size, _Bool negate,
     uint32_t condition;
     int err = ci_alloc_slot(ctx, 1, 1, &condition);
     if(err) return err;
-    err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.istrue={
+    err = ci_code_push(ctx->out, ctx->a, (CiOp){.istrue={
         .kind=ci_truth_kind(size, 0, negate),
         .src=src,
         .src_size=size,
@@ -2780,7 +2873,7 @@ ci_emit_check(CiLowerCtx* ctx, uint32_t src, uint32_t size, _Bool negate,
         .loc=loc,
     }});
     if(err) return err;
-    return ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.check={
+    return ci_code_push(ctx->out, ctx->a, (CiOp){.check={
         .kind=CI_OP_CHECK,
         .src=condition,
         .message=message,
@@ -2848,7 +2941,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
         if(err) return err;
     }
     out->size = size;
-    out->canonical = e->kind != CC_EXPR_BLOB && ccqt_is_bool(e->type);
+    out->canonical = e->kind != CC_EXPR_BLOB && ci_expr_is_boolean(ctx, e);
     switch(e->kind){
         case CC_EXPR_FUNCTION:
             return ci_lower_cast_operand(ci, ctx, e, dest, out);
@@ -2862,7 +2955,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 err = ci_alloc_slot(ctx, 8, 8, &aslot);
                 if(err) return err;
                 CiOp* op;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .constant = {
@@ -2878,7 +2971,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                         .loc = e->loc,
                     },
                 };
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .load = {
@@ -2925,7 +3018,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 err = ci_alloc_slot(ctx, 8, 8, &aslot);
                 if(err) return err;
                 CiOp* op;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .var_addr = {
@@ -2936,7 +3029,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                         .loc = e->loc,
                     }
                 };
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .load = {
@@ -2979,10 +3072,11 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
                 if(err) return err;
                 uint32_t temp = ctx->temp;
-                CiLowerAddr a;
-                err = ci_lower_bitfield_addr(ci, ctx, e, &a);
+                CiLowerAddr a = {0};
+                _Bool from_slot;
+                err = ci_lower_bitfield_source(ci, ctx, e, &a, &from_slot);
                 if(err) return err;
-                err = ci_emit_load_bitfield(ci, ctx, e, a, dest, size);
+                err = ci_emit_load_bitfield(ci, ctx, e, a, dest, size, from_slot);
                 if(err) return err;
                 ctx->temp = temp;
                 out->slot = dest;
@@ -3016,7 +3110,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             if(err) return err;
             out->slot = dest;
             CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .load = {
@@ -3041,7 +3135,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
                 if(err) return err;
                 out->slot = dest;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .slot_addr = {
@@ -3094,7 +3188,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 err = ci_lower_expr(ci, ctx, operand, src, &v);
                 if(err) return err;
                 CiOp* ops;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &ops);
+                err = ci_code_alloc(ctx->out, ctx->a, &ops);
                 if(err) return err;
                 ops[0] = (CiOp){.constant = {
                     .kind = ci_const_kind(sizeof(CiRtAny)), .bt_kind = CCBT__Any,
@@ -3219,7 +3313,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             err = ci_lower_expr(ci, ctx, operand, CI_NO_SLOT, &v);
             if(err) return err;
             CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             if(kind == CI_OP_ADD32 || kind == CI_OP_ADD64 || kind == CI_OP_ADD128){
                 *op = (CiOp){
@@ -3255,7 +3349,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 negate = !negate;
                 operand = operand->lhs;
             }
-            if(!negate && ci_expr_is_boolean(operand) && operand->type.unqual == e->type.unqual)
+            if(!negate && ci_expr_is_boolean(ctx, operand) && operand->type.unqual == e->type.unqual)
                 return ci_lower_expr(ci, ctx, operand, dest, out);
             err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
             if(err) return err;
@@ -3327,7 +3421,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                         if(err) return err;
                     }
                     CiOp* op;
-                    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                    err = ci_code_alloc(ctx->out, ctx->a, &op);
                     if(err) return err;
                     *op = (CiOp){
                         .alu = {
@@ -3343,7 +3437,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                         err = ci_lower_sizeof(ci, ctx, pointee, e->loc, &stride);
                         if(err) return err;
                         uint32_t esz = stride.slot;
-                        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                        err = ci_code_alloc(ctx->out, ctx->a, &op);
                         if(err) return err;
                         *op = (CiOp){
                             .alu = {
@@ -3365,7 +3459,6 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 if(err) return err;
                 if(!ccqt_is_integer(ie->type)) return ci_ice(ci, ie->loc, "Non integer index%s", "");
                 if(isz != ctx->size_size) return ci_ice(ci, ie->loc, "Non index-sized index: %u", isz);
-                _Bool idx_unsigned = ccqt_is_unsigned(ie->type, ctx->char_is_unsigned);
                 err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
                 if(err) return err;
                 out->slot = dest;
@@ -3380,7 +3473,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                         err = ci_lower_expr(ci, ctx, base, CI_NO_SLOT, &ptr);
                         if(err) return err;
                         CiOp* op;
-                        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                        err = ci_code_alloc(ctx->out, ctx->a, &op);
                         if(err) return err;
                         *op = (CiOp){
                             .alu_imm = {
@@ -3395,28 +3488,21 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                         return 0;
                     }
                 }
+                CcExpr* index_operand = ci_pointer_index_operand(ci, ctx, ie, pointee, e->kind == CC_EXPR_SUB);
                 CiLowerVal l, r;
-                err = ci_lower_expr(ci, ctx, lhs, CI_NO_SLOT, &l);
+                err = ci_lower_expr(ci, ctx, lhs_ptr? lhs : index_operand, CI_NO_SLOT, &l);
                 if(err) return err;
-                err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &r);
+                err = ci_lower_expr(ci, ctx, rhs_ptr? rhs : index_operand, CI_NO_SLOT, &r);
                 if(err) return err;
                 CiLowerVal* pv = lhs_ptr? &l : &r;
                 CiLowerVal* iv = lhs_ptr? &r : &l;
-                err = ci_scale_pointer_index(ci, ctx, pointee, e->loc, iv->slot, &iv->slot);
+                err = ci_emit_pointer_offset(
+                    ci, ctx, pointee, e->loc,
+                    dest, pv->slot, iv->slot, iv->size,
+                    ccqt_is_unsigned(index_operand->type, ctx->char_is_unsigned),
+                    e->kind == CC_EXPR_SUB
+                );
                 if(err) return err;
-                idx_unsigned = 1;
-                CiOp* op;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-                if(err) return err;
-                *op = (CiOp){
-                    .alu = {
-                        .kind = ci_flat_integer_kind(ci_integer_alu_base(ctx->ptr_size), e->kind == CC_EXPR_ADD? CC_EXPR_ADD : CC_EXPR_SUB, idx_unsigned),
-                        .slot = dest,
-                        .src = pv->slot,
-                        .src2 = iv->slot,
-                        .loc = e->loc,
-                    }
-                };
                 ctx->temp = temp;
                 return 0;
             }
@@ -3517,7 +3603,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 if(err) return err;
                 if(fold_fail == 0){
                     CiOp* op;
-                    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                    err = ci_code_alloc(ctx->out, ctx->a, &op);
                     if(err) return err;
                     *op = (CiOp){
                         .alu_imm = {
@@ -3538,7 +3624,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                     uint32_t conv;
                     err = ci_alloc_slot(ctx, size, size, &conv);
                     if(err) return err;
-                    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                    err = ci_code_alloc(ctx->out, ctx->a, &op);
                     if(err) return err;
                     *op = (CiOp){
                         .convert = {
@@ -3554,7 +3640,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                     r.slot = conv;
                     r.size = size;
                 }
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .alu = {
@@ -3583,7 +3669,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &r);
                 if(err) return err;
                 CiOp* op;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .falu32 = {
@@ -3719,7 +3805,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 return ci_ice(ci, e->loc, "rhs not lowered to common size: rhs: %u, op_size: %u", l.size, op_size);
             CiOp* op;
             if(is_float){
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .fcmp32 = {
@@ -3739,7 +3825,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 ctx->temp = temp;
                 return 0;
             }
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .cmp = {
@@ -3785,7 +3871,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 }
             }
             if(operand){
-                if(ci_expr_is_boolean(operand) && operand->type.unqual == e->type.unqual)
+                if(ci_expr_is_boolean(ctx, operand) && operand->type.unqual == e->type.unqual)
                     return ci_lower_expr(ci, ctx, operand, dest, out);
                 err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
                 if(err) return err;
@@ -3798,48 +3884,28 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 *out = (CiLowerVal){.slot=dest, .size=size, .canonical=1};
                 return err;
             }
-            uint32_t work;
-            if(dest == CI_NO_SLOT){
-                err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
-                if(err) return err;
-                work = dest;
-            }
-            else {
-                err = ci_alloc_slot(ctx, size, size, &work);
-                if(err) return err;
-            }
+            err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
+            if(err) return err;
             out->slot = dest;
-            CcExpr* lhs = e->lhs;
-            CcExpr* rhs = e->values[0];
             uint32_t temp = ctx->temp;
-            CiLowerVal v;
-            err = ci_lower_expr(ci, ctx, lhs, CI_NO_SLOT, &v);
-            if(err) return err;
-            err = ci_lower_istrue(ctx, &v, lhs->type, work, size, 0, lhs->loc);
-            if(err) return err;
-            ctx->temp = temp;
-            CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
-            if(err) return err;
-            *op = (CiOp){
-                .jump_false = {
-                    .kind = e->kind == CC_EXPR_LOGAND? ci_jz_kind(size) : ci_jnz_kind(size),
-                    .slot = work,
-                    .slot_size = size,
-                    .loc = e->loc,
-                }
-            };
-            ptrdiff_t jump = (char*)&op->jump_false.jump - (char*)ctx->out->data;
-            err = ci_lower_expr(ci, ctx, rhs, CI_NO_SLOT, &v);
-            if(err) return err;
-            err = ci_lower_istrue(ctx, &v, rhs->type, work, size, 0, rhs->loc);
+            _Bool short_circuit = e->kind == CC_EXPR_LOGOR;
+            uint32_t chain = 0;
+            err = ci_lower_branch(ci, ctx, e->lhs, short_circuit, e->loc, &chain);
             if(err) return err;
             ctx->temp = temp;
-            *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
-            if(work != dest){
-                err = ci_emit_copy(ctx, dest, work, size, e->loc);
-                if(err) return err;
-            }
+            err = ci_lower_boolean_value(ci, ctx, e->values[0], dest, size);
+            if(err) return err;
+            ctx->temp = temp;
+            size_t jump = ci_code_count(ctx->out);
+            err = ci_code_push(ctx->out, ctx->a, (CiOp){.jump = {.kind = CI_OP_JUMP, .loc = e->loc}});
+            if(err) return err;
+            ci_patch_branches(ctx, chain, (uint32_t)ci_code_count(ctx->out));
+            err = ci_code_push(ctx->out, ctx->a, (CiOp){.constant = {
+                .kind = ci_const_kind(size), .slot = dest, .immsize = size,
+                .immediate = {short_circuit}, .bt_kind = CCBT_int, .loc = e->loc,
+            }});
+            if(err) return err;
+            ci_code_ops(ctx->out)[jump].jump.jump = ci_jump_offset(jump, ci_code_count(ctx->out));
             out->canonical = 1;
             return 0;
         }
@@ -3862,7 +3928,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                 }
                 if(!a && !b && !yes.bits[1] && !no.bits[1] && yes.bits[0] <= 1 && no.bits[0] <= 1 && yes.bits[0] != no.bits[0]){
                     _Bool negate = !yes.bits[0];
-                    if(!negate && ci_expr_is_boolean(e->lhs) && e->lhs->type.unqual == e->type.unqual)
+                    if(!negate && ci_expr_is_boolean(ctx, e->lhs) && e->lhs->type.unqual == e->type.unqual)
                         return ci_lower_expr(ci, ctx, e->lhs, dest, out);
                     err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
                     if(err) return err;
@@ -3890,7 +3956,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             err = ci_lower_expr(ci, ctx, e->values[0], dest, &v);
             if(err) return err;
             ctx->temp = temp;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .jump = {
@@ -3898,12 +3964,12 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
                     .loc = e->loc,
                 }
             };
-            ci_patch_branches(ctx, chain, (uint32_t)ctx->out->count);
-            ptrdiff_t jump = (char*)&op->jump.jump - (char*)ctx->out->data;
+            ci_patch_branches(ctx, chain, (uint32_t)ci_code_count(ctx->out));
+            size_t jump = (size_t)(op - ci_code_ops(ctx->out));
             err = ci_lower_expr(ci, ctx, e->values[1], dest, &v);
             if(err) return err;
             ctx->temp = temp;
-            *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
+            ci_code_ops(ctx->out)[jump].jump.jump = ci_jump_offset(jump, ci_code_count(ctx->out));
             return 0;
         }
         case CC_EXPR_COMMA:{
@@ -3968,7 +4034,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             err = ci_alloc_slot(ctx, 8, 8, &aslot);
             if(err) return err;
             CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .slot_addr = {
@@ -4006,7 +4072,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             err = ci_lower_expr(ci, ctx, arg, CI_NO_SLOT, &l);
             if(err) return err;
             CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .bswap = {
@@ -4033,7 +4099,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             err = ci_lower_expr(ci, ctx, sz, CI_NO_SLOT, &l);
             if(err) return err;
             CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .alloca = {
@@ -4060,7 +4126,7 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             if(e->builtin.op == CC_BUILTIN_SYMBOLICATE)
                 return ci_lower_symbolicate(ci, ctx, e);
             CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .builtin = {
@@ -4116,7 +4182,7 @@ ci_lower_cast_operand(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
         if(err) return err;
         *out = (CiLowerVal){.slot = dest, .size = ctx->ptr_size};
         CiOp* op;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .func_addr = {
@@ -4143,6 +4209,12 @@ ci_marshal_call_arguments(CiInterpreter* ci, CiLowerCtx* ctx, SrcLoc loc, CiCall
         err = ci_alloc_slot(ctx, (uint32_t)size, size? (uint32_t)plan->stack_alignment : 1, &storage);
         if(err) return err;
         *storage_slot = storage;
+    }
+    else {
+        err = ci_code_push(ctx->out, ctx->a, (CiOp){.call_resolve = {
+            .kind = CI_OP_CALL_RESOLVE, .slot = storage - CI_INDIRECT_CALL_PREFIX_SIZE, .loc = loc,
+        }});
+        if(err) return err;
     }
     if(nc_stack_storage_size(plan) || variadic){
         uint32_t stack = storage + (uint32_t)nc_stack_storage_prefix(plan);
@@ -4181,10 +4253,12 @@ ci_marshal_call_arguments(CiInterpreter* ci, CiLowerCtx* ctx, SrcLoc loc, CiCall
         err = ci_abi_emit(ctx->frame_alignment, ctx->out, ctx->a, loc, plan->target, CI_ABI_ADDRESS, dst, src, 8);
         if(err) return err;
     }
+    size_t moves_start = ci_code_count(ctx->out);
     for(uint32_t i = 0; i < plan->count; i++){
         err = ci_lower_abi_argument(ctx->frame_alignment, ctx->out, ctx->a, plan, i, slots[i], 0, loc);
         if(err) return err;
     }
+    ci_pair_abi_moves(ctx->out, moves_start);
     return 0;
 }
 
@@ -4207,7 +4281,7 @@ ci_emit_runtime_call(CiInterpreter* ci, CiLowerCtx* ctx, SrcLoc loc, CiCallDescr
     if(err) return err;
     err = ci_marshal_call_arguments(ci, ctx, loc, d, slots, &storage, status, 0, 1);
     if(err) return err;
-    err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.call = {
+    err = ci_code_push(ctx->out, ctx->a, (CiOp){.call = {
         .kind = (0)? CI_OP_CALL_INDIRECT : CI_OP_CALL_DIRECT,
         .descrip = d,
         .args_slot = storage,
@@ -4218,7 +4292,7 @@ ci_emit_runtime_call(CiInterpreter* ci, CiLowerCtx* ctx, SrcLoc loc, CiCallDescr
     if(err) return err;
     err = ci_lower_abi_result(ctx->frame_alignment, ctx->out, ctx->a, d->abi, status, 0, loc);
     if(err) return err;
-    return ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.propagate_error = {
+    return ci_code_push(ctx->out, ctx->a, (CiOp){.propagate_error = {
         .kind = CI_OP_PROPAGATE_ERROR,
         .src = status,
         .loc = loc,
@@ -4597,7 +4671,11 @@ ci_lower_module_reflect(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
         err = ci_emit_runtime_call(ci, ctx, e->loc, runtime, slots);
         if(err) return err;
         CiCallDescriptor* d = ci->runtime_calls.module_run;
-        err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.call = {
+        err = ci_code_push(ctx->out, ctx->a, (CiOp){.call_resolve = {
+            .kind = CI_OP_CALL_RESOLVE, .slot = callee_slot, .loc = e->loc,
+        }});
+        if(err) return err;
+        err = ci_code_push(ctx->out, ctx->a, (CiOp){.call = {
             .kind = (1)? CI_OP_CALL_INDIRECT : CI_OP_CALL_DIRECT,
             .is_indirect = 1,
             .descrip = d,
@@ -4684,7 +4762,7 @@ ci_lower_clear_cache(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
     err = ci_lower_expr(ci, ctx, e->values[1], CI_NO_SLOT, &end);
     if(err) return err;
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .clear_cache = {
@@ -4856,7 +4934,7 @@ ci_lower_capture_backtrace(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32
     err = ci_lower_expr(ci, ctx, e->values[1], CI_NO_SLOT, &v);
     if(err) return err;
     capacity_slot = v.slot;
-    err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.capture_backtrace = {
+    err = ci_code_push(ctx->out, ctx->a, (CiOp){.capture_backtrace = {
         .kind = CI_OP_CAPTURE_BACKTRACE,
         .slot = dest,
         .slot_size = sizeof(int),
@@ -4938,7 +5016,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         }
         uint32_t temp = ctx->temp;
         if(!is_pointer && !is_float && (size == 4 || size == 8)){
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .alu_imm = {
@@ -4962,7 +5040,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
                 if(err) return err;
             }
             else {
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .constant = {
@@ -4975,7 +5053,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
                 }
             };
             }
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             if(is_float){
                 *op = (CiOp){
@@ -5035,7 +5113,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
             if(err) return err;
         }
         else {
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .constant = {
@@ -5055,7 +5133,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
             if(err) return err;
             err = ci_alloc_slot(ctx, 1, 1, &ok);
             if(err) return err;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .atomic_load = {
@@ -5069,8 +5147,8 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
                     .loc = e->loc,
                 }
             };
-            uint32_t loop = (uint32_t)ctx->out->count;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            uint32_t loop = (uint32_t)ci_code_count(ctx->out);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             if(is_float){
                 *op = (CiOp){
@@ -5101,7 +5179,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
                 err = ci_lower_istrue(ctx, &v, ccqt_basic(CCBT_unsigned_char), newv, size, 0, e->loc);
                 if(err) return err;
             }
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .atomic_cas = {
@@ -5119,21 +5197,21 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
                     .loc = e->loc,
                 }
             };
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .jump_false = {
                     .kind = ci_jz_kind(1),
                     .slot = ok,
                     .slot_size = 1,
-                    .jump = loop,
+                    .jump = ci_jump_offset((size_t)(op - ci_code_ops(ctx->out)), loop),
                     .loc = e->loc,
                 }
             };
             result = is_pre? newv : old;
         }
         else {
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .atomic_rmw = {
@@ -5151,7 +5229,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
                 }
             };
             if(out && is_pre){
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .alu = {
@@ -5189,11 +5267,11 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         err = ci_lower_addr(ci, ctx, lhs, 0, &a);
     if(err) return err;
     if(is_bf){
-        err = ci_emit_load_bitfield(ci, ctx, lhs, a, old, size);
+        err = ci_emit_load_bitfield(ci, ctx, lhs, a, old, size, 0);
         if(err) return err;
     }
     else {
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .load = {
@@ -5224,7 +5302,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         if(err) return err;
     }
     else {
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .constant = {
@@ -5238,7 +5316,7 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
     };
     }
     }
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     if(immediate){
         *op=(CiOp){.alu_imm = {
@@ -5283,12 +5361,12 @@ ci_lower_incdec(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         if(err) return err;
         if(out && is_pre){
             // pre yields the stored bits, re-read truncated and extended
-            err = ci_emit_load_bitfield(ci, ctx, lhs, a, newv, size);
+            err = ci_emit_load_bitfield(ci, ctx, lhs, a, newv, size, 0);
             if(err) return err;
         }
     }
     else {
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .store = {
@@ -5334,15 +5412,18 @@ ci_lower_checked(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
     CiCheckedOp cmp_op = e->kind == CC_EXPR_ADD_OVERFLOW? CI_CHK_ADD
                     : e->kind == CC_EXPR_SUB_OVERFLOW? CI_CHK_SUB
                     : CI_CHK_MUL;
+    _Bool fresh_result = out && dest == CI_NO_SLOT;
     if(out){
         err = ci_lower_expr_dest(ci, ctx, e, &dest, 1);
         if(err) return err;
         out->slot = dest;
     }
     uint32_t save = ctx->temp;
-    uint32_t ovf;
-    err = ci_alloc_slot(ctx, 1, 1, &ovf);
-    if(err) return err;
+    uint32_t ovf = dest;
+    if(!fresh_result){
+        err = ci_alloc_slot(ctx, 1, 1, &ovf);
+        if(err) return err;
+    }
     CiLowerVal av, bv, pv;
     err = ci_lower_expr(ci, ctx, ae, CI_NO_SLOT, &av);
     if(err) return err;
@@ -5364,7 +5445,7 @@ ci_lower_checked(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
     );
     if(err) return err;
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .store = {
@@ -5378,7 +5459,7 @@ ci_lower_checked(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
             .loc = e->loc,
         }
     };
-    if(out){
+    if(out && ovf != dest){
         err = ci_emit_copy(ctx, dest, ovf, 1, e->loc);
         if(err) return err;
     }
@@ -5412,7 +5493,7 @@ ci_lower_umul128(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
     err = ci_alloc_slot(ctx, 16, 16, &bw);
     if(err) return err;
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .convert = {
@@ -5425,7 +5506,7 @@ ci_lower_umul128(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
             .loc = ae->loc,
         }
     };
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .convert = {
@@ -5441,7 +5522,7 @@ ci_lower_umul128(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
     uint32_t prod;
     err = ci_alloc_slot(ctx, 16, 16, &prod);
     if(err) return err;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .alu = {
@@ -5456,7 +5537,7 @@ ci_lower_umul128(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, C
     uint32_t alignment;
     err = ci_pointer_alignment(ci, ctx, he, &alignment);
     if(err) return err;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .store = {
@@ -5502,17 +5583,17 @@ ci_lower_bit_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t des
         err = ci_lower_istrue(ctx, &a, e->lhs->type, truth, 1, 0, e->loc);
         if(err) return err;
         CiOp* jump;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &jump);
+        err = ci_code_alloc(ctx->out, ctx->a, &jump);
         if(err) return err;
-        skip_fallback = (uint32_t)ctx->out->count-1;
+        skip_fallback = (uint32_t)ci_code_count(ctx->out)-1;
         *jump = (CiOp){.jump_true = {.kind = ci_jnz_kind(1), .slot = truth, .slot_size = 1, .loc = e->loc}};
         err = ci_lower_expr(ci, ctx, e->values[0], dest, &b);
         if(err) return err;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &jump);
+        err = ci_code_alloc(ctx->out, ctx->a, &jump);
         if(err) return err;
-        skip_count = (uint32_t)ctx->out->count-1;
+        skip_count = (uint32_t)ci_code_count(ctx->out)-1;
         *jump = (CiOp){.jump = {.kind = CI_OP_JUMP, .loc = e->loc}};
-        ctx->out->data[skip_fallback].jump_true.jump = (uint32_t)ctx->out->count;
+        ci_code_ops(ctx->out)[skip_fallback].jump_true.jump = ci_jump_offset(skip_fallback, ci_code_count(ctx->out));
     }
     else if(e->bit_builtin.nargs){
         err = cc_sizeof_as_uint(&ci->parser, e->values[0]->type, e->loc, &ssz);
@@ -5530,7 +5611,7 @@ ci_lower_bit_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t des
         ssz = 8;
     }
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){.bit_builtin = {
         .kind = ci_bit_kind(e->bit_builtin.op, sz), .op = e->bit_builtin.op,
@@ -5538,7 +5619,7 @@ ci_lower_bit_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t des
         .slot = dest, .slot_size = rsz, .src = a.slot, .src2 = b.slot,
         .loc = e->loc,
     }};
-    if(lazy) ctx->out->data[skip_count].jump.jump = (uint32_t)ctx->out->count;
+    if(lazy) ci_code_ops(ctx->out)[skip_count].jump.jump = ci_jump_offset(skip_count, ci_code_count(ctx->out));
     ctx->temp = save;
     return 0;
 }
@@ -5595,7 +5676,7 @@ ci_lower_memcpy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         if(err) return err;
     }
     else if(size){
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         if(dst_frame) *op = (CiOp){.load = {
             .kind = ci_load_kind(ctx->frame_alignment, size, src_alignment, dst), .slot = dst, .slot_size = size,
@@ -5621,7 +5702,7 @@ ci_lower_memcpy(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, Ci
         if(err) return err;
     }
     else if(out){
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){.slot_addr = {
             .kind = CI_OP_SLOT_ADDR, .slot = dest, .slot_size = ctx->ptr_size,
@@ -5718,7 +5799,7 @@ ci_lower_inline_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CcFunc* f, u
     err = ci_lower_func(ci, f, &ci->deps);
     if(err) return err;
     size_t budget = f->inline_? ci->inline_hint_budget : ci->inline_budget;
-    if(!f->always_inline && f->interp_ops->code.count > budget) return 0;
+    if(!f->always_inline && f->interp_ops->code->op_count > budget) return 0;
     AtomMap(uintptr_t) labels = {0};
     CiFoldCache cache = {0};
     CiInlineState inline_state = {
@@ -5797,7 +5878,7 @@ ci_lower_inline_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CcFunc* f, u
     if(err) goto cleanup;
     err = ci_lower_resolve_gotos(ci, &body);
     if(err) goto cleanup;
-    ci_patch_branches(&body, inline_state.returns, (uint32_t)body.out->count);
+    ci_patch_branches(&body, inline_state.returns, (uint32_t)ci_code_count(body.out));
     err = ci_lower_deps_merge(&ctx->deps, &body.deps, ctx->a);
     if(err) goto cleanup;
     if(out && inline_state.result_seen && !body.statement_fallthrough){
@@ -5936,7 +6017,7 @@ ci_lower_call(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLo
         return ci_error(ci, e->loc, "call argument storage exceeds 32-bit layout limit");
     if(err) return err;
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .call = {
@@ -5986,7 +6067,7 @@ ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* han
             err = ci_lower_addr(ci, ctx, lhs, 0, &a);
             if(err) return err;
             CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .store_imm = {
@@ -6063,7 +6144,7 @@ ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* han
     err = ci_lower_addr(ci, ctx, rhs, 0, &src); // access
     if(err) return err;
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .memcopy = {
@@ -6078,7 +6159,7 @@ ci_lower_assign_direct(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, _Bool* han
         }
     };
     if(rsz < size){
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .zero = {
@@ -6132,7 +6213,7 @@ ci_lower_atomic_load_lv(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
     err = ci_lower_atomic_slot(ctx, size, &slot);
     if(err) return err;
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .atomic_load = {
@@ -6171,7 +6252,7 @@ ci_lower_atomic_operand(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* ve, Ci
     err = ci_alloc_slot(ctx, sz, sz, &conv);
     if(err) return err;
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .convert = {
@@ -6224,7 +6305,7 @@ ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, u
         uint32_t old;
         err = ci_alloc_slot(ctx, size, size, &old);
         if(err) return err;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .atomic_rmw = {
@@ -6240,7 +6321,7 @@ ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, u
                 .loc = e->loc,
             }
         };
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .alu = {
@@ -6260,7 +6341,7 @@ ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, u
         if(err) return err;
         err = ci_alloc_slot(ctx, 1, 1, &ok);
         if(err) return err;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .atomic_load = {
@@ -6274,8 +6355,8 @@ ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, u
                 .loc = e->loc,
             }
         };
-        uint32_t loop = (uint32_t)ctx->out->count;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        uint32_t loop = (uint32_t)ci_code_count(ctx->out);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         if(is_float){
             *op = (CiOp){
@@ -6301,7 +6382,7 @@ ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, u
                 }
             };
         }
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .atomic_cas = {
@@ -6319,14 +6400,14 @@ ci_lower_atomic_compound_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, u
                 .loc = e->loc,
             }
         };
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .jump_false = {
                 .kind = ci_jz_kind(1),
                 .slot = ok,
                 .slot_size = 1,
-                .jump = loop,
+                .jump = ci_jump_offset((size_t)(op - ci_code_ops(ctx->out)), loop),
                 .loc = e->loc,
             }
         };
@@ -6351,7 +6432,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
     CcMemoryOrder mo = e->atomic.memorder;
     CiOp* op;
     if(aop == CC_ATOMIC_THREAD_FENCE || aop == CC_ATOMIC_SIGNAL_FENCE){
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .fence = {
@@ -6398,7 +6479,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                 err = ci_alloc_slot(ctx, sz, sz, &slot);
                 if(err) return err;
             }
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .atomic_load = {
@@ -6421,7 +6502,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             uint32_t tmp;
             err = ci_alloc_slot(ctx, sz, sz, &tmp);
             if(err) return err;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .atomic_load = {
@@ -6434,7 +6515,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                     .loc = e->loc,
                 }
             };
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .store = {
@@ -6457,7 +6538,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                 uint32_t tmp;
                 err = ci_alloc_slot(ctx, sz, sz, &tmp);
                 if(err) return err;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .load = {
@@ -6475,7 +6556,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                 err = ci_lower_atomic_operand(ci, ctx, e->values[0], &v, sz, e->loc);
                 if(err) return err;
             }
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .atomic_store = {
@@ -6501,7 +6582,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                 err = ci_alloc_slot(ctx, sz, sz, &slot);
                 if(err) return err;
             }
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .atomic_rmw = {
@@ -6534,7 +6615,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             if(err) return err;
             err = ci_alloc_slot(ctx, sz, sz, &tmpold);
             if(err) return err;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .load = {
@@ -6545,7 +6626,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                     .loc = e->loc,
                 }
             };
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .atomic_rmw = {
@@ -6560,7 +6641,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                     .loc = e->loc,
                 }
             };
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .store = {
@@ -6593,7 +6674,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                 uint32_t tmp;
                 err = ci_alloc_slot(ctx, sz, sz, &tmp);
                 if(err) return err;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .load = {
@@ -6612,14 +6693,14 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                 if(err) return err;
             }
             // Read the expected object only after all argument expressions.
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){.load = {.kind = ci_load_kind(ctx->frame_alignment, sz, 0, eslot), .slot = eslot,
                 .slot_size = sz, .src = ep.slot, .loc = e->loc}};
             uint32_t ok;
             err = ci_alloc_slot(ctx, 1, 1, &ok);
             if(err) return err;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .atomic_cas = {
@@ -6638,12 +6719,12 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             };
             // Only failure writes expected. It may alias the atomic object,
             // which already contains desired after a successful exchange.
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
-            uint32_t skip_writeback = (uint32_t)ctx->out->count - 1;
+            uint32_t skip_writeback = (uint32_t)ci_code_count(ctx->out) - 1;
             *op = (CiOp){.jump_true = {.kind = ci_jnz_kind(1),
                 .slot = ok, .slot_size = 1, .loc = e->loc}};
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .store = {
@@ -6654,7 +6735,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                     .loc = e->loc,
                 }
             };
-            ctx->out->data[skip_writeback].jump_true.jump = (uint32_t)ctx->out->count;
+            ci_code_ops(ctx->out)[skip_writeback].jump_true.jump = ci_jump_offset(skip_writeback, ci_code_count(ctx->out));
             if(out){
                 err = ci_emit_copy(ctx, dest, ok, 1, e->loc);
                 if(err) return err;
@@ -6699,7 +6780,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                 is_sub? CI_ARMW_SUB :
                 aop == CC_ATOMIC_FETCH_AND? CI_ARMW_AND :
                 aop == CC_ATOMIC_FETCH_OR? CI_ARMW_OR : CI_ARMW_XOR;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .atomic_rmw = {
@@ -6716,7 +6797,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                 }
             };
             if(out && want_new){
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .alu = {
@@ -6739,7 +6820,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             if(err) return err;
             err = ci_alloc_slot(ctx, sz, sz, &old);
             if(err) return err;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .constant = {
@@ -6751,7 +6832,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                     .loc = e->loc,
                 }
             };
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .atomic_rmw = {
@@ -6768,7 +6849,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                 }
             };
             if(out){
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .alu = {
@@ -6803,7 +6884,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             if(err) return err;
             err = ci_emit_copy(ctx, eslot, c.slot, sz, e->loc);
             if(err) return err;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .atomic_cas = {
@@ -6846,7 +6927,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             uint32_t eslot;
             err = ci_alloc_slot(ctx, 16, 16, &eslot);
             if(err) return err;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .load = {
@@ -6860,7 +6941,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
             uint32_t ok;
             err = ci_alloc_slot(ctx, 1, 1, &ok);
             if(err) return err;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .atomic_cas = {
@@ -6876,7 +6957,7 @@ ci_lower_atomic_builtin(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t 
                     .loc = e->loc,
                 }
             };
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .store = {
@@ -6914,7 +6995,7 @@ ci_emit_const(CiInterpreter* ci, CiLowerCtx* ctx, uint64_t v, uint32_t size, Src
     err = ci_alloc_slot(ctx, size, size, &s);
     if(err) return err;
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .constant = {
@@ -6935,7 +7016,7 @@ int
 ci_emit_bound(CiLowerCtx* ctx, uint32_t idx, uint32_t bound, uint32_t size, _Bool idx_signed, SrcLoc loc){
     int err;
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .bounds = {
@@ -6958,7 +7039,7 @@ ci_emit_copy_access(CiLowerCtx* ctx, uint32_t dst, uint32_t src, uint32_t size, 
     if(!observable && (dst == src || !size)) return 0;
     int err;
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .copy = {
@@ -6985,7 +7066,7 @@ int
 ci_emit_alu(CiLowerCtx* ctx, CcExprKind aop, uint32_t dst, uint32_t a, uint32_t b, uint32_t size, SrcLoc loc){
     int err;
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .alu = {
@@ -7336,7 +7417,7 @@ ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowe
         err = ci_alloc_slot(ctx, 2 * sizeof(void*), _Alignof(void*), &pointers);
         if(err) return err;
         CiOp* op;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){.va_arg_ = {
             .kind = kind,
@@ -7355,7 +7436,7 @@ ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowe
                 NcAbiPiece piece = type.pieces[i];
                 _Bool is_fp = piece.bank == NC_ABI_FP;
                 uint32_t offset = is_fp? fp++ * 16 : gp++ * 8;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){.load = {
                     .kind = ci_load_kind(ctx->frame_alignment, piece.size, is_fp? 4 : 3, dest + piece.value_offset),
@@ -7368,15 +7449,15 @@ ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowe
             }
         }
         if(registers){
-            err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.jump = {
+            err = ci_code_push(ctx->out, ctx->a, (CiOp){.jump = {
                 .kind = CI_OP_JUMP,
-                .jump = (uint32_t)ctx->out->count + 2,
+                .jump = 2,
                 .loc = e->loc,
             }});
             if(err) return err;
         }
         uint32_t source_alignment = indirect? type.align_log2 : (type.align_log2 < 3? 3 : type.align_log2);
-        err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.load = {
+        err = ci_code_push(ctx->out, ctx->a, (CiOp){.load = {
             .kind = ci_load_kind(ctx->frame_alignment, type.size, source_alignment, dest),
             .src = pointers,
             .slot = dest,
@@ -7419,7 +7500,7 @@ ci_lower_va(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest, CiLowe
         err = ci_pointer_alignment(ci, ctx, e->values[0], &src_alignment);
         if(err) return err;
         CiOp* op;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .memcopy = {
@@ -7524,7 +7605,7 @@ ci_lower_vla_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr*_
         if(err) return err;
         err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &slot);
         if(err) return err;
-        err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.alloca={
+        err = ci_code_push(ctx->out, ctx->a, (CiOp){.alloca={
             .kind=CI_OP_STACK_ALLOC,
             .slot=slot,
             .src=size.slot,
@@ -7535,7 +7616,7 @@ ci_lower_vla_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr*_
         err = cc_type_alignment(&ci->parser, e->type, e->loc, &alignment_log2);
         if(err) return err;
         *out = (CiLowerAddr){.slot=slot, .align_log2=alignment_log2};
-        err = ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.memcopy={
+        err = ci_code_push(ctx->out, ctx->a, (CiOp){.memcopy={
             .kind=ci_memcopy_kind(size.slot, out->align_log2, src.align_log2, 1),
             .slot=slot,
             .src=src.slot,
@@ -7550,7 +7631,7 @@ ci_lower_vla_assign(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr*_
         if(err) return err;
         src = *out;
     }
-    return ma_push(CiOp)(ctx->out, ctx->a, (CiOp){.memcopy={
+    return ci_code_push(ctx->out, ctx->a, (CiOp){.memcopy={
         .kind=ci_memcopy_kind(size.slot, dst.align_log2, src.align_log2, 1),
         .slot=dst.slot,
         .offset=dst.disp,
@@ -7669,7 +7750,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
                 if(err) return err;
                 err = ci_lower_expr_discard(ci, ctx, e->values[0]);
                 if(err) return err;
-                ci_patch_branches(ctx, chain, (uint32_t)ctx->out->count);
+                ci_patch_branches(ctx, chain, (uint32_t)ci_code_count(ctx->out));
                 return 0;
             }
             err = ci_lower_expr_discard(ci, ctx, e->lhs);
@@ -7751,7 +7832,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             ctx->temp = temp;
             err = ci_lower_expr_discard(ci, ctx, e->values[0]);
             if(err) return err;
-            ci_patch_branches(ctx, chain, (uint32_t)ctx->out->count);
+            ci_patch_branches(ctx, chain, (uint32_t)ci_code_count(ctx->out));
             return 0;
         }
         case CC_EXPR_ASSIGN:{
@@ -7796,7 +7877,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             ctx->temp = temp;
             err = ci_lower_expr_discard(ci, ctx, e->values[0]);
             if(err) return err;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .jump = {
@@ -7804,11 +7885,11 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
                     .loc = e->loc,
                 }
             };
-            ci_patch_branches(ctx, chain, (uint32_t)ctx->out->count);
-            ptrdiff_t jump = (char*)&op->jump.jump - (char*)ctx->out->data;
+            ci_patch_branches(ctx, chain, (uint32_t)ci_code_count(ctx->out));
+            size_t jump = (size_t)(op - ci_code_ops(ctx->out));
             err = ci_lower_expr_discard(ci, ctx, e->values[1]);
             if(err) return err;
-            *(uint32_t*)((char*)ctx->out->data+jump) = (uint32_t)ctx->out->count;
+            ci_code_ops(ctx->out)[jump].jump.jump = ci_jump_offset(jump, ci_code_count(ctx->out));
             return 0;
         }
         case CC_EXPR_CALL:
@@ -7837,7 +7918,7 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
             if(e->builtin.op == CC_BUILTIN_SYMBOLICATE)
                 return ci_lower_symbolicate(ci, ctx, e);
             CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .builtin = {
@@ -7913,7 +7994,7 @@ ci_addr_to_value(CiLowerCtx* ctx, CiLowerAddr a, uint32_t dest, uint32_t size, u
         return 0;
     }
     if(size == 4 || size == 8){
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){.alu_imm = {
             .kind = ci_flat_integer_kind(size == 4? CI_OP_ADD_IMM32 : CI_OP_ADD_IMM64, CC_EXPR_ADD, 1),
@@ -7928,7 +8009,7 @@ ci_addr_to_value(CiLowerCtx* ctx, CiLowerAddr a, uint32_t dest, uint32_t size, u
     uint32_t cslot;
     err = ci_alloc_slot(ctx, 8, 8, &cslot);
     if(err) return err;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .constant = {
@@ -7940,7 +8021,7 @@ ci_addr_to_value(CiLowerCtx* ctx, CiLowerAddr a, uint32_t dest, uint32_t size, u
             .loc = loc,
         }
     };
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .alu = {
@@ -8107,6 +8188,21 @@ ci_lower_bitfield_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAd
 
 static
 int
+ci_lower_bitfield_source(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, CiLowerAddr* out, _Bool* from_slot){
+    uint32_t base = 0;
+    *from_slot = lv->kind == CC_EXPR_DOT && !lv->type.is_volatile && ci_frame_lvalue(ci, ctx, lv->values[0], &base);
+    if(!*from_slot) return ci_lower_bitfield_addr(ci, ctx, lv, out);
+    uint64_t offset;
+    int err = cc_expr_field_offset(ci_target(ci), lv, &offset);
+    if(err) return err;
+    out->slot = base + (uint32_t)offset;
+    out->disp = 0;
+    out->align_log2 = ci_slot_alignment(ctx->frame_alignment, out->slot);
+    return 0;
+}
+
+static
+int
 ci_lower_whole_byte_bitfield(CiLowerCtx* ctx, CiOp* op){
     _Bool load = ci_op_family(op->kind) == CI_F_LOAD_BITFIELD || ci_op_family(op->kind) == CI_F_LOAD_BITFIELD_BYTES;
     CiOp field = *op;
@@ -8133,7 +8229,7 @@ ci_lower_whole_byte_bitfield(CiLowerCtx* ctx, CiOp* op){
             .loc = field.load_bf.loc,
         }};
         if(bytes < size){
-            int err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            int err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){.convert = {
                 .kind = ci_integer_conversion_kind(ctx->frame_alignment, bytes, size, !field.load_bf.is_signed, field.load_bf.slot, field.load_bf.slot),
@@ -8163,10 +8259,10 @@ ci_lower_whole_byte_bitfield(CiLowerCtx* ctx, CiOp* op){
 
 static
 int
-ci_emit_load_bitfield(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_t dest, uint32_t size){
+ci_emit_load_bitfield(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_t dest, uint32_t size, _Bool from_slot){
     (void)ci;
     CiOp* op;
-    int err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    int err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .load_bf = {
@@ -8182,6 +8278,40 @@ ci_emit_load_bitfield(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* lv, CiLo
             .loc = lv->loc,
         }
     };
+    if(from_slot){
+        switch(op->kind){
+            case CI_OP_LDBF_U8: op->kind = CI_OP_LDBFS_U8; break;
+            case CI_OP_LDBF_S8: op->kind = CI_OP_LDBFS_S8; break;
+            case CI_OP_LDBF_U16: op->kind = CI_OP_LDBFS_U16; break;
+            case CI_OP_LDBF_U16_A: op->kind = CI_OP_LDBFS_U16_A; break;
+            case CI_OP_LDBF_S16: op->kind = CI_OP_LDBFS_S16; break;
+            case CI_OP_LDBF_S16_A: op->kind = CI_OP_LDBFS_S16_A; break;
+            case CI_OP_LDBF_U32: op->kind = CI_OP_LDBFS_U32; break;
+            case CI_OP_LDBF_U32_A: op->kind = CI_OP_LDBFS_U32_A; break;
+            case CI_OP_LDBF_S32: op->kind = CI_OP_LDBFS_S32; break;
+            case CI_OP_LDBF_S32_A: op->kind = CI_OP_LDBFS_S32_A; break;
+            case CI_OP_LDBF_U64: op->kind = CI_OP_LDBFS_U64; break;
+            case CI_OP_LDBF_U64_A: op->kind = CI_OP_LDBFS_U64_A; break;
+            case CI_OP_LDBF_S64: op->kind = CI_OP_LDBFS_S64; break;
+            case CI_OP_LDBF_S64_A: op->kind = CI_OP_LDBFS_S64_A; break;
+            case CI_OP_LDBF_U128: op->kind = CI_OP_LDBFS_U128; break;
+            case CI_OP_LDBF_U128_A: op->kind = CI_OP_LDBFS_U128_A; break;
+            case CI_OP_LDBF_S128: op->kind = CI_OP_LDBFS_S128; break;
+            case CI_OP_LDBF_S128_A: op->kind = CI_OP_LDBFS_S128_A; break;
+            case CI_OP_LDBFB_U8: op->kind = CI_OP_LDBFBS_U8; break;
+            case CI_OP_LDBFB_S8: op->kind = CI_OP_LDBFBS_S8; break;
+            case CI_OP_LDBFB_U16: op->kind = CI_OP_LDBFBS_U16; break;
+            case CI_OP_LDBFB_S16: op->kind = CI_OP_LDBFBS_S16; break;
+            case CI_OP_LDBFB_U32: op->kind = CI_OP_LDBFBS_U32; break;
+            case CI_OP_LDBFB_S32: op->kind = CI_OP_LDBFBS_S32; break;
+            case CI_OP_LDBFB_U64: op->kind = CI_OP_LDBFBS_U64; break;
+            case CI_OP_LDBFB_S64: op->kind = CI_OP_LDBFBS_S64; break;
+            case CI_OP_LDBFB_U128: op->kind = CI_OP_LDBFBS_U128; break;
+            case CI_OP_LDBFB_S128: op->kind = CI_OP_LDBFBS_S128; break;
+            default: ci_unsafe_unreachable();
+        }
+        return 0;
+    }
     return ci_lower_whole_byte_bitfield(ctx, op);
 }
 
@@ -8189,7 +8319,7 @@ static
 int
 ci_emit_store_bitfield(CiLowerCtx* ctx, const CcExpr* lv, CiLowerAddr a, uint32_t src, uint32_t size){
     CiOp* op;
-    int err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    int err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .store_bf = {
@@ -8327,7 +8457,7 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
         err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &aslot);
         if(err) return err;
         CiOp* op;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         *op = (CiOp){
             .slot_addr = {
@@ -8351,7 +8481,7 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
             err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &aslot);
             if(err) return err;
             CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .constant = {
@@ -8382,7 +8512,7 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
                 err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &aslot);
                 if(err) return err;
                 CiOp* op;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .slot_addr = {
@@ -8403,7 +8533,7 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
             err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &aslot);
             if(err) return err;
             CiOp* op;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .var_addr = {
@@ -8542,7 +8672,7 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
                 if(!skip){
                     err = ci_alloc_slot(ctx, ctx->size_size, ctx->size_size, &len_slot);
                     if(err) return err;
-                    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                    err = ci_code_alloc(ctx->out, ctx->a, &op);
                     if(err) return err;
                     *op = (CiOp){
                         .constant = {
@@ -8587,7 +8717,7 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
                 uint32_t addr;
                 err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &addr);
                 if(err) return err;
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){.alu_imm = {
                     .kind = ci_flat_integer_kind(ctx->ptr_size == 4? CI_OP_ADD_IMM32 : CI_OP_ADD_IMM64, CC_EXPR_ADD, 1),
@@ -8616,7 +8746,7 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
             if(do_check && iv.size != ctx->size_size)
                 return ci_ice(ci, idx->loc, "invalid index size %u", iv.size);
             if(do_check){
-                err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+                err = ci_code_alloc(ctx->out, ctx->a, &op);
                 if(err) return err;
                 *op = (CiOp){
                     .bounds = {
@@ -8638,7 +8768,7 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
             uint32_t addr;
             err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &addr);
             if(err) return err;
-            err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+            err = ci_code_alloc(ctx->out, ctx->a, &op);
             if(err) return err;
             *op = (CiOp){
                 .index = {
@@ -8681,7 +8811,7 @@ ci_lower_materialize_addr(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLower
     err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &aslot);
     if(err) return err;
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .slot_addr = {
@@ -8773,6 +8903,45 @@ ci_integer_cmp_base(uint32_t size){
 static
 int
 ci_lower_branch_leaf(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, _Bool when_true, SrcLoc loc, CiOp*_Nonnull*_Nonnull out){
+    if((cond->kind == CC_EXPR_DOT || cond->kind == CC_EXPR_ARROW) && cc_expr_field_bit_width(cond) && !cond->type.is_atomic){
+        uint32_t size;
+        int err = cc_sizeof_as_uint(&ci->parser, cond->type, cond->loc, &size);
+        if(err) return err;
+        CiLowerAddr a = {0};
+        _Bool from_slot;
+        err = ci_lower_bitfield_source(ci, ctx, cond, &a, &from_slot);
+        if(err) return err;
+        _Bool bytes = size == 16 || ci_expr_bitfield_needs_bytes(cond, size);
+        unsigned width = bytes ? 4 : size == 8 ? 3 : size == 4 ? 2 : size == 2 ? 1 : 0;
+        static const CiOpKind kinds[2][5][2] = {
+            {
+                {CI_OP_BF_JZ8, CI_OP_BF_JNZ8},
+                {CI_OP_BF_JZ16, CI_OP_BF_JNZ16},
+                {CI_OP_BF_JZ32, CI_OP_BF_JNZ32},
+                {CI_OP_BF_JZ64, CI_OP_BF_JNZ64},
+                {CI_OP_BF_JZ_BYTES, CI_OP_BF_JNZ_BYTES},
+            },
+            {
+                {CI_OP_BFS_JZ8, CI_OP_BFS_JNZ8},
+                {CI_OP_BFS_JZ16, CI_OP_BFS_JNZ16},
+                {CI_OP_BFS_JZ32, CI_OP_BFS_JNZ32},
+                {CI_OP_BFS_JZ64, CI_OP_BFS_JNZ64},
+                {CI_OP_BFS_JZ_BYTES, CI_OP_BFS_JNZ_BYTES},
+            },
+        };
+        CiOp* op;
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){.bitfield_jump = {
+            .kind = kinds[from_slot][width][when_true],
+            .bit_offset = cc_expr_field_bit_offset(cond),
+            .bit_width = cc_expr_field_bit_width(cond),
+            .src = a.slot, .offset = a.disp, .when_true = when_true,
+            .from_slot = from_slot, .is_volatile = cond->type.is_volatile, .loc = loc,
+        }};
+        *out = op;
+        return 0;
+    }
     CiLowerVal v;
     int err = ci_lower_cond(ci, ctx, cond, &v);
     if(err) return err;
@@ -8780,15 +8949,15 @@ ci_lower_branch_leaf(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, _Bool whe
         case CC_EXPR_EQ: case CC_EXPR_NE:
         case CC_EXPR_LT: case CC_EXPR_GT:
         case CC_EXPR_LE: case CC_EXPR_GE:{
-            CiOp* tail = &ma_tail(*ctx->out);
+            CiOp* tail = &ci_code_ops(ctx->out)[ci_code_count(ctx->out) - 1];
             _Bool extended = tail->kind == CI_OP_ZEXT8_32 && tail->convert.slot == v.slot
-                && tail->convert.src == v.slot && ctx->out->count >= 2;
+                && tail->convert.src == v.slot && ci_code_count(ctx->out) >= 2;
             if(extended) tail--;
             if(((tail->kind >= CI_OP_EQ32 && tail->kind <= CI_OP_UGE32)
                 || (tail->kind >= CI_OP_EQ64 && tail->kind <= CI_OP_UGE64))
                 && tail->cmp.slot == v.slot){
                 CiOp cmp = *tail;
-                if(extended) ctx->out->count--;
+                if(extended) ci_code_truncate(ctx->out, ci_code_count(ctx->out) - 1);
                 if(!when_true){
                     CiOpKind base = cmp.kind <= CI_OP_UGE32? CI_OP_EQ32 : CI_OP_EQ64;
                     static const uint8_t inverse[] = {
@@ -8818,7 +8987,7 @@ ci_lower_branch_leaf(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, _Bool whe
         }
     }
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .jump_false = {
@@ -8836,9 +9005,10 @@ static
 void
 ci_patch_branches(CiLowerCtx* ctx, uint32_t chain, uint32_t target){
     while(chain){
-        CiOp* op = &ctx->out->data[chain - 1];
-        uint32_t next = op->jump_false.jump;
-        op->jump_false.jump = target;
+        CiOp* op = &ci_code_ops(ctx->out)[chain - 1];
+        uint32_t next = op->jump.patch_next;
+        op->jump_false.jump = ci_jump_offset(chain - 1, target);
+        op->jump.patch_next = 0;
         chain = next;
     }
 }
@@ -8877,7 +9047,8 @@ ci_integer_range(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiUint128* min, 
         *max = ci_uint128_shr(ones, 128-width);
     }
     else {
-        *max = width == 1? ci_uint128_from_uint64(0) : ci_uint128_shr(ones, 129-width);
+        if(width == 1) *max = ci_uint128_from_uint64(0);
+        else *max = ci_uint128_shr(ones, 129-width);
         *min = ci_uint128_xor(*max, ones);
     }
     return 0;
@@ -8960,10 +9131,10 @@ ci_lower_branch(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, _Bool when_tru
     if(folded == 0){
         if(truth != when_true) return 0;
         CiOp* op;
-        err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
-        *op = (CiOp){.jump = {.kind = CI_OP_JUMP, .jump = *chain, .loc = loc}};
-        *chain = (uint32_t)(op - ctx->out->data) + 1;
+        *op = (CiOp){.jump = {.kind = CI_OP_JUMP, .patch_next = *chain, .loc = loc}};
+        *chain = (uint32_t)(op - ci_code_ops(ctx->out)) + 1;
         return 0;
     }
     if(cond->kind == CC_EXPR_LOGNOT)
@@ -8985,15 +9156,15 @@ ci_lower_branch(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, _Bool when_tru
         if(err) return err;
         err = ci_lower_branch(ci, ctx, cond->values[0], when_true, loc, chain);
         if(err) return err;
-        ci_patch_branches(ctx, skip, (uint32_t)ctx->out->count);
+        ci_patch_branches(ctx, skip, (uint32_t)ci_code_count(ctx->out));
         return 0;
     }
     uint32_t temp = ctx->temp;
     CiOp* op;
     err = ci_lower_branch_leaf(ci, ctx, cond, when_true, loc, &op);
     if(err) return err;
-    op->jump_false.jump = *chain;
-    *chain = (uint32_t)(op - ctx->out->data) + 1;
+    op->jump.patch_next = *chain;
+    *chain = (uint32_t)(op - ci_code_ops(ctx->out)) + 1;
     ctx->temp = temp;
     return 0;
 }
@@ -9023,8 +9194,9 @@ ci_lower_cond(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* cond, CiLowerVal* out)
 static
 int
 ci_lower_istrue(CiLowerCtx* ctx, const CiLowerVal* v, CcQualType src_type, uint32_t dest, uint32_t dest_size, _Bool negate, SrcLoc loc){
-    if(v->canonical && !negate && v->size == dest_size){
-        return ci_emit_copy(ctx, dest, v->slot, dest_size, loc);
+    if(v->canonical && !negate){
+        if(v->size == dest_size) return ci_emit_copy(ctx, dest, v->slot, dest_size, loc);
+        return ci_emit_integer_conversion(ctx, dest, dest_size, v->slot, v->size, 1, loc);
     }
     uint32_t result = dest;
     int err;
@@ -9033,7 +9205,7 @@ ci_lower_istrue(CiLowerCtx* ctx, const CiLowerVal* v, CcQualType src_type, uint3
         if(err) return err;
     }
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) return err;
     *op = (CiOp){
         .istrue = {
@@ -9079,11 +9251,11 @@ ci_backpatch_break_continue(CiLowerCtx* ctx, size_t start, uint32_t break_target
         if((t->kind == CI_BP_BREAK || t->kind == CI_BP_CONTINUE) && --t->levels)
             continue;
         if(t->kind == CI_BP_BREAK){
-            *(uint32_t*)((char*)ctx->out->data+t->byteoffset) = break_target;
+            ci_code_ops(ctx->out)[t->instruction].jump.jump = ci_jump_offset(t->instruction, break_target);
             t->kind = CI_BP_NONE;
         }
         else if(t->kind == CI_BP_CONTINUE && continue_target != UINT32_MAX){
-            *(uint32_t*)((char*)ctx->out->data+t->byteoffset) = continue_target;
+            ci_code_ops(ctx->out)[t->instruction].jump.jump = ci_jump_offset(t->instruction, continue_target);
             t->kind = CI_BP_NONE;
         }
     }
@@ -9118,7 +9290,7 @@ ci_lower_resolve_gotos(CiInterpreter* ci, CiLowerCtx* ctx){
                 void* v = AM_get(ctx->labels, t->label);
                 if(!v)
                     return ci_ice(ci, t->loc, "Use of undeclared label '%.*s'", t->label->length, t->label->data);
-                *(uint32_t*)((char*)ctx->out->data+t->byteoffset) = (uint32_t)((uintptr_t)v - 1);
+                ci_code_ops(ctx->out)[t->instruction].jump.jump = ci_jump_offset(t->instruction, (uintptr_t)v - 1);
                 t->kind = CI_BP_NONE;
                 continue;
             }
@@ -9134,9 +9306,59 @@ ci_lower_resolve_gotos(CiInterpreter* ci, CiLowerCtx* ctx){
 
 static
 int
+ci_finalize_code(ByteBuilder* code, Allocator al){
+    return ci_code_push(code, al, ((CiOp){.kind = CI_OP_RETURN}));
+}
+
+static
+int
+ci_code_finish(ByteBuilder* builder, Atom _Nullable name, size_t frame_size, size_t alignment, CiCode* _Nullable* _Nonnull out){
+    bb_shrink_to_size(builder);
+    if(builder->errored) return CI_OOM_ERROR;
+    CiCode* code = builder->data;
+    code->name = name;
+    code->frame_size = frame_size;
+    code->alignment = alignment > 16 ? alignment : 16;
+    code->op_count = ci_code_count(builder);
+    *out = bb_detach(builder).buff;
+    return 0;
+}
+
+static
+int
+ci_lower_variadic_save(CiLowerCtx* ctx, const NcCallPlan* plan, uint32_t slot, SrcLoc loc){
+    CiAbiRegister reg = ci_abi_resolve_register(plan->target, (CiAbiRegister){.bank = CI_ABI_STACK_BASE});
+    CiAbiAddressSpec dst = {.mode = CI_ABI_SLOT, .offset = slot + reg.capture_offset};
+    CiAbiAddressSpec src = {.mode = CI_ABI_REG, .reg = reg};
+    int err = ci_abi_emit(ctx->frame_alignment, ctx->out, ctx->a, loc, plan->target, CI_ABI_COPY, dst, src, ctx->ptr_size);
+    if(err) return err;
+    unsigned gp_end = 0, fp_end = 0;
+    switch(plan->target){
+        case CC_TARGET_AARCH64_LINUX: gp_end = 8; fp_end = 8; break;
+        case CC_TARGET_X86_64_LINUX: case CC_TARGET_X86_64_MACOS: gp_end = 6; fp_end = 8; break;
+        case CC_TARGET_X86_64_WINDOWS_MSVC: case CC_TARGET_X86_64_WINDOWS_MINGW: gp_end = 4; break;
+        default: break;
+    }
+    for(unsigned bank = 0; bank < 2; bank++){
+        unsigned first = bank ? plan->named_fp : plan->named_gp;
+        unsigned end = bank ? fp_end : gp_end;
+        for(unsigned i = first; i < end; i++){
+            reg = ci_abi_resolve_register(plan->target, (CiAbiRegister){.bank = bank ? CI_ABI_FP : CI_ABI_GP, .index = (uint8_t)i});
+            dst.offset = slot + reg.capture_offset;
+            src.reg = reg;
+            err = ci_abi_emit(ctx->frame_alignment, ctx->out, ctx->a, loc, plan->target, CI_ABI_COPY, dst, src, bank ? 16 : 8);
+            if(err) return err;
+        }
+    }
+    return 0;
+}
+
+static
+int
 ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
     DRP_PROFILE_BEGIN(profile, "lower.function");
     int err;
+    ByteBuilder builder = {.allocator = ci_allocator(ci), .alignment = _Alignof(CiCode)};
     if(f->interp_ops) return 0;
     if(!f->parsed)
         return ci_ice(ci, f->loc, "lowering function '%s' before it was parsed", f->name->data);
@@ -9150,7 +9372,7 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
     CiFoldCache fold_cache = {0};
     CiLowerCtx ctx = {
         .a = al,
-        .out = &ops->code,
+        .out = &builder,
         .labels = &labels,
         .frame_size = &f->frame_size,
         .size_size = t->sizeof_[t->size_type],
@@ -9163,12 +9385,27 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
     err = nc_plan_create(al, t, f->type, &ops->abi);
     if(err) goto finally;
     ctx.function_abi = ops->abi;
+    uint32_t incoming_slot = CI_NO_SLOT;
+    if(ops->abi->is_variadic){
+        err = ci_alloc_slot(&ctx, (uint32_t)nc_capture_size(t->target), 16, &incoming_slot);
+        if(err) goto finally;
+    }
+    err = ci_code_push(&builder, al, (CiOp){.kind = CI_OP_FRAME_SAVE, .loc = f->loc});
+    if(err) goto finally;
+    err = ci_code_push(&builder, al, (CiOp){.frame_enter = {
+        .kind = CI_OP_FRAME_ENTER, .incoming_slot = incoming_slot, .loc = f->loc,
+    }});
+    if(err) goto finally;
+    if(incoming_slot != CI_NO_SLOT){
+        err = ci_lower_variadic_save(&ctx, ops->abi, incoming_slot, f->loc);
+        if(err) goto finally;
+    }
     if(ops->abi->result.mode == NC_ABI_INDIRECT){
         err = ci_alloc_slot(&ctx, ctx.ptr_size, ctx.ptr_size, &ctx.result_pointer_slot);
         if(err) goto finally;
         CiOp save = {.abi_move = {
-            .kind = ci_abi_move_kind(1, 0, CI_ABI_COPY, ctx.ptr_size, ctx.ptr_size, min_u32(ci_slot_alignment(ctx.frame_alignment, ctx.result_pointer_slot), cc_offset_alignment(4, (ci_abi_resolve_register(t->target, (CiAbiRegister){.bank = CI_ABI_INDIRECT_RESULT})).capture_offset))),
-            .incoming = 1,
+            .kind = ci_abi_move_kind(ci_abi_resolve_register(t->target, (CiAbiRegister){.bank = CI_ABI_INDIRECT_RESULT}), 0, 0, CI_ABI_COPY, ctx.ptr_size, ctx.ptr_size, min_u32(ci_slot_alignment(ctx.frame_alignment, ctx.result_pointer_slot), cc_offset_alignment(4, (ci_abi_resolve_register(t->target, (CiAbiRegister){.bank = CI_ABI_INDIRECT_RESULT})).capture_offset))),
+            .incoming = 0,
             .operation = CI_ABI_COPY,
             .size = ctx.ptr_size,
             .source_size = ctx.ptr_size,
@@ -9176,9 +9413,10 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
             .reg = ci_abi_resolve_register(t->target, (CiAbiRegister){.bank = CI_ABI_INDIRECT_RESULT}),
             .loc = f->loc,
         }};
-        err = ma_push(CiOp)(&ops->code, al, save);
+        err = ci_code_push(&builder, al, save);
         if(err) goto finally;
     }
+    size_t moves_start = ci_code_count(&builder);
     uint32_t native_index = 0;
     for(size_t i = 0; i < f->params.count; i++){
         CcVariable* var = f->params.data[i].decl;
@@ -9196,9 +9434,12 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
         f->params.data[i].offset = slot;
         f->params.data[i].sz = size;
         f->params.data[i].native_index = ops->abi->args[i].type.mode == NC_ABI_IGNORED? UINT32_MAX : native_index++;
-        err = ci_lower_abi_argument(ctx.frame_alignment, &ops->code, al, ops->abi, (uint32_t)i, slot, 1, f->loc);
+        err = ci_lower_abi_argument(ctx.frame_alignment, &builder, al, ops->abi, (uint32_t)i, slot, 1, f->loc);
         if(err) goto finally;
     }
+    ci_pair_abi_moves(&builder, moves_start);
+    err = ci_code_push(&builder, al, (CiOp){.kind = CI_OP_FRAME_READY, .loc = f->loc});
+    if(err) goto finally;
     DRP_PROFILE_BEGIN(body_profile, "lower.function_body");
     err = ci_lower_stmt(ci, &ctx, f->body_tree);
     DRP_PROFILE_END(body_profile);
@@ -9209,6 +9450,9 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
     err = ci_lower_native_signature(ci, al, f->type, ops->abi, &ops->native_type);
     if(err) goto finally;
     err = ci_lower_deps_merge(deps, &ctx.deps, al);
+    if(err) goto finally;
+    err = ci_code_push(&builder, al, (CiOp){.kind = CI_OP_FRAME_RESTORE, .loc = f->loc});
+    if(!err) err = ci_code_finish(&builder, f->name, f->frame_size, ctx.frame_alignment, &ops->code);
     DRP_PROFILE_END(finish_profile);
     finally:
     f->interp_lowering = 0;
@@ -9219,16 +9463,15 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
     if(labels.data)
         Allocator_free(al, labels.data, AM_alloc_size(labels.cap), 1, _Alignof(AtomMapItem));
     if(err){
-        for(size_t i = 0; i < ops->code.count; i++){
-            CiOp* o = &ops->code.data[i];
+        for(size_t i = 0; i < ci_code_count(&builder); i++){
+            CiOp* o = &ci_code_ops(&builder)[i];
             if(ci_op_family(o->kind) == CI_F_SWITCH && o->switch_.table)
                 Allocator_free_extra(al, o->switch_.table, o->switch_.table->count, sizeof *o->switch_.table->data, sizeof *o->switch_.table, _Alignof(CiSwitchTable));
         }
-        ma_cleanup(CiOp)(&ops->code, al);
+        bb_destroy(&builder);
         Allocator_free(al, ops, 1, sizeof *ops, _Alignof(CiFuncOps));
         return err;
     }
-    ops->frame_alignment = ctx.frame_alignment > 16? ctx.frame_alignment : 16;
     f->interp_ops = ops;
     return 0;
     DRP_PROFILE_END(profile);
@@ -9236,9 +9479,10 @@ ci_lower_func(CiInterpreter* ci, CcFunc* f, CiLowerDeps* deps){
 
 static
 int
-ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Marray(CiOp)* ops, AtomMap(uintptr_t)* labels, uint32_t* slot_size, uint32_t* frame_alignment, CiLowerDeps* deps){
+ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, ByteBuilder* ops, AtomMap(uintptr_t)* labels, uint32_t* slot_size, uint32_t* frame_alignment, CiLowerDeps* deps){
     int err = 0;
-    size_t old_count = ops->count;
+    _Bool had_return = ci_code_count(ops) != 0;
+    size_t old_count = ci_code_count(ops) - had_return;
     uint32_t old_size = *slot_size;
     AtomMap(uintptr_t) old_labels = *labels;
     Allocator al = ci_allocator(ci);
@@ -9248,6 +9492,8 @@ ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Ma
         old_labels.data = data;
         memcpy(old_labels.data, labels->data, AM_alloc_size(labels->cap));
     }
+    // Replace only the synthetic terminator, preserving explicit returns.
+    ci_code_truncate(ops, old_count);
     const CcTargetConfig* t = ci_target(ci);
     CiFoldCache fold_cache = {0};
     CiLowerCtx ctx = {
@@ -9268,18 +9514,24 @@ ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Ma
     }
     err = ci_lower_resolve_gotos(ci, &ctx);
     if(err) goto cleanup;
+    err = ci_finalize_code(ops, al);
+    if(err) goto cleanup;
     err = ci_lower_deps_merge(deps, &ctx.deps, ctx.a);
     cleanup:
     ci_fold_cache_cleanup(&fold_cache, al);
     ci_lower_deps_cleanup(&ctx.deps, ctx.a);
     ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, ctx.a);
     if(err){
-        for(size_t i = old_count; i < ops->count; i++){
-            CiOp* op = &ops->data[i];
+        for(size_t i = old_count; i < ci_code_count(ops); i++){
+            CiOp* op = &ci_code_ops(ops)[i];
             if(ci_op_family(op->kind) == CI_F_SWITCH && op->switch_.table)
                 Allocator_free_extra(al, op->switch_.table, op->switch_.table->count, sizeof *op->switch_.table->data, sizeof *op->switch_.table, _Alignof(CiSwitchTable));
         }
-        ops->count = old_count;
+        ci_code_truncate(ops, old_count);
+        if(had_return){
+            ci_code_ops(ops)[old_count] = (CiOp){.kind = CI_OP_RETURN};
+            ops->cursor += sizeof(CiOp);
+        }
         *slot_size = old_size;
         if(labels->cap)
             Allocator_free(al, labels->data, AM_alloc_size(labels->cap), 1, _Alignof(AtomMapItem));
@@ -9295,20 +9547,40 @@ ci_lower_nodes(CiInterpreter* ci, Parray(CcStmtNode)* nodes, size_t* lowered, Ma
 }
 
 static
+void
+ci_free_toplevel_frame(CiInterpreter* ci){
+    if(!ci->top_frame) return;
+    size_t prefix = ci_frame_prefix_size(ci->toplevel_alloc_alignment);
+    void* allocation = (char*)(ci->top_frame + 1) - prefix;
+    Allocator_free(ci_allocator(ci), allocation, prefix + ci->toplevel_slots_cap, 1, ci->toplevel_alloc_alignment);
+    ci->top_frame = NULL;
+    ci->toplevel_slots_cap = 0;
+    ci->toplevel_alloc_alignment = 0;
+}
+
+static
 int
-ci_resize_toplevel_slots(CiInterpreter* ci){
+ci_resize_toplevel_frame(CiInterpreter* ci){
     uint32_t alignment = 16;
     if(ci->root.frame_alignment > 16)
         alignment = ci->root.frame_alignment;
-    if(ci->root.slot_size > ci->toplevel_slots_cap || (ci->toplevel_slots && alignment > ci->toplevel_alloc_alignment)){
+    if(!ci->top_frame || ci->root.slot_size > ci->toplevel_slots_cap || alignment > ci->toplevel_alloc_alignment){
+        if(alignment < ci->toplevel_alloc_alignment)
+            alignment = ci->toplevel_alloc_alignment;
         uint32_t new_cap = ci->root.slot_size > ci->toplevel_slots_cap? ci->root.slot_size : ci->toplevel_slots_cap;
-        void* slots = Allocator_zalloc(ci_allocator(ci), new_cap, 1, alignment);
-        if(!slots) return CI_OOM_ERROR;
-        if(ci->toplevel_slots){
-            memcpy(slots, ci->toplevel_slots, ci->toplevel_slots_cap);
-            Allocator_free(ci_allocator(ci), ci->toplevel_slots, ci->toplevel_slots_cap, 1, ci->toplevel_alloc_alignment);
+        size_t prefix = ci_frame_prefix_size(alignment);
+        size_t allocation_size;
+        if(add_overflow(prefix, new_cap, &allocation_size)) return CI_OOM_ERROR;
+        void* allocation = Allocator_zalloc(ci_allocator(ci), allocation_size, 1, alignment);
+        if(!allocation) return CI_OOM_ERROR;
+        void* slots = (char*)allocation + prefix;
+        CiInterpFrame* frame = (CiInterpFrame*)slots - 1;
+        if(ci->top_frame){
+            *frame = *ci->top_frame;
+            memcpy(slots, (void*)(ci->top_frame + 1), ci->toplevel_slots_cap);
+            ci_free_toplevel_frame(ci);
         }
-        ci->toplevel_slots = slots;
+        ci->top_frame = frame;
         ci->toplevel_slots_cap = new_cap;
         ci->toplevel_alloc_alignment = alignment;
     }
@@ -9319,13 +9591,25 @@ static
 int
 ci_lower_toplevel(CiInterpreter* ci, CiLowerDeps* deps){
     DRP_PROFILE_BEGIN(profile, "lower.toplevel");
+    size_t old_count = ci_code_count(&ci->root.ops);
     int err = ci_lower_module(ci, &ci->root, deps);
+    CiCode* code = ci->root.ops.data;
+    if(code){
+        code->frame_size = ci->root.slot_size;
+        code->alignment = ci->root.frame_alignment;
+        code->op_count = ci_code_count(&ci->root.ops);
+    }
+    if(ci->top_frame){
+        ci->top_frame->code = code;
+        if(!err){
+            if(old_count && ci->top_frame->pc >= old_count)
+                ci->top_frame->pc = old_count - 1;
+        }
+    }
     if(err) return err;
-    err = ci_resize_toplevel_slots(ci);
+    err = ci_resize_toplevel_frame(ci);
     if(err) return err;
-    ci->top_frame.ops = ci->root.ops.data;
-    ci->top_frame.op_count = ci->root.ops.count;
-    ci->top_frame.slots = ci->toplevel_slots;
+    ci->top_frame->code = code;
     return 0;
     DRP_PROFILE_END(profile);
 }
@@ -9348,12 +9632,13 @@ ci_lower_module(CiInterpreter* ci, CiModule* module, CiLowerDeps* deps){
 static
 void
 ci_lowered_expr_cleanup(CiLoweredExpr* code, Allocator al){
-    for(size_t i = 0; i < code->ops.count; i++){
-        CiOp* op = &code->ops.data[i];
+    if(!code->code) return;
+    for(size_t i = 0; i < code->code->op_count; i++){
+        CiOp* op = &code->code->ops[i];
         if(ci_op_family(op->kind) == CI_F_SWITCH && op->switch_.table)
             Allocator_free_extra(al, op->switch_.table, op->switch_.table->count, sizeof *op->switch_.table->data, sizeof *op->switch_.table, _Alignof(CiSwitchTable));
     }
-    ma_cleanup(CiOp)(&code->ops, al);
+    Allocator_free(al, code->code, offsetof(CiCode, ops) + code->code->op_count * sizeof(CiOp), 1, _Alignof(CiCode));
     *code = (CiLoweredExpr){0};
 }
 
@@ -9361,14 +9646,16 @@ static
 int
 ci_lower_standalone_expr(CiInterpreter* ci, CcExpr* expr, CiLoweredExpr* code, CiLowerDeps* deps){
     Allocator al = ci_allocator(ci);
+    ByteBuilder builder = {.allocator = al, .alignment = _Alignof(CiCode)};
+    uint32_t frame_size = 0;
     AtomMap(uintptr_t) labels = {0};
     const CcTargetConfig* t = ci_target(ci);
     CiFoldCache fold_cache = {0};
     CiLowerCtx ctx = {
         .a = al,
-        .out = &code->ops,
+        .out = &builder,
         .labels = &labels,
-        .frame_size = &code->frame_size,
+        .frame_size = &frame_size,
         .size_size = t->sizeof_[t->size_type],
         .ptr_size = t->sizeof_[CCBT_nullptr_t],
         .char_is_unsigned = !t->char_is_signed,
@@ -9383,15 +9670,23 @@ ci_lower_standalone_expr(CiInterpreter* ci, CcExpr* expr, CiLoweredExpr* code, C
     if(err) goto cleanup;
     err = ci_lower_deps_merge(deps, &ctx.deps, al);
     if(err) goto cleanup;
-    code->frame_alignment = ctx.frame_alignment > 16? ctx.frame_alignment : 16;
     code->value_slot = value.slot;
     code->value_size = value.size;
+    err = ci_finalize_code(&builder, al);
+    if(!err) err = ci_code_finish(&builder, NULL, frame_size, ctx.frame_alignment, &code->code);
     cleanup:
     ci_fold_cache_cleanup(&fold_cache, al);
     ci_lower_deps_cleanup(&ctx.deps, al);
     ma_cleanup(CiBackpatchTarget)(&ctx.backpatches, al);
     if(labels.data) Allocator_free(al, labels.data, AM_alloc_size(labels.cap), 1, _Alignof(AtomMapItem));
-    if(err) ci_lowered_expr_cleanup(code, al);
+    if(err){
+        for(size_t i = 0; i < ci_code_count(&builder); i++){
+            CiOp* op = &ci_code_ops(&builder)[i];
+            if(ci_op_family(op->kind) == CI_F_SWITCH && op->switch_.table)
+                Allocator_free_extra(al, op->switch_.table, op->switch_.table->count, sizeof *op->switch_.table->data, sizeof *op->switch_.table, _Alignof(CiSwitchTable));
+        }
+    }
+    bb_destroy(&builder);
     return err;
 }
 
@@ -10615,7 +10910,7 @@ ci_try_lower_init_template(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowe
     err = ci_alloc_slot(ctx, sizeof(void*), sizeof(void*), &src);
     if(err) goto cleanup;
     CiOp* op;
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) goto cleanup;
     *op = (CiOp){
         .constant = {
@@ -10627,7 +10922,7 @@ ci_try_lower_init_template(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowe
         },
     };
     memcpy(op->constant.immediate, &template, sizeof template);
-    err = ma_alloc(CiOp)(ctx->out, ctx->a, &op);
+    err = ci_code_alloc(ctx->out, ctx->a, &op);
     if(err) goto cleanup;
     *op = (CiOp){
         .memcopy = {
@@ -11414,10 +11709,14 @@ ci_fold_expr_uncached(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue
                     CiUint128 min = ci_uint128_shl(ci_uint128_from_uint64(1), l.sz * 8 - 1);
                     if(!uns && ci_uint128_eq(b, ci_uint128_from_int64(-1))
                         && ci_uint128_eq(a, ci_uint128_sub(zero, min))) return FOLD_FAIL;
-                    if(e->kind == CC_EXPR_DIV)
-                        u = uns? ci_uint128_div(a, b) : ci_uint128_from_int128(ci_int128_div(sa, sb));
-                    else
-                        u = uns? ci_uint128_mod(a, b) : ci_uint128_from_int128(ci_int128_mod(sa, sb));
+                    if(uns){
+                        if(e->kind == CC_EXPR_DIV) u = ci_uint128_div(a, b);
+                        else u = ci_uint128_mod(a, b);
+                    }
+                    else {
+                        if(e->kind == CC_EXPR_DIV) u = ci_uint128_from_int128(ci_int128_div(sa, sb));
+                        else u = ci_uint128_from_int128(ci_int128_mod(sa, sb));
+                    }
                     break;
                 }
                 case CC_EXPR_BITAND: u = ci_uint128_and(a, b); break;
@@ -11426,8 +11725,8 @@ ci_fold_expr_uncached(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue
                 case CC_EXPR_LSHIFT: case CC_EXPR_RSHIFT:
                     if(ci_uint128_hi(b) || ci_uint128_lo(b) >= l.sz * 8) return FOLD_FAIL;
                     if(e->kind == CC_EXPR_LSHIFT) u = ci_uint128_shl(a, ci_uint128_lo(b));
-                    else u = uns? ci_uint128_shr(a, ci_uint128_lo(b))
-                        : ci_uint128_from_int128(ci_int128_shr(sa, ci_uint128_lo(b)));
+                    else if(uns) u = ci_uint128_shr(a, ci_uint128_lo(b));
+                    else u = ci_uint128_from_int128(ci_int128_shr(sa, ci_uint128_lo(b)));
                     break;
                 case CC_EXPR_EQ: u = ci_uint128_from_uint64(ci_uint128_eq(a, b)); break;
                 case CC_EXPR_NE: u = ci_uint128_from_uint64(ci_uint128_ne(a, b)); break;
@@ -11923,7 +12222,208 @@ ci_ftof_kind(uint32_t frame_alignment, uint32_t sf, _Bool sb, uint32_t df, _Bool
 
 static
 CiOpKind
-ci_abi_move_kind(_Bool incoming, _Bool write, CiAbiTransfer action, uint32_t size, uint32_t source_size, uint32_t alignment){
+ci_abi_move_kind(CiAbiRegister reg, _Bool incoming, _Bool write, CiAbiTransfer action, uint32_t size, uint32_t source_size, uint32_t alignment){
+    if(!incoming && action == CI_ABI_COPY && size == 8 && (reg.bank == CI_ABI_GP || reg.bank == CI_ABI_RESULT_GP) && reg.index < 8){
+        static const CiOpKind kinds[8][4] = {
+            {CI_OP_ABI_READ_GP0_64, CI_OP_ABI_READ_GP0_64_A, CI_OP_ABI_WRITE_GP0_64, CI_OP_ABI_WRITE_GP0_64_A},
+            {CI_OP_ABI_READ_GP1_64, CI_OP_ABI_READ_GP1_64_A, CI_OP_ABI_WRITE_GP1_64, CI_OP_ABI_WRITE_GP1_64_A},
+            {CI_OP_ABI_READ_GP2_64, CI_OP_ABI_READ_GP2_64_A, CI_OP_ABI_WRITE_GP2_64, CI_OP_ABI_WRITE_GP2_64_A},
+            {CI_OP_ABI_READ_GP3_64, CI_OP_ABI_READ_GP3_64_A, CI_OP_ABI_WRITE_GP3_64, CI_OP_ABI_WRITE_GP3_64_A},
+            {CI_OP_ABI_READ_GP4_64, CI_OP_ABI_READ_GP4_64_A, CI_OP_ABI_WRITE_GP4_64, CI_OP_ABI_WRITE_GP4_64_A},
+            {CI_OP_ABI_READ_GP5_64, CI_OP_ABI_READ_GP5_64_A, CI_OP_ABI_WRITE_GP5_64, CI_OP_ABI_WRITE_GP5_64_A},
+            {CI_OP_ABI_READ_GP6_64, CI_OP_ABI_READ_GP6_64_A, CI_OP_ABI_WRITE_GP6_64, CI_OP_ABI_WRITE_GP6_64_A},
+            {CI_OP_ABI_READ_GP7_64, CI_OP_ABI_READ_GP7_64_A, CI_OP_ABI_WRITE_GP7_64, CI_OP_ABI_WRITE_GP7_64_A}
+        };
+        return kinds[reg.index][2 * write + (alignment >= 3)];
+    }
+    if(!incoming && reg.index < 8){
+        if(reg.bank == CI_ABI_GP || reg.bank == CI_ABI_RESULT_GP){
+            if(!write && action == CI_ABI_COPY && size == 1){
+                static const CiOpKind kinds[8] = {
+                    CI_OP_ABI_READ_GP0_8,
+                    CI_OP_ABI_READ_GP1_8,
+                    CI_OP_ABI_READ_GP2_8,
+                    CI_OP_ABI_READ_GP3_8,
+                    CI_OP_ABI_READ_GP4_8,
+                    CI_OP_ABI_READ_GP5_8,
+                    CI_OP_ABI_READ_GP6_8,
+                    CI_OP_ABI_READ_GP7_8,
+                };
+                return kinds[reg.index];
+            }
+            if(write && action == CI_ABI_COPY && size == 1){
+                static const CiOpKind kinds[8] = {
+                    CI_OP_ABI_WRITE_GP0_8,
+                    CI_OP_ABI_WRITE_GP1_8,
+                    CI_OP_ABI_WRITE_GP2_8,
+                    CI_OP_ABI_WRITE_GP3_8,
+                    CI_OP_ABI_WRITE_GP4_8,
+                    CI_OP_ABI_WRITE_GP5_8,
+                    CI_OP_ABI_WRITE_GP6_8,
+                    CI_OP_ABI_WRITE_GP7_8,
+                };
+                return kinds[reg.index];
+            }
+            if(!write && action == CI_ABI_COPY && size == 4){
+                static const CiOpKind kinds[8][2] = {
+                    {CI_OP_ABI_READ_GP0_32, CI_OP_ABI_READ_GP0_32_A},
+                    {CI_OP_ABI_READ_GP1_32, CI_OP_ABI_READ_GP1_32_A},
+                    {CI_OP_ABI_READ_GP2_32, CI_OP_ABI_READ_GP2_32_A},
+                    {CI_OP_ABI_READ_GP3_32, CI_OP_ABI_READ_GP3_32_A},
+                    {CI_OP_ABI_READ_GP4_32, CI_OP_ABI_READ_GP4_32_A},
+                    {CI_OP_ABI_READ_GP5_32, CI_OP_ABI_READ_GP5_32_A},
+                    {CI_OP_ABI_READ_GP6_32, CI_OP_ABI_READ_GP6_32_A},
+                    {CI_OP_ABI_READ_GP7_32, CI_OP_ABI_READ_GP7_32_A},
+                };
+                return kinds[reg.index][alignment >= 2];
+            }
+            if(write && action == CI_ABI_COPY && size == 4){
+                static const CiOpKind kinds[8][2] = {
+                    {CI_OP_ABI_WRITE_GP0_32, CI_OP_ABI_WRITE_GP0_32_A},
+                    {CI_OP_ABI_WRITE_GP1_32, CI_OP_ABI_WRITE_GP1_32_A},
+                    {CI_OP_ABI_WRITE_GP2_32, CI_OP_ABI_WRITE_GP2_32_A},
+                    {CI_OP_ABI_WRITE_GP3_32, CI_OP_ABI_WRITE_GP3_32_A},
+                    {CI_OP_ABI_WRITE_GP4_32, CI_OP_ABI_WRITE_GP4_32_A},
+                    {CI_OP_ABI_WRITE_GP5_32, CI_OP_ABI_WRITE_GP5_32_A},
+                    {CI_OP_ABI_WRITE_GP6_32, CI_OP_ABI_WRITE_GP6_32_A},
+                    {CI_OP_ABI_WRITE_GP7_32, CI_OP_ABI_WRITE_GP7_32_A},
+                };
+                return kinds[reg.index][alignment >= 2];
+            }
+            if(write && action == CI_ABI_SIGN_EXTEND && source_size == 1){
+                static const CiOpKind kinds[8] = {
+                    CI_OP_ABI_SEXT_GP0_8,
+                    CI_OP_ABI_SEXT_GP1_8,
+                    CI_OP_ABI_SEXT_GP2_8,
+                    CI_OP_ABI_SEXT_GP3_8,
+                    CI_OP_ABI_SEXT_GP4_8,
+                    CI_OP_ABI_SEXT_GP5_8,
+                    CI_OP_ABI_SEXT_GP6_8,
+                    CI_OP_ABI_SEXT_GP7_8,
+                };
+                return kinds[reg.index];
+            }
+            if(write && action == CI_ABI_ZERO_EXTEND && source_size == 1){
+                static const CiOpKind kinds[8] = {
+                    CI_OP_ABI_ZEXT_GP0_8,
+                    CI_OP_ABI_ZEXT_GP1_8,
+                    CI_OP_ABI_ZEXT_GP2_8,
+                    CI_OP_ABI_ZEXT_GP3_8,
+                    CI_OP_ABI_ZEXT_GP4_8,
+                    CI_OP_ABI_ZEXT_GP5_8,
+                    CI_OP_ABI_ZEXT_GP6_8,
+                    CI_OP_ABI_ZEXT_GP7_8,
+                };
+                return kinds[reg.index];
+            }
+            if(write && action == CI_ABI_SIGN_EXTEND && source_size == 4){
+                static const CiOpKind kinds[8][2] = {
+                    {CI_OP_ABI_SEXT_GP0_32, CI_OP_ABI_SEXT_GP0_32_A},
+                    {CI_OP_ABI_SEXT_GP1_32, CI_OP_ABI_SEXT_GP1_32_A},
+                    {CI_OP_ABI_SEXT_GP2_32, CI_OP_ABI_SEXT_GP2_32_A},
+                    {CI_OP_ABI_SEXT_GP3_32, CI_OP_ABI_SEXT_GP3_32_A},
+                    {CI_OP_ABI_SEXT_GP4_32, CI_OP_ABI_SEXT_GP4_32_A},
+                    {CI_OP_ABI_SEXT_GP5_32, CI_OP_ABI_SEXT_GP5_32_A},
+                    {CI_OP_ABI_SEXT_GP6_32, CI_OP_ABI_SEXT_GP6_32_A},
+                    {CI_OP_ABI_SEXT_GP7_32, CI_OP_ABI_SEXT_GP7_32_A},
+                };
+                return kinds[reg.index][alignment >= 2];
+            }
+            if(write && action == CI_ABI_ZERO_EXTEND && source_size == 4){
+                static const CiOpKind kinds[8][2] = {
+                    {CI_OP_ABI_ZEXT_GP0_32, CI_OP_ABI_ZEXT_GP0_32_A},
+                    {CI_OP_ABI_ZEXT_GP1_32, CI_OP_ABI_ZEXT_GP1_32_A},
+                    {CI_OP_ABI_ZEXT_GP2_32, CI_OP_ABI_ZEXT_GP2_32_A},
+                    {CI_OP_ABI_ZEXT_GP3_32, CI_OP_ABI_ZEXT_GP3_32_A},
+                    {CI_OP_ABI_ZEXT_GP4_32, CI_OP_ABI_ZEXT_GP4_32_A},
+                    {CI_OP_ABI_ZEXT_GP5_32, CI_OP_ABI_ZEXT_GP5_32_A},
+                    {CI_OP_ABI_ZEXT_GP6_32, CI_OP_ABI_ZEXT_GP6_32_A},
+                    {CI_OP_ABI_ZEXT_GP7_32, CI_OP_ABI_ZEXT_GP7_32_A},
+                };
+                return kinds[reg.index][alignment >= 2];
+            }
+        }
+        if(reg.bank == CI_ABI_FP || reg.bank == CI_ABI_RESULT_FP){
+            if(!write && action == CI_ABI_COPY && size == 4){
+                static const CiOpKind kinds[8][2] = {
+                    {CI_OP_ABI_READ_FP0_32, CI_OP_ABI_READ_FP0_32_A},
+                    {CI_OP_ABI_READ_FP1_32, CI_OP_ABI_READ_FP1_32_A},
+                    {CI_OP_ABI_READ_FP2_32, CI_OP_ABI_READ_FP2_32_A},
+                    {CI_OP_ABI_READ_FP3_32, CI_OP_ABI_READ_FP3_32_A},
+                    {CI_OP_ABI_READ_FP4_32, CI_OP_ABI_READ_FP4_32_A},
+                    {CI_OP_ABI_READ_FP5_32, CI_OP_ABI_READ_FP5_32_A},
+                    {CI_OP_ABI_READ_FP6_32, CI_OP_ABI_READ_FP6_32_A},
+                    {CI_OP_ABI_READ_FP7_32, CI_OP_ABI_READ_FP7_32_A},
+                };
+                return kinds[reg.index][alignment >= 2];
+            }
+            if(write && action == CI_ABI_COPY && size == 4){
+                static const CiOpKind kinds[8][2] = {
+                    {CI_OP_ABI_WRITE_FP0_32, CI_OP_ABI_WRITE_FP0_32_A},
+                    {CI_OP_ABI_WRITE_FP1_32, CI_OP_ABI_WRITE_FP1_32_A},
+                    {CI_OP_ABI_WRITE_FP2_32, CI_OP_ABI_WRITE_FP2_32_A},
+                    {CI_OP_ABI_WRITE_FP3_32, CI_OP_ABI_WRITE_FP3_32_A},
+                    {CI_OP_ABI_WRITE_FP4_32, CI_OP_ABI_WRITE_FP4_32_A},
+                    {CI_OP_ABI_WRITE_FP5_32, CI_OP_ABI_WRITE_FP5_32_A},
+                    {CI_OP_ABI_WRITE_FP6_32, CI_OP_ABI_WRITE_FP6_32_A},
+                    {CI_OP_ABI_WRITE_FP7_32, CI_OP_ABI_WRITE_FP7_32_A},
+                };
+                return kinds[reg.index][alignment >= 2];
+            }
+            if(!write && action == CI_ABI_COPY && size == 8){
+                static const CiOpKind kinds[8][2] = {
+                    {CI_OP_ABI_READ_FP0_64, CI_OP_ABI_READ_FP0_64_A},
+                    {CI_OP_ABI_READ_FP1_64, CI_OP_ABI_READ_FP1_64_A},
+                    {CI_OP_ABI_READ_FP2_64, CI_OP_ABI_READ_FP2_64_A},
+                    {CI_OP_ABI_READ_FP3_64, CI_OP_ABI_READ_FP3_64_A},
+                    {CI_OP_ABI_READ_FP4_64, CI_OP_ABI_READ_FP4_64_A},
+                    {CI_OP_ABI_READ_FP5_64, CI_OP_ABI_READ_FP5_64_A},
+                    {CI_OP_ABI_READ_FP6_64, CI_OP_ABI_READ_FP6_64_A},
+                    {CI_OP_ABI_READ_FP7_64, CI_OP_ABI_READ_FP7_64_A},
+                };
+                return kinds[reg.index][alignment >= 3];
+            }
+            if(write && action == CI_ABI_COPY && size == 8){
+                static const CiOpKind kinds[8][2] = {
+                    {CI_OP_ABI_WRITE_FP0_64, CI_OP_ABI_WRITE_FP0_64_A},
+                    {CI_OP_ABI_WRITE_FP1_64, CI_OP_ABI_WRITE_FP1_64_A},
+                    {CI_OP_ABI_WRITE_FP2_64, CI_OP_ABI_WRITE_FP2_64_A},
+                    {CI_OP_ABI_WRITE_FP3_64, CI_OP_ABI_WRITE_FP3_64_A},
+                    {CI_OP_ABI_WRITE_FP4_64, CI_OP_ABI_WRITE_FP4_64_A},
+                    {CI_OP_ABI_WRITE_FP5_64, CI_OP_ABI_WRITE_FP5_64_A},
+                    {CI_OP_ABI_WRITE_FP6_64, CI_OP_ABI_WRITE_FP6_64_A},
+                    {CI_OP_ABI_WRITE_FP7_64, CI_OP_ABI_WRITE_FP7_64_A},
+                };
+                return kinds[reg.index][alignment >= 3];
+            }
+            if(!write && action == CI_ABI_COPY && size == 16){
+                static const CiOpKind kinds[8][2] = {
+                    {CI_OP_ABI_READ_FP0_128, CI_OP_ABI_READ_FP0_128_A},
+                    {CI_OP_ABI_READ_FP1_128, CI_OP_ABI_READ_FP1_128_A},
+                    {CI_OP_ABI_READ_FP2_128, CI_OP_ABI_READ_FP2_128_A},
+                    {CI_OP_ABI_READ_FP3_128, CI_OP_ABI_READ_FP3_128_A},
+                    {CI_OP_ABI_READ_FP4_128, CI_OP_ABI_READ_FP4_128_A},
+                    {CI_OP_ABI_READ_FP5_128, CI_OP_ABI_READ_FP5_128_A},
+                    {CI_OP_ABI_READ_FP6_128, CI_OP_ABI_READ_FP6_128_A},
+                    {CI_OP_ABI_READ_FP7_128, CI_OP_ABI_READ_FP7_128_A},
+                };
+                return kinds[reg.index][alignment >= 4];
+            }
+            if(write && action == CI_ABI_COPY && size == 16){
+                static const CiOpKind kinds[8][2] = {
+                    {CI_OP_ABI_WRITE_FP0_128, CI_OP_ABI_WRITE_FP0_128_A},
+                    {CI_OP_ABI_WRITE_FP1_128, CI_OP_ABI_WRITE_FP1_128_A},
+                    {CI_OP_ABI_WRITE_FP2_128, CI_OP_ABI_WRITE_FP2_128_A},
+                    {CI_OP_ABI_WRITE_FP3_128, CI_OP_ABI_WRITE_FP3_128_A},
+                    {CI_OP_ABI_WRITE_FP4_128, CI_OP_ABI_WRITE_FP4_128_A},
+                    {CI_OP_ABI_WRITE_FP5_128, CI_OP_ABI_WRITE_FP5_128_A},
+                    {CI_OP_ABI_WRITE_FP6_128, CI_OP_ABI_WRITE_FP6_128_A},
+                    {CI_OP_ABI_WRITE_FP7_128, CI_OP_ABI_WRITE_FP7_128_A},
+                };
+                return kinds[reg.index][alignment >= 4];
+            }
+        }
+    }
     if(write && action != CI_ABI_COPY){
         switch(source_size){
             case 1: return ci_aligned_kind((action == CI_ABI_SIGN_EXTEND? CI_OP_ABI_WRITE_SEXT8 : CI_OP_ABI_WRITE_ZEXT8), alignment);
@@ -11975,60 +12475,60 @@ ci_abi_transfer_kind(CiAbiTransfer action, CiAbiAddress destination, CiAbiAddres
                 return CI_OP_ABI_COPY_SLOT_TO_REG_PTR_N;
         }
     }
-    if(action == CI_ABI_COPY && destination == CI_ABI_SLOT && source == CI_ABI_INCOMING_PTR){
+    if(action == CI_ABI_COPY && destination == CI_ABI_SLOT && source == CI_ABI_REG_PTR){
         switch(size){
             case 1:
-                return CI_OP_ABI_COPY_INCOMING_PTR_TO_SLOT_8;
+                return CI_OP_ABI_COPY_REG_PTR_TO_SLOT_8;
             case 2:
                 if(alignment >= 1)
-                    return CI_OP_ABI_COPY_INCOMING_PTR_TO_SLOT_16_A;
-                return CI_OP_ABI_COPY_INCOMING_PTR_TO_SLOT_16;
+                    return CI_OP_ABI_COPY_REG_PTR_TO_SLOT_16_A;
+                return CI_OP_ABI_COPY_REG_PTR_TO_SLOT_16;
             case 4:
                 if(alignment >= 2)
-                    return CI_OP_ABI_COPY_INCOMING_PTR_TO_SLOT_32_A;
-                return CI_OP_ABI_COPY_INCOMING_PTR_TO_SLOT_32;
+                    return CI_OP_ABI_COPY_REG_PTR_TO_SLOT_32_A;
+                return CI_OP_ABI_COPY_REG_PTR_TO_SLOT_32;
             case 8:
                 if(alignment >= 3)
-                    return CI_OP_ABI_COPY_INCOMING_PTR_TO_SLOT_64_A;
-                return CI_OP_ABI_COPY_INCOMING_PTR_TO_SLOT_64;
+                    return CI_OP_ABI_COPY_REG_PTR_TO_SLOT_64_A;
+                return CI_OP_ABI_COPY_REG_PTR_TO_SLOT_64;
             case 16:
                 if(alignment >= 4)
-                    return CI_OP_ABI_COPY_INCOMING_PTR_TO_SLOT_128_A;
-                return CI_OP_ABI_COPY_INCOMING_PTR_TO_SLOT_128;
+                    return CI_OP_ABI_COPY_REG_PTR_TO_SLOT_128_A;
+                return CI_OP_ABI_COPY_REG_PTR_TO_SLOT_128;
             default:
-                if(alignment >= 4) return CI_OP_ABI_COPY_INCOMING_PTR_TO_SLOT_N_A16;
-                if(alignment >= 3) return CI_OP_ABI_COPY_INCOMING_PTR_TO_SLOT_N_A8;
-                if(alignment >= 2) return CI_OP_ABI_COPY_INCOMING_PTR_TO_SLOT_N_A4;
-                if(alignment >= 1) return CI_OP_ABI_COPY_INCOMING_PTR_TO_SLOT_N_A2;
-                return CI_OP_ABI_COPY_INCOMING_PTR_TO_SLOT_N;
+                if(alignment >= 4) return CI_OP_ABI_COPY_REG_PTR_TO_SLOT_N_A16;
+                if(alignment >= 3) return CI_OP_ABI_COPY_REG_PTR_TO_SLOT_N_A8;
+                if(alignment >= 2) return CI_OP_ABI_COPY_REG_PTR_TO_SLOT_N_A4;
+                if(alignment >= 1) return CI_OP_ABI_COPY_REG_PTR_TO_SLOT_N_A2;
+                return CI_OP_ABI_COPY_REG_PTR_TO_SLOT_N;
         }
     }
-    if(action == CI_ABI_COPY && destination == CI_ABI_SLOT && source == CI_ABI_INCOMING_PTR_INDIRECT){
+    if(action == CI_ABI_COPY && destination == CI_ABI_SLOT && source == CI_ABI_REG_PTR_INDIRECT){
         switch(size){
             case 1:
-                return CI_OP_ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_8;
+                return CI_OP_ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_8;
             case 2:
                 if(alignment >= 1)
-                    return CI_OP_ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_16_A;
-                return CI_OP_ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_16;
+                    return CI_OP_ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_16_A;
+                return CI_OP_ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_16;
             case 4:
                 if(alignment >= 2)
-                    return CI_OP_ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_32_A;
-                return CI_OP_ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_32;
+                    return CI_OP_ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_32_A;
+                return CI_OP_ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_32;
             case 8:
                 if(alignment >= 3)
-                    return CI_OP_ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_64_A;
-                return CI_OP_ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_64;
+                    return CI_OP_ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_64_A;
+                return CI_OP_ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_64;
             case 16:
                 if(alignment >= 4)
-                    return CI_OP_ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_128_A;
-                return CI_OP_ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_128;
+                    return CI_OP_ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_128_A;
+                return CI_OP_ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_128;
             default:
-                if(alignment >= 4) return CI_OP_ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_N_A16;
-                if(alignment >= 3) return CI_OP_ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_N_A8;
-                if(alignment >= 2) return CI_OP_ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_N_A4;
-                if(alignment >= 1) return CI_OP_ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_N_A2;
-                return CI_OP_ABI_COPY_INCOMING_PTR_INDIRECT_TO_SLOT_N;
+                if(alignment >= 4) return CI_OP_ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_N_A16;
+                if(alignment >= 3) return CI_OP_ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_N_A8;
+                if(alignment >= 2) return CI_OP_ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_N_A4;
+                if(alignment >= 1) return CI_OP_ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_N_A2;
+                return CI_OP_ABI_COPY_REG_PTR_INDIRECT_TO_SLOT_N;
         }
     }
     if(action == CI_ABI_COPY && destination == CI_ABI_SLOT_PTR && source == CI_ABI_SLOT){

@@ -14,6 +14,7 @@
 #include "ci_op_list.h"
 #include "../Drp/typed_enum.h"
 #include "../Drp/atom.h"
+#include "../Drp/ByteBuilder.h"
 
 #if !defined __clang__ && !defined _Null_unspecified
 #define _Null_unspecified
@@ -39,148 +40,10 @@ enum CiCheckedOp TYPED_ENUM(uint32_t){
 };
 TYPEDEF_ENUM(CiCheckedOp, uint32_t);
 
-#define CI_ALU_BINARY_OPS(X, suffix) \
-    X(ADD, suffix) \
-    X(SUB, suffix) \
-    X(MUL, suffix) \
-    X(SDIV, suffix) \
-    X(UDIV, suffix) \
-    X(SMOD, suffix) \
-    X(UMOD, suffix) \
-    X(AND, suffix) \
-    X(OR, suffix) \
-    X(XOR, suffix) \
-    X(SHL, suffix) \
-    X(ASR, suffix) \
-    X(LSR, suffix)
-
-#define CI_ALU_UNARY_OPS(X, suffix) \
-    X(NEG, suffix) \
-    X(NOT, suffix)
-
-#define CI_CMP_OPS(X, suffix) \
-    X(EQ, suffix) \
-    X(NE, suffix) \
-    X(SLT, suffix) \
-    X(ULT, suffix) \
-    X(SGT, suffix) \
-    X(UGT, suffix) \
-    X(SLE, suffix) \
-    X(ULE, suffix) \
-    X(SGE, suffix) \
-    X(UGE, suffix)
-
-#define CI_FALU_OPS(X, suffix) \
-    X(FADD, suffix) \
-    X(FSUB, suffix) \
-    X(FMUL, suffix) \
-    X(FDIV, suffix) \
-    X(FNEG, suffix)
-
-#define CI_FCMP_OPS(X, suffix) \
-    X(FEQ, suffix) \
-    X(FNE, suffix) \
-    X(FLT, suffix) \
-    X(FGT, suffix) \
-    X(FLE, suffix) \
-    X(FGE, suffix)
-
-#define CI_OPCODE_ENUM(name, suffix) CI_OP_##name##suffix,
-#define CI_OPCODE_CASE(name, suffix) case CI_OP_##name##suffix:
-
 enum CiOpKind TYPED_ENUM(uint32_t){
-    CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, _IMM32)
-    CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, _IMM64)
-    CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, 8)
-    CI_ALU_UNARY_OPS(CI_OPCODE_ENUM, 8)
-    CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, 16)
-    CI_ALU_UNARY_OPS(CI_OPCODE_ENUM, 16)
-    CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, 32)
-    CI_ALU_UNARY_OPS(CI_OPCODE_ENUM, 32)
-    CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, 64)
-    CI_ALU_UNARY_OPS(CI_OPCODE_ENUM, 64)
-    CI_ALU_BINARY_OPS(CI_OPCODE_ENUM, 128)
-    CI_ALU_UNARY_OPS(CI_OPCODE_ENUM, 128)
-    CI_CMP_OPS(CI_OPCODE_ENUM, 32)
-    CI_CMP_OPS(CI_OPCODE_ENUM, 64)
-    CI_CMP_OPS(CI_OPCODE_ENUM, 128)
-    CI_CMP_OPS(CI_OPCODE_ENUM, _JUMP32)
-    CI_CMP_OPS(CI_OPCODE_ENUM, _JUMP64)
-    CI_FALU_OPS(CI_OPCODE_ENUM, _BF16)
-    CI_FALU_OPS(CI_OPCODE_ENUM, 16)
-    CI_FALU_OPS(CI_OPCODE_ENUM, 32)
-    CI_FALU_OPS(CI_OPCODE_ENUM, 64)
-    CI_FALU_OPS(CI_OPCODE_ENUM, 80)
-    CI_FALU_OPS(CI_OPCODE_ENUM, 128)
-    CI_FCMP_OPS(CI_OPCODE_ENUM, _BF16)
-    CI_FCMP_OPS(CI_OPCODE_ENUM, 16)
-    CI_FCMP_OPS(CI_OPCODE_ENUM, 32)
-    CI_FCMP_OPS(CI_OPCODE_ENUM, 64)
-    CI_FCMP_OPS(CI_OPCODE_ENUM, 80)
-    CI_FCMP_OPS(CI_OPCODE_ENUM, 128)
-    CI_OP_CHECK,
-    CI_OP_PROPAGATE_ERROR,
-    CI_OP_SLOT_ADDR,
-    CI_OP_VAR_ADDR,
-    CI_OP_TLS_ADDR,
-    CI_OP_FUNC_ADDR,
-    CI_OP_JUMP,
-    CI_OP_RETURN,
-    CI_OP_RETURN_SLOT,
-    CI_OP_CLEAR_CACHE,
-    CI_OP_STACK_SAVE,
-    CI_OP_STACK_RESTORE,
-    CI_OP_CAPTURE_BACKTRACE,
+    CI_OPCODE_NATIVE_LIST(CI_OPCODE_ENUM)
 #define CI_OP_ENUM(name, ...) CI_OP_##name,
-    CI_CONST_OPS(CI_OP_ENUM)
-    CI_LOAD_OPS(CI_OP_ENUM)
-    CI_STORE_OPS(CI_OP_ENUM)
-    CI_STORE_IMM_OPS(CI_OP_ENUM)
-    CI_ZERO_OPS(CI_OP_ENUM)
-    CI_COPY_OPS(CI_OP_ENUM)
-    CI_MEMCOPY_OPS(CI_OP_ENUM)
-    CI_EXTEND_OPS(CI_OP_ENUM)
-    CI_OVERFLOW_OPS(CI_OP_ENUM)
-    CI_CHECKED_OPS(CI_OP_ENUM)
-    CI_TRUTH_OPS(CI_OP_ENUM)
-    CI_ITOF_OPS(CI_OP_ENUM)
-    CI_FTOI_OPS(CI_OP_ENUM)
-    CI_FTOF_OPS(CI_OP_ENUM)
-    CI_ABI_MOVE_OPS(CI_OP_ENUM)
-    CI_ABI_TRANSFER_OPS(CI_OP_ENUM)
-    CI_JUMP_FALSE_OPS(CI_OP_ENUM)
-    CI_JUMP_TRUE_OPS(CI_OP_ENUM)
-    CI_BSWAP_OPS(CI_OP_ENUM)
-    CI_BOUNDS_OPS(CI_OP_ENUM)
-    CI_INDEX_OPS(CI_OP_ENUM)
-    CI_LOAD_BITFIELD_OPS(CI_OP_ENUM)
-    CI_LOAD_BITFIELD_128_OPS(CI_OP_ENUM)
-    CI_LOAD_BITFIELD_BYTES_OPS(CI_OP_ENUM)
-    CI_LOAD_BITFIELD_BYTES_128_OPS(CI_OP_ENUM)
-    CI_STORE_BITFIELD_OPS(CI_OP_ENUM)
-    CI_STORE_BITFIELD_128_OPS(CI_OP_ENUM)
-    CI_STORE_BITFIELD_BYTES_OPS(CI_OP_ENUM)
-    CI_STORE_BITFIELD_BYTES_128_OPS(CI_OP_ENUM)
-    CI_CALL_OPS(CI_OP_ENUM)
-    CI_SWITCH_DENSE_OPS(CI_OP_ENUM)
-    CI_SWITCH_RANGE_OPS(CI_OP_ENUM)
-    CI_BUILTIN_OPS(CI_OP_ENUM)
-    CI_ALLOCA_OPS(CI_OP_ENUM)
-    CI_FENCE_OPS(CI_OP_ENUM)
-    CI_BIT_COUNT_OPS(CI_OP_ENUM)
-    CI_SINGLE_BIT_OPS(CI_OP_ENUM)
-    CI_BIT_CEIL_OPS(CI_OP_ENUM)
-    CI_BIT_FLOOR_OPS(CI_OP_ENUM)
-    CI_ROTATE_OPS(CI_OP_ENUM)
-    CI_CRC_OPS(CI_OP_ENUM)
-    CI_ATOMIC_LOAD_OPS(CI_OP_ENUM)
-    CI_ATOMIC_STORE_OPS(CI_OP_ENUM)
-    CI_ATOMIC_RMW_OPS(CI_OP_ENUM)
-    CI_ATOMIC_CAS_OPS(CI_OP_ENUM)
-    CI_VA_SYSV_OPS(CI_OP_ENUM)
-    CI_VA_ARM_OPS(CI_OP_ENUM)
-    CI_VA_ARM_INDIRECT_OPS(CI_OP_ENUM)
-    CI_VA_STACK_OPS(CI_OP_ENUM)
+    CI_OPCODE_FLAT_LIST(CI_OP_ENUM)
 #undef CI_OP_ENUM
     CI_OP_COUNT,
 };
@@ -206,6 +69,7 @@ enum CiOpFamily {
     CI_F_FTOI,
     CI_F_FTOF,
     CI_F_ABI_MOVE,
+    CI_F_ABI_PAIR,
     CI_F_ABI_TRANSFER,
     CI_F_JUMP_FALSE,
     CI_F_JUMP_TRUE,
@@ -214,6 +78,9 @@ enum CiOpFamily {
     CI_F_INDEX,
     CI_F_LOAD_BITFIELD,
     CI_F_LOAD_BITFIELD_BYTES,
+    CI_F_LOAD_SLOT_BITFIELD,
+    CI_F_LOAD_SLOT_BITFIELD_BYTES,
+    CI_F_BITFIELD_JUMP,
     CI_F_STORE_BITFIELD,
     CI_F_STORE_BITFIELD_BYTES,
     CI_F_CALL,
@@ -275,8 +142,13 @@ ci_op_family(CiOpKind kind){
 #define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_FTOF;
         CI_FTOF_OPS(CI_FAMILY_CASE)
 #undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_ABI_PAIR;
+        CI_ABI_PAIR_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
 #define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_ABI_MOVE;
         CI_ABI_MOVE_OPS(CI_FAMILY_CASE)
+        CI_ABI_GP_MOVE_OPS(CI_FAMILY_CASE)
+        CI_ABI_REG_MOVE_OPS(CI_FAMILY_CASE)
 #undef CI_FAMILY_CASE
 #define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_ABI_TRANSFER;
         CI_ABI_TRANSFER_OPS(CI_FAMILY_CASE)
@@ -307,6 +179,17 @@ ci_op_family(CiOpKind kind){
 #undef CI_FAMILY_CASE
 #define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_LOAD_BITFIELD_BYTES;
         CI_LOAD_BITFIELD_BYTES_128_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_BITFIELD_JUMP;
+        CI_BITFIELD_JUMP_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_LOAD_SLOT_BITFIELD;
+        CI_LOAD_SLOT_BITFIELD_OPS(CI_FAMILY_CASE)
+        CI_LOAD_SLOT_BITFIELD_128_OPS(CI_FAMILY_CASE)
+#undef CI_FAMILY_CASE
+#define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_LOAD_SLOT_BITFIELD_BYTES;
+        CI_LOAD_SLOT_BITFIELD_BYTES_OPS(CI_FAMILY_CASE)
+        CI_LOAD_SLOT_BITFIELD_BYTES_128_OPS(CI_FAMILY_CASE)
 #undef CI_FAMILY_CASE
 #define CI_FAMILY_CASE(name, ...) case CI_OP_##name: return CI_F_STORE_BITFIELD;
         CI_STORE_BITFIELD_OPS(CI_FAMILY_CASE)
@@ -403,13 +286,21 @@ ci_op_name(CiOpKind kind){
         CI_ITOF_OPS(CI_NAME_CASE)
         CI_FTOI_OPS(CI_NAME_CASE)
         CI_FTOF_OPS(CI_NAME_CASE)
+        CI_ABI_PAIR_OPS(CI_NAME_CASE)
         CI_ABI_MOVE_OPS(CI_NAME_CASE)
+        CI_ABI_GP_MOVE_OPS(CI_NAME_CASE)
+        CI_ABI_REG_MOVE_OPS(CI_NAME_CASE)
         CI_ABI_TRANSFER_OPS(CI_NAME_CASE)
         CI_JUMP_FALSE_OPS(CI_NAME_CASE)
         CI_JUMP_TRUE_OPS(CI_NAME_CASE)
         CI_BSWAP_OPS(CI_NAME_CASE)
         CI_BOUNDS_OPS(CI_NAME_CASE)
         CI_INDEX_OPS(CI_NAME_CASE)
+        CI_BITFIELD_JUMP_OPS(CI_NAME_CASE)
+        CI_LOAD_SLOT_BITFIELD_OPS(CI_NAME_CASE)
+        CI_LOAD_SLOT_BITFIELD_128_OPS(CI_NAME_CASE)
+        CI_LOAD_SLOT_BITFIELD_BYTES_OPS(CI_NAME_CASE)
+        CI_LOAD_SLOT_BITFIELD_BYTES_128_OPS(CI_NAME_CASE)
         CI_LOAD_BITFIELD_OPS(CI_NAME_CASE)
         CI_LOAD_BITFIELD_128_OPS(CI_NAME_CASE)
         CI_LOAD_BITFIELD_BYTES_OPS(CI_NAME_CASE)
@@ -443,8 +334,8 @@ ci_op_name(CiOpKind kind){
     }
 }
 
-// Indirect calls store the callee pointer immediately before argument storage.
-enum { CI_INDIRECT_CALL_PREFIX_SIZE = 8 };
+// Indirect calls store the native entry and resolved CcFunc before arguments.
+enum { CI_INDIRECT_CALL_PREFIX_SIZE = 2 * sizeof(void*) };
 
 typedef struct CiCallDescriptor CiCallDescriptor;
 typedef int CiCallInvoker(const NcCallPlan* _Nonnull, void (*_Nonnull)(void), NcCallState* _Nonnull);
@@ -509,6 +400,13 @@ typedef struct CiOp CiOp;
 struct CiOp {
     union {
         struct {
+            CiOpKind kind: 16;
+            uint32_t _pad: 16;
+            uint32_t incoming_slot; // UINT32_MAX for non-variadic functions
+            uint64_t _padding[2];
+            SrcLoc loc;
+        } frame_enter;
+        struct {
             CiOpKind kind:            16; // Concrete ABI transfer
             CiAbiTransfer operation:  3;
             CiAbiAddress source:      4,
@@ -547,6 +445,14 @@ struct CiOp {
             uint32_t _padding[3];
             SrcLoc loc;
         } abi_move;
+        struct {
+            CiOpKind kind: 16;
+            uint32_t write: 1, _padding: 15;
+            uint32_t slot0, slot1;
+            CiAbiRegister reg0, reg1;
+            uint32_t _pad;
+            SrcLoc loc;
+        } abi_pair;
         struct {
             CiOpKind kind: 16;
             uint32_t _bitpad: 16;
@@ -614,9 +520,19 @@ struct CiOp {
         struct {
             CiOpKind kind: 16; // Fused integer comparison and branch
             uint32_t when_true: 1, _bitpad: 15;
-            uint32_t jump, _pad, src, src2, _pad2;
+            int32_t jump; // instruction displacement from this operation
+            uint32_t _pad, src, src2, patch_next;
             SrcLoc loc;
         } cmp_jump;
+        struct {
+            CiOpKind kind: 16;
+            uint32_t bit_offset: 8, bit_width: 8;
+            int32_t jump;
+            uint32_t src, offset;
+            uint32_t when_true: 1, from_slot: 1, is_volatile: 1, _padding: 29;
+            uint32_t patch_next;
+            SrcLoc loc;
+        } bitfield_jump;
         struct {
             CiOpKind kind: 16; // Floating-point arithmetic
             uint32_t is_brian_float: 1, _bitpad: 15;
@@ -879,6 +795,13 @@ struct CiOp {
             SrcLoc loc;
         } call;
         struct {
+            CiOpKind kind: 16;
+            uint32_t _pad: 16;
+            uint32_t slot;
+            uint64_t _padding[2];
+            SrcLoc loc;
+        } call_resolve;
+        struct {
             CiOpKind kind: 16; // CI_OP_ISTRUE
             uint32_t float_width: 8,
                      negate: 1,
@@ -891,16 +814,16 @@ struct CiOp {
         struct {
             CiOpKind kind: 16; // CI_OP_JUMP
             uint32_t _bitpad: 16;
-            uint32_t jump;
-            uint64_t pad[2];
+            int32_t jump; // instruction displacement from this operation
+            uint32_t pad[3], patch_next; // lowering-only unresolved branch link
             SrcLoc loc;
         } jump;
         struct {
             CiOpKind kind: 16; // CI_OP_JUMP_FALSE, CI_OP_JUMP_TRUE
             uint32_t _bitpad: 16;
-            uint32_t jump;
+            int32_t jump;
             uint32_t slot, slot_size;
-            uint64_t pad[1];
+            uint32_t pad, patch_next;
             SrcLoc loc;
         } jump_false, jump_true;
         struct {
@@ -916,7 +839,7 @@ struct CiOp {
             uint32_t is_unsigned: 1,
                      is_dense: 1,
                      _bitpad: 14;
-            uint32_t jump;
+            int32_t jump;
             uint32_t slot, slot_size;
             CiSwitchTable*_Null_unspecified table;
             SrcLoc loc;
@@ -930,13 +853,6 @@ struct CiOp {
             uint64_t pad;
             SrcLoc loc;
         } alloca;
-        struct {
-            CiOpKind kind: 16; // CI_OP_STACK_SAVE, CI_OP_STACK_RESTORE
-            uint32_t _bitpad: 16;
-            uint32_t slot;
-            uint64_t _pad[2];
-            SrcLoc loc;
-        } stack_save, stack_restore;
         struct {
             CiOpKind kind: 16; // CI_OP_BSWAP
             uint32_t _bitpad: 16;
@@ -968,6 +884,10 @@ _Static_assert(offsetof(CiOp, abi_move.loc) == offsetof(CiOp, loc), "ABI move so
 _Static_assert(offsetof(CiOp, cmp.src) == offsetof(CiOp, cmp_jump.src), "comparison operand layout");
 _Static_assert(offsetof(CiOp, cmp.src2) == offsetof(CiOp, cmp_jump.src2), "comparison operand layout");
 _Static_assert(offsetof(CiOp, jump_false.jump) == offsetof(CiOp, cmp_jump.jump), "branch target layout");
+_Static_assert(offsetof(CiOp, jump.jump) == offsetof(CiOp, bitfield_jump.jump)
+    && offsetof(CiOp, jump.patch_next) == offsetof(CiOp, bitfield_jump.patch_next), "bitfield branch layout");
+_Static_assert(offsetof(CiOp, jump.patch_next) == offsetof(CiOp, cmp_jump.patch_next)
+    && offsetof(CiOp, jump.patch_next) == offsetof(CiOp, jump_false.patch_next), "branch patch link layout");
 
 #ifndef MARRAY_CIOP
 #define MARRAY_CIOP
@@ -975,13 +895,86 @@ _Static_assert(offsetof(CiOp, jump_false.jump) == offsetof(CiOp, cmp_jump.jump),
 #include "../Drp/Marray.h"
 #endif
 
-// The lowered code of one function, hung off CcFunc.interp_ops.
+static inline
+_Bool
+ci_op_has_target(CiOpKind kind){
+    switch(kind){
+        case CI_OP_JUMP:
+#define CI_TARGET_CASE(name, ...) case CI_OP_##name:
+        CI_BITFIELD_JUMP_OPS(CI_TARGET_CASE)
+        CI_JUMP_FALSE_OPS(CI_TARGET_CASE)
+        CI_JUMP_TRUE_OPS(CI_TARGET_CASE)
+        CI_SWITCH_DENSE_OPS(CI_TARGET_CASE)
+        CI_SWITCH_RANGE_OPS(CI_TARGET_CASE)
+#undef CI_TARGET_CASE
+#define CI_TARGET_CASE(name, suffix) case CI_OP_##name##suffix:
+        CI_CMP_OPS(CI_TARGET_CASE, _JUMP32)
+        CI_CMP_OPS(CI_TARGET_CASE, _JUMP64)
+#undef CI_TARGET_CASE
+            return 1;
+        default: return 0;
+    }
+}
+
+// Shared executable layout for functions, expressions, and top-level code.
+typedef struct CiCode CiCode;
+struct CiCode {
+    Atom _Null_unspecified name;
+    size_t frame_size, alignment, op_count;
+    CiOp ops[];
+};
+
+static inline
+size_t
+ci_code_count(const ByteBuilder* _Nonnull builder){
+    return builder->cursor ? (builder->cursor - offsetof(CiCode, ops)) / sizeof(CiOp) : 0;
+}
+
+static inline
+CiOp* _Null_unspecified
+ci_code_ops(const ByteBuilder* _Nonnull builder){
+    return builder->data ? ((CiCode*)builder->data)->ops : NULL;
+}
+
+static inline
+void
+ci_code_truncate(ByteBuilder* _Nonnull builder, size_t count){
+    if(builder->cursor) builder->cursor = offsetof(CiCode, ops) + count * sizeof(CiOp);
+    builder->errored = 0;
+}
+
+static inline
+int
+ci_code_alloc(ByteBuilder* _Nonnull builder, Allocator al, CiOp* _Null_unspecified* _Nonnull out){
+    builder->allocator = al;
+    builder->alignment = _Alignof(CiCode);
+    size_t prefix = builder->cursor ? 0 : offsetof(CiCode, ops);
+    if(bb_ensure_additional(builder, prefix + sizeof(CiOp))) return 1;
+    if(prefix){
+        memset(builder->data, 0, prefix);
+        builder->cursor = prefix;
+    }
+    *out = (CiOp*)((char*)builder->data + builder->cursor);
+    builder->cursor += sizeof(CiOp);
+    return 0;
+}
+
+static inline
+int
+ci_code_push(ByteBuilder* _Nonnull builder, Allocator al, CiOp op){
+    CiOp* dest;
+    int err = ci_code_alloc(builder, al, &dest);
+    if(err) return err;
+    *dest = op;
+    return 0;
+}
+
+// Function-specific ABI metadata, hung off CcFunc.interp_ops.
 typedef struct CiFuncOps CiFuncOps;
 struct CiFuncOps {
     NcCallPlan* _Nonnull abi;
-    Marray(CiOp) code;
+    CiCode* _Nonnull code;
     const CcFunction* _Nonnull native_type; // embedding API signature, excluding ignored arguments
-    uint32_t frame_alignment;
 };
 
 #endif

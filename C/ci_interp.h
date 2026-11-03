@@ -31,24 +31,11 @@ enum {
 typedef struct CiInterpFrame CiInterpFrame;
 typedef union NcCallState NcCallState;
 struct CiInterpFrame {
-    _Alignas(16) CiInterpFrame*_Null_unspecified parent;
-    Atom name;
+    CiInterpFrame*_Null_unspecified parent;
     size_t pc;
-    size_t op_count;
-    const CiOp *_Null_unspecified ops;
-    void *_Null_unspecified slots; // params/locals/temps storage; the frame's
-                                  // trailing data for call frames, an
-                                  // interpreter-owned buffer for the top frame
-    void* return_buf;
-    size_t return_size;
-    size_t data_length;
-    NcCallState * _Null_unspecified incoming;
-    NcCallPlan *_Null_unspecified abi;
-    CiStack *_Null_unspecified stack;
-    CiStackMark stack_mark; // rewind point before this frame's allocation
+    const CiCode* _Null_unspecified code;
+    NcCallState* _Null_unspecified incoming; // variadic save area in slots, otherwise NULL
 };
-_Static_assert(_Alignof(CiInterpFrame) % 16 == 0, "slots must stay 16-aligned");
-_Static_assert(sizeof(CiInterpFrame) % 16 == 0, "slots must stay 16-aligned");
 
 typedef struct CiVirtualLib CiVirtualLib;
 struct CiVirtualLib {
@@ -58,7 +45,7 @@ struct CiVirtualLib {
 typedef struct CiModule CiModule;
 struct CiModule {
     CcModule cc;
-    Marray(CiOp) ops;
+    ByteBuilder ops;
     AtomMap(uintptr_t) labels; // label -> op index + 1
     size_t lowered; // number of parsed top-level nodes already lowered
     uint32_t slot_size;
@@ -71,13 +58,15 @@ typedef struct CiTlsThread CiTlsThread;
 typedef struct CiClosureData CiClosureData;
 
 typedef struct CiInterpreter CiInterpreter;
+extern int ci_interp_execute_asm(CiInterpreter*, CiInterpFrame*, void (*const _Nonnull* _Nonnull)(void), CiStack*, void* _Nullable, size_t, size_t);
+extern void ci_interp_callback_asm(void);
+
 struct CiInterpreter {
     CcParser parser;
     CiModule root;
-    CiInterpFrame top_frame;
+    CiInterpFrame*_Null_unspecified top_frame;
     uint32_t toplevel_slots_cap;
     uint32_t toplevel_alloc_alignment;
-    void*_Null_unspecified toplevel_slots;
     union {
         uint32_t flags;
         struct {
@@ -86,7 +75,8 @@ struct CiInterpreter {
                      poison_frame_slots: 1, // debug fill for uninitialized automatic storage
                      opt_noinline:       1,
                      nofun:              1, // disable fun
-                    _padding:            27;
+                     force_c_interp:     1, // select the C loop instead of assembly
+                    _padding:            26;
         };
     };
     uint32_t inline_budget,
@@ -192,7 +182,7 @@ struct CiArg {
     CcQualType type;
 };
 
-static int ci_interp_step(CiInterpreter*, CiInterpFrame*);
+static int ci_interp_step(CiInterpreter*, CiInterpFrame* root, CiInterpFrame* _Nonnull* _Nonnull current, void* _Nullable result, size_t result_size);
 static int ci_interp_run(CiInterpreter*, CiInterpFrame*);
 static int ci_prepare_toplevel(CiInterpreter*);
 static int ci_append_lib_path(CiInterpreter*, StringView);

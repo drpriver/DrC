@@ -388,10 +388,6 @@ TestFunction(test_concurrent_callbacks){
                 .module = &interp.root.cc,
                 .current = &interp.root.cc.scope,
             },
-            .top_frame = {
-                .return_buf = &interp.exit_code,
-                .return_size = sizeof interp.exit_code,
-            },
         };
         LOCK_T_init(&interp.error_lock);
         LOCK_T_init(&interp.atom_lock);
@@ -428,13 +424,11 @@ TestFunction(test_concurrent_callbacks){
         err = ci_resolve_refs(&interp);
         if(err){ TestReport("failed to link"); goto finally; }
 
-        CiInterpFrame* frame = &interp.top_frame;
         err = ci_prepare_toplevel(&interp);
         if(err) goto finally;
-        while(frame->pc < frame->op_count){
-            err = ci_interp_step(&interp, frame);
-            if(err) goto finally;
-        }
+        CiInterpFrame* frame = interp.top_frame;
+        err = ci_interp_run(&interp, frame);
+        if(err) goto finally;
         TEST_stats.executed++;
         if(interp.exit_code != tc->exit_code){
             TEST_stats.failures++;
