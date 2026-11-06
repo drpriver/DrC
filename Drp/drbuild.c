@@ -2919,6 +2919,10 @@ maybe_recompile_this(BuildCtx* ctx, int argc, char*_Null_unspecified*_Nonnull ar
             case COMPILER_GCC_MINGW:
             case COMPILER_GCC:
             case COMPILER_CLANG:
+                // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=54412:
+                // Fix isn't generally available yet
+                if(ctx->build_compiler_flavor == COMPILER_GCC_MINGW)
+                    b_args(ctx, build, "-Wa,-muse-unaligned-vector-move");
                 b_args(ctx, build, "-g");
                 goto fallthrough;
             case COMPILER_CLANG_CL:
@@ -3234,6 +3238,9 @@ b_compile_target(BuildCtx* ctx, const char* name, const char* src_dep, enum OS t
         case COMPILER_GCC_MINGW:
             b_args(ctx, target, "-std=gnu11");
             b_args(ctx, target, "-D__USE_MINGW_ANSI_STDIO=1");
+            // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=54412:
+            // Fix isn't generally available yet.
+            b_args(ctx, target, "-Wa,-muse-unaligned-vector-move");
             goto fallthrough;
         case COMPILER__MAX:
         case COMPILER_UNKNOWN:

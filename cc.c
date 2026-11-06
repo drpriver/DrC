@@ -390,6 +390,8 @@ int main(int argc, char** argv, char** envp){
             { SVI("snprintf"), (void*)&snprintf, },
             #if defined __MINGW32__
             { SVI("vprintf"), (void*)&vprintf, },
+            { SVI("vfprintf"), (void*)&vfprintf, },
+            { SVI("vsnprintf"), (void*)&vsnprintf, },
             #endif
             #endif
         };

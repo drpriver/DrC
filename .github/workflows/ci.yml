@@ -163,6 +163,30 @@ jobs:
             asan.*
           if-no-files-found: warn
       - run: call "${{ matrix.vcvars }}" && cl /std:c11 /Zc:preprocessor build.c /Fe:build.exe && build.exe --no-sanitize -b Bin BCC=${{ matrix.cc }} HCC=${{ matrix.cc }} && build.exe test -- --multithreaded --force-colors
+  windows-mingw:
+    if: github.event_name != 'schedule'
+    # Older MinGW runtimes are brain damaged
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: cmd
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure preinstalled MinGW
+        shell: pwsh
+        run: |
+          'C:\mingw64\bin' >> $env:GITHUB_PATH
+          $gccInclude = & C:\mingw64\bin\gcc.exe -print-file-name=include
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "DRC_INCLUDE_PATH=C:\mingw64\x86_64-w64-mingw32\include;$gccInclude" >> $env:GITHUB_ENV
+      - run: gcc --version && gcc -dumpmachine
+      # MinGW GCC does not support ASan/UBSan on Windows.
+      - name: Build MinGW binaries
+        run: |
+          gcc -std=gnu11 -D__USE_MINGW_ANSI_STDIO=1 build.c -o build.exe || exit /b 1
+          build.exe --no-sanitize -b Bin BCC=gcc HCC=gcc --build-cc-flavor=gcc-mingw --host-cc-flavor=gcc-mingw || exit /b 1
+      - name: Test MinGW binaries
+        run: build.exe test --no-sanitize -- --multithreaded --force-colors
   macos:
     if: github.event_name != 'schedule'
     strategy:

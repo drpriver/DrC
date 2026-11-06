@@ -7,6 +7,15 @@
 #ifndef WINDOWSHEADER_H
 #define WINDOWSHEADER_H
 #ifdef _WIN32
+#ifdef __MINGW32__
+// VirtualAlloc2 and MapViewOfFile3
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00
+#endif
+#ifndef NTDDI_VERSION
+#define NTDDI_VERSION 0x0A000005
+#endif
+#endif
 #define WIN32_LEAN_AND_MEAN
 #define WIN32_EXTRA_LEAN
 #ifndef _CRT_SECURE_NO_WARNINGS

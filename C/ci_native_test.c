@@ -550,7 +550,11 @@ ABI_COMPLEX_FIXTURE(long double,ld)
 #define ABI_COMPLEX_RECORD_SKIP 1
 #endif
 
-#if defined __DRC__ || ((defined __GNUC__ && !defined __clang__ && __GNUC__ >= 12) || (defined __clang__ && __clang_major__ >= 15))
+#if defined __MINGW32__ && defined __x86_64__ && defined __GNUC__ && __GNUC__ < 16 && !defined __clang__ && !defined __DRC__
+// MinGW GCC before 16 passes half scalars in GPRs instead of XMM registers
+#define ABI_HALF_SYMBOL(name) NULL
+#define ABI_HALF_SKIP 1
+#elif defined __DRC__ || ((defined __GNUC__ && !defined __clang__ && __GNUC__ >= 12) || (defined __clang__ && __clang_major__ >= 15))
 #define ABI_HALF_SYMBOL(name) (void*)name
 #define ABI_HALF_SKIP 0
 struct AbiHalf { _Float16 x,y,z; };
@@ -586,7 +590,11 @@ abi_fp16_record_callback(struct AbiFp16 (*fn)(struct AbiFp16), struct AbiFp16 x)
 #define ABI_FP16_SYMBOL(name) NULL
 #define ABI_FP16_SKIP 1
 #endif
-#if defined __DRC__ || ((defined __GNUC__ && !defined __clang__ && __GNUC__ >= 13) || (defined __clang__ && __clang_major__ >= 17))
+#if defined __MINGW32__ && defined __x86_64__ && defined __GNUC__ && !defined __clang__ && !defined __DRC__
+// MinGW GCC still uses GPRs for bfloat16 as of GCC 16
+#define ABI_BFLOAT_SYMBOL(name) NULL
+#define ABI_BFLOAT_SKIP 1
+#elif defined __DRC__ || ((defined __GNUC__ && !defined __clang__ && __GNUC__ >= 13) || (defined __clang__ && __clang_major__ >= 17))
 #define ABI_BFLOAT_SYMBOL(name) (void*)name
 #define ABI_BFLOAT_SKIP 0
 static __bf16 abi_bfloat(__bf16 x){return x;}

@@ -85,6 +85,10 @@
 #pragma GCC diagnostic ignored "-Wmissing-braces"
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #pragma GCC diagnostic ignored "-Wsuggest-attribute=noreturn"
+#if defined __MINGW32__ && __GNUC__ == 14
+// GCC 14 is retarded
+#pragma GCC diagnostic ignored "-Wfree-nonheap-object"
+#endif
 // #pragma GCC diagnostic error "-Wswitch-enum"
 #endif
 

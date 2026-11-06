@@ -4608,7 +4608,12 @@ cpp_define_target_macros(CppPreprocessor* cpp){
     DEFINT("__FLT_EVAL_METHOD__", t->flt_eval_method);
 
     // __GNUC__ compatibility
-    DEFINT("__GNUC__", 7);
+    // TODO: Support NEON/SVE builtin types and vector calling conventions
+    // that glibc headers assume with GCC >= 9.
+    if(t->arch == CC_ARCH_ARM64)
+        DEFINT("__GNUC__", 8);
+    else
+        DEFINT("__GNUC__", 15);
     DEFINT("__GNUC_MINOR__", 0);
     DEFINT("__GNUC_PATCHLEVEL__", 0);
     DEFINT("__OPTIMIZE__", 1);
