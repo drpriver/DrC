@@ -168,7 +168,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-26, macos-26-intel]
+        os: [macos-15, macos-26, macos-26-intel, xcode-27]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
