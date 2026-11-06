@@ -6,11 +6,11 @@
 #include <readline/readline.h> <readline.h>
 #include <readline/history.h> <history.h>
 #pragma lib "readline"
-#pragma typedef on
 enum {HAS_READLINE=1};
 #else
 enum {HAS_READLINE=0};
 #endif
+#pragma typedef on
 
 unsigned long hash(const char* s){
     unsigned long h = 5381;
