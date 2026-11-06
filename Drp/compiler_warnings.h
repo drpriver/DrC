@@ -1,5 +1,5 @@
 //
-// Copyright © 2024-2025, David Priver <david@davidpriver.com>
+// Copyright © 2024-2026, David Priver <david@davidpriver.com>
 //
 #ifndef COMPILER_WARNINGS_H
 #define COMPILER_WARNINGS_H
@@ -9,7 +9,7 @@
 #endif
 #endif
 
-#if defined(__GNUC__) || defined(__clang__)
+#if defined __GNUC__ || defined __clang__
 #pragma GCC diagnostic error "-Wall"
 #pragma GCC diagnostic error "-Wextra"
 #pragma GCC diagnostic error "-Wvla"
@@ -35,7 +35,7 @@
 #pragma GCC diagnostic ignored "-Wunused-function"
 #endif
 
-#if defined(__clang__)
+#if defined __clang__
 #pragma GCC diagnostic error "-Wpedantic"
 #pragma clang diagnostic error "-Wgnu-label-as-value"
 #pragma clang diagnostic ignored "-Wnullability-extension"
@@ -81,14 +81,14 @@
 #pragma clang diagnostic ignored "-Wmultichar"
 #endif
 
-#if defined(__GNUC__) && !defined(__clang__)
+#if defined __GNUC__ && !defined __clang__
 #pragma GCC diagnostic ignored "-Wmissing-braces"
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #pragma GCC diagnostic ignored "-Wsuggest-attribute=noreturn"
 // #pragma GCC diagnostic error "-Wswitch-enum"
 #endif
 
-#if defined(_MSC_VER) && !defined(__clang__)
+#if defined _MSC_VER && !defined __clang__
 #pragma warning( error : 4013 ) // implicit function declaration
 #pragma warning( error : 4020 ) // too many actual parameters
 #pragma warning( error : 4024 ) // different types for formal and actual parameter
@@ -104,6 +104,7 @@
 #pragma warning( disable : 4244 )
 #pragma warning( disable : 4146 )
 #pragma warning( disable : 4267 )
+#pragma warning( disable : 5287 ) // enum comparisons warn even with explicit casts
 #endif
 
 #ifdef __wasm__

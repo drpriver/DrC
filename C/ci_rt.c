@@ -1563,6 +1563,10 @@ ci_rt_prepare_module(CiInterpreter* ci, uint64_t loc_bits, CiModule* module, voi
 
 // These helpers mean we can always call runtime funcs
 // even if the generic native call bridge is not enabled.
+// Some versions of ubsan complain, but we don't care.
+#if defined __clang__
+__attribute__((no_sanitize("function")))
+#endif
 static
 int
 ci_invoke_int2(const NcCallPlan* plan, void (*fn)(void), NcCallState* state){
@@ -1574,6 +1578,9 @@ ci_invoke_int2(const NcCallPlan* plan, void (*fn)(void), NcCallState* state){
     return 0;
 }
 
+#if defined __clang__
+__attribute__((no_sanitize("function")))
+#endif
 static
 int
 ci_invoke_int3(const NcCallPlan* plan, void (*fn)(void), NcCallState* state){
@@ -1585,6 +1592,9 @@ ci_invoke_int3(const NcCallPlan* plan, void (*fn)(void), NcCallState* state){
     return 0;
 }
 
+#if defined __clang__
+__attribute__((no_sanitize("function")))
+#endif
 static
 int
 ci_invoke_int4(const NcCallPlan* plan, void (*fn)(void), NcCallState* state){
@@ -1596,6 +1606,9 @@ ci_invoke_int4(const NcCallPlan* plan, void (*fn)(void), NcCallState* state){
     return 0;
 }
 
+#if defined __clang__
+__attribute__((no_sanitize("function")))
+#endif
 static
 int
 ci_invoke_int5(const NcCallPlan* plan, void (*fn)(void), NcCallState* state){
@@ -1607,6 +1620,9 @@ ci_invoke_int5(const NcCallPlan* plan, void (*fn)(void), NcCallState* state){
     return 0;
 }
 
+#if defined __clang__
+__attribute__((no_sanitize("function")))
+#endif
 static
 int
 ci_invoke_int6(const NcCallPlan* plan, void (*fn)(void), NcCallState* state){

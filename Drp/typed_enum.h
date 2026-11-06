@@ -14,7 +14,7 @@
 //   enum Foo TYPED_ENUM(uint8_t) { FOO_A = 1, FOO_B = 2 };
 //   typedef TYPED_ENUM_T(Foo, uint8_t) Foo;
 
-#if defined(__clang__) || (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L)
+#if defined __clang__ || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202311L)
   #define HAVE_TYPED_ENUM
   #define TYPED_ENUM(type) : type
   #define TYPED_ENUM_T_(name, type) enum name
