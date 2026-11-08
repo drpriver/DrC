@@ -1368,7 +1368,7 @@ test_main(int argc, char*_Nonnull *_Nonnull argv, const ArgParseKwParams*_Nullab
         default:
             break;
     }
-    enum ArgParseError e = parse_args(&argparser, &args, ARGPARSE_FLAGS_NONE);
+    enum ArgParseError e = parse_args(&argparser, &args);
     if(e){
         print_argparse_error(&argparser, e);
         fprintf(stderr, "Use --help to see usage.\n");

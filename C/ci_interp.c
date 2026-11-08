@@ -1712,11 +1712,11 @@ ci_pragma_pkg_config(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc l
         #undef PKG_KW
         ArgParser pkg_parser = {
             .keyword = {.args = pkg_kwargs, .count = countof(pkg_kwargs)},
+            .flags = ARGPARSE_FLAGS_UNKNOWN_KWARGS_AS_ARGS
+                   | ARGPARSE_FLAGS_ALLOW_KWARG_SEP_TO_BE_OPTIONAL
+                   | ARGPARSE_FLAGS_IGNORE_EXCESS_ARGS,
         };
-        enum ArgParseError ap_err = parse_args_cmdline(&pkg_parser, cmdline,
-            ARGPARSE_FLAGS_UNKNOWN_KWARGS_AS_ARGS
-            | ARGPARSE_FLAGS_ALLOW_KWARG_SEP_TO_BE_OPTIONAL
-            | ARGPARSE_FLAGS_IGNORE_EXCESS_ARGS);
+        enum ArgParseError ap_err = parse_args_cmdline(&pkg_parser, cmdline);
         if(ap_err){
             err = cpp_error(cpp, loc, "pkg-config: failed to parse flags for '%.*s'", (int)pkg_name.length, pkg_name.text);
             goto finally;

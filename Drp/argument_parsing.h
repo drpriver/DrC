@@ -123,14 +123,14 @@ typedef struct ArgParser ArgParser;
 //
 static inline
 enum ArgParseError
-parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned);
+parse_args(ArgParser* parser, const Args* args);
 
 //
 // Like parse args, but takes pointer + length to an
 // array of StringViews.
 static inline
 enum ArgParseError
-parse_args_strings(ArgParser* parser, const StringView* longstrings, size_t count, /*enum ArgParseFlags*/ unsigned);
+parse_args_strings(ArgParser* parser, const StringView* longstrings, size_t count);
 
 //
 // Like parse_args, but parses a single command line string.
@@ -163,7 +163,7 @@ parse_args_strings(ArgParser* parser, const StringView* longstrings, size_t coun
 //
 static inline
 enum ArgParseError
-parse_args_cmdline(ArgParser* parser, char* cmdline, /*enum ArgParseFlags*/ unsigned);
+parse_args_cmdline(ArgParser* parser, char* cmdline);
 
 //
 // After receiving a non-zero error code from `parse_args`, use this function
@@ -585,6 +585,11 @@ struct ArgParser {
     //
     // A one-line description of the program.
     const char* description;
+
+    //
+    // See `enum ArgParseFlags`
+    // Various flags controlling behavior.
+    unsigned flags;
     //
     // The args that mean to early out and immediately take an action.
     // Generally, you should put in a help and version action.
@@ -1374,7 +1379,8 @@ ap_find_matching_kwarg(ArgParser* parser, StringView sv){
 // See top of file.
 static inline
 enum ArgParseError
-parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned flags){
+parse_args(ArgParser* parser, const Args* args){
+    unsigned flags = parser->flags;
     ArgToParse* pos_arg = NULL;
     ArgToParse* past_the_end = NULL;
     if(parser->positional.count){
@@ -1552,7 +1558,8 @@ parse_args(ArgParser* parser, const Args* args, /*enum ArgParseFlags*/ unsigned 
 
 static inline
 enum ArgParseError
-parse_args_strings(ArgParser* parser, const StringView*args, size_t args_count, /*enum ArgParseFlags*/ unsigned flags){
+parse_args_strings(ArgParser* parser, const StringView*args, size_t args_count){
+    unsigned flags = parser->flags;
     ArgToParse* pos_arg = NULL;
     ArgToParse* past_the_end = NULL;
     if(parser->positional.count){
@@ -1727,7 +1734,8 @@ parse_args_strings(ArgParser* parser, const StringView*args, size_t args_count, 
 // See top of file.
 static inline
 enum ArgParseError
-parse_args_cmdline(ArgParser* parser, char* cmdline, /*enum ArgParseFlags*/ unsigned flags){
+parse_args_cmdline(ArgParser* parser, char* cmdline){
+    unsigned flags = parser->flags;
     ArgToParse* pos_arg = NULL;
     ArgToParse* past_the_end = NULL;
     if(parser->positional.count){

@@ -81,6 +81,7 @@ int main(int argc, char** argv, char** envp){
     ArgParser parser = {
         .name = argv[0]?argv[0]:"cpp",
         .description = "cpp",
+        .flags = ARGPARSE_FLAGS_ALLOW_KWARG_SEP_TO_BE_OPTIONAL,
         .positional.args = pos_args,
         .positional.count = countof(pos_args),
         .keyword.args = kw_args,
@@ -110,7 +111,7 @@ int main(int argc, char** argv, char** envp){
         default:
             break;
     }
-    enum ArgParseError parse_err = parse_args(&parser, &args, ARGPARSE_FLAGS_ALLOW_KWARG_SEP_TO_BE_OPTIONAL);
+    enum ArgParseError parse_err = parse_args(&parser, &args);
     if(parse_err){
         print_argparse_error(&parser, parse_err);
         return 1;

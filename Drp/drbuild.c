@@ -1546,6 +1546,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
     ArgParser parser = {
         .name = argv[0]?argv[0]:"build",
         .description = "build script",
+        .flags = ARGPARSE_FLAGS_KWARGS_WITHOUT_PREFIX|ARGPARSE_FLAGS_UNKNOWN_KWARGS_AS_ARGS,
         .positional.args = pos_args,
         .positional.count = countof(pos_args),
         .keyword.args = kw_args,
@@ -1585,7 +1586,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
         default:
             break;
     }
-    enum ArgParseError parse_err = parse_args(&parser, &args, ARGPARSE_FLAGS_KWARGS_WITHOUT_PREFIX|ARGPARSE_FLAGS_UNKNOWN_KWARGS_AS_ARGS);
+    enum ArgParseError parse_err = parse_args(&parser, &args);
     if(parse_err){
         print_argparse_error(&parser, parse_err);
         goto fail;
