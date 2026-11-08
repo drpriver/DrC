@@ -178,6 +178,9 @@ print_argparse_error(ArgParser* parser, enum ArgParseError error);
 // This just returns the index of what matched, or -1 if there was no match.
 // The caller should take the actual action and exit, return, etc. as
 // appropriate. Parsing will almost surely fail.
+// Note that with `remainder` set on a positional arg or if kwargs contains a `--`
+// kwarg, those will absorb the early out arg appropriately so you can
+// pass `-h` to a subcommand.
 static inline
 intptr_t
 check_for_early_out_args(ArgParser* parser, const Args* args);
@@ -1316,22 +1319,162 @@ ap_parse_flag_value(ArgToParse* arg, StringView s){
 
 }
 
+static inline ArgToParse*_Nullable ap_find_matching_kwarg(ArgParser* parser, StringView sv);
+
 static inline
 intptr_t
 check_for_early_out_args(ArgParser* parser, const Args* args){
     _Bool has_dash_dash = 0;
-    for(size_t i = 0; i < parser->keyword.count; i++){
-        if(sv_equals(parser->keyword.args[i].name, SV("--"))){
-            has_dash_dash = 1;
+    for(const ArgParseKwParams* keywords = &parser->keyword; keywords; keywords = keywords->next){
+        for(size_t i = 0; i < keywords->count; i++){
+            if(sv_equals(keywords->args[i].name, SV("--"))){
+                has_dash_dash = 1;
+                break;
+            }
+        }
+    }
+    _Bool has_remainder = 0;
+    for(size_t i = 0; i < parser->positional.count; i++){
+        if(parser->positional.args[i].remainder){
+            has_remainder = 1;
             break;
         }
+    }
+    if(has_remainder){ // yes this is yet another parser to keep in sync
+        intptr_t result = -1;
+        unsigned flags = parser->flags;
+        ArgToParse *pos_arg = NULL;
+        ArgToParse *past_the_end = NULL;
+        if(parser->positional.count){
+            pos_arg = &parser->positional.args[0];
+            past_the_end = pos_arg + parser->positional.count;
+        }
+        ArgToParse *kwarg = NULL;
+        const char * const *argv_end = args->argv?(args->argv+args->argc):NULL;
+        for(const char * const *arg = args->argv; arg != argv_end; ++arg){
+            if(!*arg && (flags & ARGPARSE_FLAGS_SKIP_NULL_STRINGS))
+                continue;
+            if(!*arg)
+                goto cleanup_scan;
+            _Bool arg_after_eq = 0;
+            StringView s = {strlen(*arg), *arg};
+            if(!s.length && (flags & ARGPARSE_FLAGS_SKIP_EMPTY_STRINGS))
+                continue;
+            if(pos_arg && pos_arg != past_the_end && pos_arg->remainder)
+                goto cleanup_scan;
+            if(has_dash_dash && sv_equals(s, SV("--")))
+                goto cleanup_scan;
+            for(size_t i = 0; i < parser->early_out.count; i++){
+                ArgToParse *early = &parser->early_out.args[i];
+                if(sv_equals(s, early->name) || sv_equals(s, early->altname1)){
+                    result = (intptr_t)i;
+                    goto cleanup_scan;
+                }
+            }
+            if(s.length > 1){
+                ArgToParse *new_kwarg;
+                if(flags & ARGPARSE_FLAGS_KWARGS_WITHOUT_PREFIX){
+                    new_kwarg = ap_find_matching_kwarg(parser, s);
+                    if(new_kwarg) goto found_new_kwarg;
+                    const char* eq = memchr(s.text, '=', s.length);
+                    if(eq && eq != s.text){
+                        new_kwarg = ap_find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
+                        if(new_kwarg){
+                            arg_after_eq = 1;
+                            s = (StringView){s.text+s.length - eq - 1, eq+1};
+                            goto found_new_kwarg;
+                        }
+                    }
+                }
+                if(s.text[0] == '-'){
+                    _Bool number = s.text[1] == '.' || (s.text[1] >= '0' && s.text[1] <= '9');
+                    if(!number){
+                        // Not a number, find matching kwarg
+                        new_kwarg = ap_find_matching_kwarg(parser, s);
+                        if(!new_kwarg){
+                            const char *eq = memchr(s.text, '=', s.length);
+                            if(eq && eq != s.text){
+                                new_kwarg = ap_find_matching_kwarg(parser, (StringView){eq-s.text, s.text});
+                                if(new_kwarg){
+                                    arg_after_eq = 1;
+                                    s = (StringView){s.text+s.length - eq - 1, eq+1};
+                                    goto found_new_kwarg;
+                                }
+                            }
+                        }
+                        if(!new_kwarg && (flags & ARGPARSE_FLAGS_ALLOW_KWARG_SEP_TO_BE_OPTIONAL)){
+                            // could be a space optional arg
+                            // do an inefficient linear search for now.
+                            for(const ArgParseKwParams *keywords = &parser->keyword; keywords; keywords = keywords->next){
+                                for(size_t i = 0; i < keywords->count; i++){
+                                    ArgToParse *kw = &keywords->args[i];
+                                    if(!kw->space_sep_is_optional) continue;
+                                    if(sv_startswith(s, kw->name)){
+                                        // pick first match
+                                        new_kwarg = kw;
+                                        arg_after_eq = 1; // FIXME: misleading name
+                                        s = (StringView){s.length-kw->name.length, s.text+kw->name.length};
+                                        goto found_new_kwarg;
+                                    }
+                                }
+                            }
+                        }
+                        if(!new_kwarg){
+                            if(flags & ARGPARSE_FLAGS_UNKNOWN_KWARGS_AS_ARGS)
+                                goto skip;
+                            continue;
+                        }
+                        found_new_kwarg:;
+                        if(pos_arg && pos_arg != past_the_end && pos_arg->visited)
+                            pos_arg++;
+                        kwarg = new_kwarg;
+                        kwarg->visited = 1;
+                        if(kwarg->dest.type == ARG_FLAG || kwarg->dest.type == ARG_BITFLAG){
+                            kwarg->num_parsed++;
+                            kwarg = NULL;
+                            continue;
+                        }
+                        if(!arg_after_eq)
+                            continue;
+                    }
+                }
+            }
+            skip:;
+            if(kwarg){
+                kwarg->num_parsed++;
+                if(kwarg->num_parsed >= agp_maxnum(kwarg->max_num))
+                    kwarg = NULL;
+                else if(kwarg->one_at_a_time)
+                    kwarg = NULL;
+            }
+            else if(pos_arg && pos_arg != past_the_end){
+                pos_arg->visited = 1;
+                pos_arg->num_parsed++;
+                if(pos_arg->num_parsed == agp_maxnum(pos_arg->max_num))
+                    pos_arg++;
+            }
+        }
+
+        cleanup_scan:
+        for(size_t i = 0; i < parser->positional.count; i++){
+            ArgToParse *a = &parser->positional.args[i];
+            a->visited = 0;
+            a->num_parsed = 0;
+        }
+        for(const ArgParseKwParams *kw = &parser->keyword; kw; kw = kw->next)
+            for(size_t i = 0; i < kw->count; i++){
+                ArgToParse *a = &kw->args[i];
+                a->visited = 0;
+                a->num_parsed = 0;
+            }
+        return result;
     }
     for(int i = 0; i < args->argc; i++){
         StringView argstring = {strlen(args->argv[i]), args->argv[i]};
         if(has_dash_dash && sv_equals(argstring, SV("--")))
             break;
         for(size_t j = 0; j < parser->early_out.count; j++){
-            ArgToParse* early = &parser->early_out.args[j];
+            ArgToParse *early = &parser->early_out.args[j];
             if(sv_equals(argstring, early->name))
                 return (intptr_t)j;
             if(early->altname1.length && sv_equals(argstring, early->altname1))
