@@ -5230,38 +5230,48 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
 static
 int
 cc_skip_to_next_comma_or_paren(CcParser* p, const char* context){
-    int err;
-    int depth = 0;
+    int err = 0;
+    Marray(uint32_t) delimiters = {0};
     int conditional_depth = 0;
     CcToken tok;
     for(;;){
         err = cc_next_token(p, &tok);
-        if(err) return err;
-        if(tok.type == CC_EOF)
-            return cc_error(p, tok.loc, "unterminated %s", context);
+        if(err) goto done_skip;
+        if(tok.type == CC_EOF){
+            err = cc_error(p, tok.loc, "unterminated %s", context);
+            goto done_skip;
+        }
         if(tok.type != CC_PUNCTUATOR) continue;
         switch(tok.punct.punct){
-            case '(': case '[': case '{': depth++; break;
-            case ')': case ']': case '}':
-                if(depth == 0){
-                    err = cc_unget(p, &tok);
-                    if(err) return err;
+            case '(': case '[': case '{':
+                err = ma_push(uint32_t)(&delimiters, cc_scratch_allocator(p), tok.punct.punct);
+                if(err){
+                    err = CC_OOM_ERROR;
                     goto done_skip;
                 }
-                depth--;
+                break;
+            case ')': case ']': case '}':
+                if(!delimiters.count && tok.punct.punct == ')'){
+                    err = cc_unget(p, &tok);
+                    goto done_skip;
+                }
+                if(!delimiters.count || ma_tail(delimiters) != tok.punct.punct - 1u - ((tok.punct.punct >> 6) & 1)){
+                    err = cc_error(p, tok.loc, "mismatched delimiter in %s", context);
+                    goto done_skip;
+                }
+                delimiters.count--;
                 break;
             case ',':
-                if(depth == 0 && conditional_depth == 0){
+                if(!delimiters.count && conditional_depth == 0){
                     err = cc_unget(p, &tok);
-                    if(err) return err;
                     goto done_skip;
                 }
                 break;
             case CC_question:
-                if(depth == 0) conditional_depth++;
+                if(!delimiters.count) conditional_depth++;
                 break;
             case CC_colon:
-                if(depth == 0 && conditional_depth) conditional_depth--;
+                if(!delimiters.count && conditional_depth) conditional_depth--;
                 break;
             case CC_amp:
             case CC_amp_assign:
@@ -5304,8 +5314,9 @@ cc_skip_to_next_comma_or_paren(CcParser* p, const char* context){
             break;
         }
     }
-    done_skip:;
-    return 0;
+    done_skip:
+    ma_cleanup(uint32_t)(&delimiters, cc_scratch_allocator(p));
+    return err;
 }
 static
 int
@@ -5356,6 +5367,7 @@ cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out,
     if(err) return err;
     CcExpr* result = NULL;
     Marray(CcToken) default_tokens = {0};
+    Marray(uint32_t) default_delimiters = {0};
     _Bool has_default = 0;
     for(;;){
         err = cc_peek(p, &tok);
@@ -5387,7 +5399,6 @@ cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out,
             if(err) goto done;
         }
         else if(is_default && !result){
-            int depth = 0;
             int conditional_depth = 0;
             for(;;){
                 err = cc_next_token(p, &tok);
@@ -5397,17 +5408,29 @@ cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out,
                     goto done;
                 }
                 if(tok.type == CC_PUNCTUATOR){
-                    if(depth == 0 && ((tok.punct.punct == ',' && conditional_depth == 0) || tok.punct.punct == ')')){
+                    if(!default_delimiters.count && ((tok.punct.punct == ',' && conditional_depth == 0) || tok.punct.punct == ')')){
                         err = cc_unget(p, &tok);
                         if(err) goto done;
                         break;
                     }
-                    if(depth == 0){
+                    if(!default_delimiters.count){
                         if(tok.punct.punct == '?') conditional_depth++;
                         else if(tok.punct.punct == ':' && conditional_depth) conditional_depth--;
                     }
-                    if(tok.punct.punct == '(' || tok.punct.punct == '[' || tok.punct.punct == '{') depth++;
-                    else if(tok.punct.punct == ')' || tok.punct.punct == ']' || tok.punct.punct == '}') depth--;
+                    if(tok.punct.punct == '(' || tok.punct.punct == '[' || tok.punct.punct == '{'){
+                        err = ma_push(uint32_t)(&default_delimiters, cc_scratch_allocator(p), tok.punct.punct);
+                        if(err){
+                            err = CC_OOM_ERROR;
+                            goto done;
+                        }
+                    }
+                    else if(tok.punct.punct == ')' || tok.punct.punct == ']' || tok.punct.punct == '}'){
+                        if(!default_delimiters.count || ma_tail(default_delimiters) != tok.punct.punct - 1u - ((tok.punct.punct >> 6) & 1)){
+                            err = cc_error(p, tok.loc, "mismatched delimiter in _Generic");
+                            goto done;
+                        }
+                        default_delimiters.count--;
+                    }
                 }
                 err = ma_push(CcToken)(&default_tokens, cc_allocator(p), tok);
                 if(err){
@@ -5460,6 +5483,7 @@ cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out,
     *out = result;
     done:
     if(err && result) cc_release_expr(p, result);
+    ma_cleanup(uint32_t)(&default_delimiters, cc_scratch_allocator(p));
     ma_cleanup(CcToken)(&default_tokens, cc_allocator(p));
     return err;
 }

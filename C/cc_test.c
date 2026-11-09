@@ -8119,6 +8119,36 @@ TestFunction(test_parse_errors){
         StringView target_expect[CC_TARGET_COUNT];
     } cases[] = {
         {
+            "generic deferred default rejects mismatched delimiters", __LINE__,
+            SVI("_Generic(0, default: (2\n], int: 1);"),
+            SVI("(test):2:1: error: mismatched delimiter in _Generic\n"),
+            .both_modes = 1,
+        },
+        {
+            "generic deferred default rejects unmatched closing delimiter", __LINE__,
+            SVI("_Generic(0, default: 2\n], int: 1);"),
+            SVI("(test):2:1: error: mismatched delimiter in _Generic\n"),
+            .both_modes = 1,
+        },
+        {
+            "generic skipped association rejects mismatched delimiters", __LINE__,
+            SVI("_Generic(0, int: 1, float: (2]);"),
+            SVI("(test):1:30: error: mismatched delimiter in _Generic\n"),
+            .both_modes = 1,
+        },
+        {
+            "generic skipped default rejects mismatched delimiters", __LINE__,
+            SVI("_Generic(0, int: 1, default: [2\n});"),
+            SVI("(test):2:1: error: mismatched delimiter in _Generic\n"),
+            .both_modes = 1,
+        },
+        {
+            "choose expression skipped branch rejects mismatched delimiters", __LINE__,
+            SVI("__builtin_choose_expr(1, 7, {2\n));"),
+            SVI("(test):2:1: error: mismatched delimiter in __builtin_choose_expr\n"),
+            .both_modes = 1,
+        },
+        {
             "long cannot modify a double typedef", __LINE__,
             SVI("typedef double D;\nD long x;"),
             SVI("(test):2:3: error: Second type in declaration\n"),
