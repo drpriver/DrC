@@ -4048,10 +4048,11 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                     CcExpr* cond;
                     err = cc_parse_assignment_expr(p, condition_flags, &cond, CCQT_NONE);
                     if(err) return err;
-                    err = cc_decay(p, &cond);
+                    err = cc_require_scalar(p, &cond, tok.loc, "'__builtin_choose_expr' condition");
                     if(err) return err;
                     _Bool b;
                     err = cc_eval_truthy(&(CcEvalCtx){p}, cond, &b);
+                    cc_release_expr(p, cond);
                     if(err) return err;
                     err = cc_expect_punct(p, CC_comma);
                     if(err) return err;

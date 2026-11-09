@@ -8143,6 +8143,18 @@ TestFunction(test_parse_errors){
             .both_modes = 1,
         },
         {
+            "choose expression rejects aggregate condition", __LINE__,
+            SVI("struct S {int x;};\n__builtin_choose_expr((struct S){1}, 7, 9);"),
+            SVI("(test):2:1: error: '__builtin_choose_expr' condition requires scalar type. The type is 'struct S'\n"),
+            .both_modes = 1,
+        },
+        {
+            "choose expression rejects type value condition", __LINE__,
+            SVI("__builtin_choose_expr(int, 7, 9);"),
+            SVI("(test):1:1: error: '__builtin_choose_expr' condition requires scalar type. The type is '_Type'\n"),
+            .both_modes = 1,
+        },
+        {
             "choose expression skipped branch rejects mismatched delimiters", __LINE__,
             SVI("__builtin_choose_expr(1, 7, {2\n));"),
             SVI("(test):2:1: error: mismatched delimiter in __builtin_choose_expr\n"),
