@@ -2951,7 +2951,7 @@ ci_lower_size_product(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t de
 static
 CcExpr*
 ci_unsigned_widen_operand(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t size){
-    if(e->kind != CC_EXPR_CAST 
+    if(e->kind != CC_EXPR_CAST
     || cc_expr_has_runtime_check(e)
     || !ccqt_is_integer(e->lhs->type)
     || !ccqt_is_unsigned(e->lhs->type, ctx->char_is_unsigned))
@@ -3992,6 +3992,62 @@ ci_lower_expr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, uint32_t dest
             if(err) return err;
             ci_code_ops(ctx->out)[jump].jump.jump = ci_jump_offset(jump, ci_code_count(ctx->out));
             out->canonical = 1;
+            return 0;
+        }
+        case CC_EXPR_ELVIS:{
+            _Bool truth;
+            int folded = ci_fold_condition(ci, ctx, e->lhs, &truth);
+            if(folded > 0) return folded;
+            if(folded == 0 && !truth)
+                return ci_lower_expr(ci, ctx, e->values[0], dest, out);
+            err = ci_lower_expr_dest(ci, ctx, e, &dest, size);
+            if(err) return err;
+            uint32_t temp = ctx->temp;
+            uint32_t source_size, source_alignment, source;
+            err = cc_sizeof_as_uint(p, e->lhs->type, e->loc, &source_size);
+            if(err) return err;
+            err = cc_alignof_as_uint(p, e->lhs->type, e->loc, &source_alignment);
+            if(err) return err;
+            err = ci_alloc_slot(ctx, source_size, source_alignment, &source);
+            if(err) return err;
+            CiLowerVal value;
+            err = ci_lower_expr(ci, ctx, e->lhs, source, &value);
+            if(err) return err;
+            uint32_t condition;
+            err = ci_alloc_slot(ctx, 1, 1, &condition);
+            if(err) return err;
+            err = ci_lower_istrue(ctx, &value, e->lhs->type, condition, 1, 0, e->loc);
+            if(err) return err;
+            size_t branch = ci_code_count(ctx->out);
+            err = ci_code_push(ctx->out, ctx->a, (CiOp){.jump_false={
+                .kind=CI_OP_JZ8,
+                .slot=condition,
+                .slot_size=1,
+                .loc=e->loc,
+            }});
+            if(err) return err;
+            err = ci_convert_scalar(ctx, value, e->lhs->type, e->type, dest, size, e->loc);
+            if(err) return err;
+            if(e->elvis.offset){
+                err = ci_code_push(ctx->out, ctx->a, (CiOp){.alu_imm={
+                    .kind=ctx->ptr_size == 4 ? CI_OP_ADD_IMM32 : CI_OP_ADD_IMM64,
+                    .slot=dest,
+                    .src=dest,
+                    .immediate=e->elvis.offset,
+                    .loc=e->loc,
+                }});
+                if(err) return err;
+            }
+            size_t jump = ci_code_count(ctx->out);
+            err = ci_code_push(ctx->out, ctx->a, (CiOp){.jump={.kind=CI_OP_JUMP, .loc=e->loc}});
+            if(err) return err;
+            ci_code_ops(ctx->out)[branch].jump_false.jump = ci_jump_offset(branch, ci_code_count(ctx->out));
+            ctx->temp = temp;
+            err = ci_lower_expr(ci, ctx, e->values[0], dest, &value);
+            if(err) return err;
+            ci_code_ops(ctx->out)[jump].jump.jump = ci_jump_offset(jump, ci_code_count(ctx->out));
+            ctx->temp = temp;
+            *out = (CiLowerVal){.slot=dest, .size=size};
             return 0;
         }
         case CC_EXPR_TERNARY:{
@@ -7607,6 +7663,7 @@ ci_expr_discardable(CiLowerCtx* ctx, CcExpr* e, _Bool* safe){
         case CC_EXPR_RSHIFT: case CC_EXPR_EQ: case CC_EXPR_NE:
         case CC_EXPR_LT: case CC_EXPR_LE: case CC_EXPR_GT: case CC_EXPR_GE:
         case CC_EXPR_LOGAND: case CC_EXPR_LOGOR: case CC_EXPR_COMMA:
+        case CC_EXPR_ELVIS:
         case CC_EXPR_SUBSCRIPT:
             children[count++] = e->lhs;
             children[count++] = e->values[0];
@@ -7905,6 +7962,17 @@ ci_lower_expr_discard(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e){
         case CC_EXPR_RSHIFTASSIGN:{
             return ci_lower_compound(ci, ctx, e, CI_NO_SLOT, NULL);
         }
+        case CC_EXPR_ELVIS:{
+            uint32_t temp = ctx->temp;
+            uint32_t chain = 0;
+            err = ci_lower_branch(ci, ctx, e->lhs, 1, e->loc, &chain);
+            if(err) return err;
+            ctx->temp = temp;
+            err = ci_lower_expr_discard(ci, ctx, e->values[0]);
+            if(err) return err;
+            ci_patch_branches(ctx, chain, (uint32_t)ci_code_count(ctx->out));
+            return 0;
+        }
         case CC_EXPR_TERNARY:{
             _Bool yes, no;
             err = ci_expr_discardable(ctx, e->values[0], &yes);
@@ -8124,6 +8192,16 @@ ci_pointer_alignment(CiInterpreter* ci, CiLowerCtx* ctx, const CcExpr* e, uint32
                 if(err) return err;
             }
             break;
+        }
+        case CC_EXPR_ELVIS:{
+            uint32_t other;
+            int err = ci_pointer_alignment(ci, ctx, e->lhs, out);
+            if(err) return err;
+            *out = cc_offset_alignment(*out, e->elvis.offset);
+            err = ci_pointer_alignment(ci, ctx, e->values[0], &other);
+            if(err) return err;
+            if(other < *out) *out = other;
+            return 0;
         }
         case CC_EXPR_TERNARY:{
             uint32_t other;
@@ -10256,6 +10334,15 @@ ci_static_address(CiInterpreter* ci, CcExpr* e, _Bool lvalue, CiStaticReloc* out
             out->addend += e->kind == CC_EXPR_SUB? -delta : delta;
             return 0;
         }
+        case CC_EXPR_ELVIS:{
+            _Bool truth;
+            err = ci_static_truth(ci, e->lhs, &truth, runtime_ctx);
+            if(err) return err;
+            err = ci_static_address(ci, truth ? e->lhs : e->values[0], lvalue, out, runtime_ctx);
+            if(err) return err;
+            if(truth) out->addend += e->elvis.offset;
+            return err;
+        }
         case CC_EXPR_TERNARY:{
             _Bool truth;
             err = ci_static_truth(ci, e->lhs, &truth, runtime_ctx);
@@ -11582,6 +11669,17 @@ ci_fold_expr_uncached(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiFoldValue
             memcpy(result.bits, l.bits, sz);
             *folded = result;
             return 0;
+        case CC_EXPR_ELVIS:{
+            err = ci_fold_condition(ci, ctx, e->lhs, &truth);
+            if(err) return err;
+            if(!truth) return ci_fold_operand(ci, ctx, e->values[0], folded);
+            CcExpr cast = {.kind=CC_EXPR_CAST, .type=e->type, .loc=e->loc, .lhs=e->lhs};
+            err = ci_fold_expr_uncached(ci, ctx, &cast, folded);
+            if(err) return err;
+            if(e->elvis.offset)
+                ci_write_uint(folded->bits, folded->sz, ci_read_uint(folded->bits, folded->sz) + e->elvis.offset);
+            return err;
+        }
         case CC_EXPR_COMMA:
         case CC_EXPR_TERNARY:
         case CC_EXPR_LOGAND:

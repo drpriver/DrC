@@ -91,6 +91,7 @@ enum CcExprKind TYPED_ENUM(uint32_t){
     CC_EXPR_LSHIFTASSIGN,
     CC_EXPR_RSHIFTASSIGN,
     CC_EXPR_TERNARY,
+    CC_EXPR_ELVIS,
     CC_EXPR_CAST,
     CC_EXPR_CALL,
     CC_EXPR_SUBSCRIPT,
@@ -506,6 +507,7 @@ struct CcExpr {
     union {
         unsigned char data[16];
         struct { CcExpr* lhs; CcQualType type; } compound; // arithmetic type before storing
+        struct { CcExpr* lhs; uint64_t offset; } elvis; // Kludge: for plan9 pointer adjustment
         struct { CcExpr* lhs; struct CcModule* module; } compile;
         ByteView blob;
         struct {

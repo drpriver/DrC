@@ -880,6 +880,13 @@ cc_print_expr(MStringBuilder*sb, CcExpr* e){
             cc_print_expr(sb, e->values[1]);
             msb_write_char(sb, ')');
             return;
+        case CC_EXPR_ELVIS:
+            msb_write_char(sb, '(');
+            cc_print_expr(sb, e->lhs);
+            msb_write_literal(sb, " ?: ");
+            cc_print_expr(sb, e->values[0]);
+            msb_write_char(sb, ')');
+            return;
         case CC_EXPR_CAST:
             msb_write_char(sb, '(');
             cc_print_type(sb, e->type);

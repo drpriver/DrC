@@ -6991,6 +6991,119 @@ TestFunction(test_interpreter){
         },
         // Ternary
         {
+            "elvis: operand is evaluated once on each loop iteration", __LINE__,
+            SVI("int f(void){int x=0,sum=0,misses=0;"
+                "for(int i=0;i<4;i++)sum+=(x++ ?: (++misses,10));"
+                "int size=sizeof(x++ ?: 2.5);"
+                "return sum==16 && x==4 && misses==1 && size==sizeof(double);}"
+                "return f() && f();"),
+            .exit_code = 1,
+        },
+        {
+            "elvis: cloned pointer conversions retain their saved operand", __LINE__,
+            SVI("struct B{int x;}; struct D{long pad; struct B;};"
+                "struct D d={11,42}; struct B b={7}; int calls;"
+                "struct D *next(void){return ++calls==1?&d:0;}"
+                "int f(struct B *p=next() ?: &b){return p->x;}"
+                "return f()==42 && calls==1 && f()==7 && calls==2;"),
+            .exit_code = 1,
+        },
+        {
+            "elvis: converted constant object representation", __LINE__,
+            SVI("constexpr union U{double d; unsigned long long bits;} u={.d=3LL ?: 2.5};"
+                "static_assert(u.bits==0x4008000000000000ULL); return 1;"),
+            .exit_code = 1,
+        },
+        {
+            "elvis: nested pointer conversion agrees with ordinary conversion", __LINE__,
+            SVI("struct B{int x;}; struct M{long pad; struct B;};"
+                "struct D{long pad2; struct M;};"
+                "static struct D d={.x=42}; static struct B b={7};"
+                "static struct B *ordinary=&d; static struct B *selected=&d ?: &b;"
+                "int calls; struct D *once(int yes){++calls; return yes?&d:0;}"
+                "struct B *f(int yes){return once(yes) ?: &b;}"
+                "return f(1)==ordinary && calls==1 && f(0)==&b && calls==2"
+                " && selected==ordinary && selected->x==42;"),
+            .exit_code = 1,
+        },
+        {
+            "elvis: nested saved values and cloned default arguments", __LINE__,
+            SVI("int calls; int next(void){return ++calls;}"
+                "double f(double x=(next() ?: 2.5) ?: 4.5){return x;}"
+                "int g(int x,int y){int n=0; double r=(x++ ?: y++) ?: ++n;"
+                "return r==(x>1?x-1:y>1?y-1:1) && n==(x==1 && y==1);}"
+                "return f()==1 && f()==2 && calls==2 && g(0,0) && g(0,3) && g(2,0);"),
+            .exit_code = 1,
+        },
+        {
+            "elvis: pointer base conversion follows the truth test", __LINE__,
+            SVI("struct B{int x;}; struct D{long prefix; struct B;};"
+                "static struct D d={11,42}; static struct B b={7};"
+                "static struct B *s=&d ?: &b;"
+                "struct B *f(struct D *p){return p ?: &b;}"
+                "return f(0)==&b && f(&d)==s && s->x==42;"),
+            .exit_code = 1,
+        },
+        {
+            "elvis: null constant with runtime pointer fallback", __LINE__,
+            SVI("int *f(int *p){return 0 ?: p;} int x=4; return f(&x)==&x;"),
+            .exit_code = 1,
+        },
+        {
+            "elvis: calls volatile reads and assignment aliasing", __LINE__,
+            SVI("int calls; int first(int x){++calls; return x;}"
+                "int f(int x){volatile int v=x; int y=first(v) ?: (v=9);"
+                "if(calls!=1 || y!=(x?x:9))return 0;"
+                "x=first(x) ?: 7; return x==(y==9?7:y);}"
+                "int a=f(0); calls=0; return a && f(3);"),
+            .exit_code = 1,
+        },
+        {
+            "elvis: decay promotions and unsigned result", __LINE__,
+            SVI("int f(void){return 4;} int (*g(int (*p)(void)))(void){return p ?: f;}"
+                "unsigned h(int x){return x ?: 2u;}"
+                "char a[2]={3,0}; unsigned char c=5;"
+                "return (a ?: 0)==a && g(0)()==4 && g(f)()==4"
+                " && h(-1)==(unsigned)-1 && sizeof(c ?: c)==sizeof(int);"),
+            .exit_code = 1,
+        },
+        {
+            "elvis: static converted values and unselected expressions", __LINE__,
+            SVI("static double a=3 ?: 2.5; constexpr double b=0 ?: 2.5;"
+                "static_assert((4 ?: (1/0))==4);"
+                "static_assert((0 ?: 5 ?: 6)==5);"
+                "return a==3 && b==2.5;"),
+            .exit_code = 1,
+        },
+        {
+            "elvis: evaluate once and short circuit", __LINE__,
+            SVI("int f(int x){int n=0; int y=x++ ? : ++n;"
+                "return y==(x==1?1:x-1) && n==(x==1) && x>0;}"
+                "return f(0) && f(7);"),
+            .exit_code = 1,
+        },
+        {
+            "elvis: discarded result and nesting", __LINE__,
+            SVI("int f(int x){int n=0; x++ ?: ++n; return x*10+n;}"
+                "return f(0)==11 && f(2)==30 && (0 ?: 0 ?: 8)==8;"),
+            .exit_code = 1,
+        },
+        {
+            "elvis: arithmetic conversions and floating truth", __LINE__,
+            SVI("double f(double x){return x ?: 9;}"
+                "double g(int x){return x ?: 2.5;}"
+                "return f(-0.0)==9 && f(0.5)==0.5 && g(3)==3 && g(0)==2.5;"),
+            .exit_code = 1,
+        },
+        {
+            "elvis: pointers and constant expressions", __LINE__,
+            SVI("static int a=4; static int *p=&a ?: 0;"
+                "constexpr int n=0 ?: 6; static_assert((3 ?: 9)==3);"
+                "int *f(int *x){return x ?: &a;}"
+                "return n==6 && p==&a && f(0)==&a && f(&a)==&a;"),
+            .exit_code = 1,
+        },
+        {
             "ternary: true", __LINE__,
             SVI("return 1 ? 10 : 20;\n"),
             .exit_code = 10,

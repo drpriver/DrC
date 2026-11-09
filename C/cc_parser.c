@@ -724,17 +724,13 @@ cc_array_pointer_type(CcParser* p, const CcExpr* e, CcQualType* out){
 
 static
 int
-cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _Nonnull out){
+cc_check_implicit_cast(CcParser* p, CcExpr* e, CcQualType target){
     int err = cc_check_atomic_object_access(p, e, e->loc);
     if(err) return err;
-    if(ccqt_bt_eq(target, CCBT_void)){
-        *out = e;
+    if(ccqt_bt_eq(target, CCBT_void))
         return 0;
-    }
-    if(e->type.bits == target.bits && cc_is_value_operand_type(e->type)){
-        *out = e;
+    if(e->type.bits == target.bits && cc_is_value_operand_type(e->type))
         return 0;
-    }
     _Bool is_null_pointer_constant = 0;
     if(ccqt_kind(target) == CC_POINTER
            || ccqt_bt_eq(target, CCBT_nullptr_t)
@@ -759,6 +755,18 @@ cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _
         cc_print_type(sb, target);
         msb_write_char(sb, '\'');
         return cc_finish_error(p, e->loc);
+    }
+    return 0;
+}
+
+static
+int
+cc_implicit_cast(CcParser* p, CcExpr* e, CcQualType target, CcExpr* _Nullable* _Nonnull out){
+    int err = cc_check_implicit_cast(p, e, target);
+    if(err) return err;
+    if(ccqt_bt_eq(target, CCBT_void) || (e->type.bits == target.bits && cc_is_value_operand_type(e->type))){
+        *out = e;
+        return 0;
     }
     if(ccqt_kind(target) == CC_SLICE && ccqt_kind(e->type) == CC_ARRAY && (e->kind == CC_EXPR_VALUE || e->kind == CC_EXPR_BLOB) && cc_expr_array_data(e) && cc_expr_array_count(e)){
         CcQualType pointer;
@@ -2072,6 +2080,16 @@ cc_pointer_alignment(CcParser* p, const CcExpr* e, uint32_t* out){
             }
             break;
         }
+        case CC_EXPR_ELVIS:{
+            uint32_t other;
+            int err = cc_pointer_alignment(p, e->lhs, out);
+            if(err) return err;
+            *out = cc_offset_alignment(*out, e->elvis.offset);
+            err = cc_pointer_alignment(p, e->values[0], &other);
+            if(err) return err;
+            if(other < *out) *out = other;
+            return 0;
+        }
         case CC_EXPR_TERNARY:{
             uint32_t other;
             int err = cc_pointer_alignment(p, e->values[0], out);
@@ -2459,10 +2477,18 @@ cc_parse_ternary_tail(CcParser* p, CcParseFlags flags, CcExpr* cond, CcExpr* _Nu
         err = cc_require_scalar(p, &cond, tok.loc, "'?:'");
         if(err) return err;
         CcExpr* then_expr;
-        err = cc_parse_expr(p, flags, &then_expr, expected);
+        CcToken next;
+        err = cc_next_token(p, &next);
         if(err) return err;
-        err = cc_expect_punct(p, CC_colon);
-        if(err) return err;
+        _Bool elvis = next.type == CC_PUNCTUATOR && next.punct.punct == CC_colon;
+        if(elvis) then_expr = cond;
+        else {
+            cc_unget(p, &next);
+            err = cc_parse_expr(p, flags, &then_expr, expected);
+            if(err) return err;
+            err = cc_expect_punct(p, CC_colon);
+            if(err) return err;
+        }
         CcExpr* else_expr;
         err = cc_parse_ternary_expr(p, flags, &else_expr, expected);
         if(err) return err;
@@ -2570,6 +2596,30 @@ cc_parse_ternary_tail(CcParser* p, CcParseFlags flags, CcExpr* cond, CcExpr* _Nu
             if(err) return err;
         }
         common = (CcQualType){.unqual=common.unqual};
+        if(elvis){
+            err = cc_check_implicit_cast(p, cond, common);
+            if(err) return err;
+            err = cc_implicit_cast(p, else_expr, common, &else_expr);
+            if(err) return err;
+            CcExpr* node = cc_make_expr(p, CC_EXPR_ELVIS, tok.loc, common, 1);
+            if(!node) return CC_OOM_ERROR;
+            node->lhs = cond;
+            node->values[0] = else_expr;
+            if(ccqt_kind(cond->type) == CC_POINTER && ccqt_kind(common) == CC_POINTER){
+                CcQualType from = ccqt_as_ptr(cond->type)->pointee;
+                CcQualType to = ccqt_as_ptr(common)->pointee;
+                if(!cc_types_compatible_ignoring_cv(from, to) && cc_plan9_base(from, to)){
+                    CcFieldPath path;
+                    err = cc_base_path(p, from, to, &path);
+                    if(err) return err;
+                    err = cc_field_path_offset(cc_target(p), from, path, &node->elvis.offset);
+                    cc_field_path_free(cc_allocator(p), path);
+                    if(err) return err;
+                }
+            }
+            *out = node;
+            return 0;
+        }
         err = cc_implicit_cast(p, then_expr, common, &then_expr);
         if(err) return err;
         err = cc_implicit_cast(p, else_expr, common, &else_expr);
@@ -2866,6 +2916,7 @@ cc_parse_infix(CcParser* p, CcParseFlags flags, CcExpr* left, int min_prec, CcEx
             case CC_EXPR_LSHIFTASSIGN:
             case CC_EXPR_RSHIFTASSIGN:
             case CC_EXPR_TERNARY:
+            case CC_EXPR_ELVIS:
             case CC_EXPR_CAST:
             case CC_EXPR_CALL:
             case CC_EXPR_SUBSCRIPT:
@@ -3380,6 +3431,7 @@ cc_parse_prefix_inner(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnu
                 case CC_EXPR_LSHIFTASSIGN:
                 case CC_EXPR_RSHIFTASSIGN:
                 case CC_EXPR_TERNARY:
+                case CC_EXPR_ELVIS:
                 case CC_EXPR_CAST:
                 case CC_EXPR_CALL:
                 case CC_EXPR_SUBSCRIPT:
@@ -8740,6 +8792,7 @@ cc_expr_nvalues(CcExpr* e){
         case CC_EXPR_LSHIFTASSIGN:
         case CC_EXPR_RSHIFTASSIGN:
         case CC_EXPR_COMMA:
+        case CC_EXPR_ELVIS:
         case CC_EXPR_SUBSCRIPT:
         case CC_EXPR_DOT:
         case CC_EXPR_ARROW:
@@ -8941,6 +8994,7 @@ cc_release_expr(CcParser* p, CcExpr* e){
         case CC_EXPR_COMPILE:
         case CC_EXPR_MODULE_REFLECT:
         case CC_EXPR_TERNARY:
+        case CC_EXPR_ELVIS:
         case CC_EXPR_TYPE_INTROSPECTION:
         case CC_EXPR_UMUL128:
         case CC_EXPR_VA:
@@ -18740,6 +18794,16 @@ cc_eval_object_source(CcEvalCtx* ctx, CcExpr* e, unsigned depth, CcExpr*_Nonnull
         else if(e->kind == CC_EXPR_OBJECT_VIEW
             || (e->kind == CC_EXPR_CAST && cc_conversion_preserves_representation(e->lhs->type, e->type)))
             e = e->lhs;
+        else if(e->kind == CC_EXPR_ELVIS){
+            _Bool truth;
+            int err = cc_eval_truthy(ctx, e->lhs, &truth);
+            if(err) return err;
+            if(truth){
+                *out = e;
+                return 0;
+            }
+            e = e->values[0];
+        }
         else if(e->kind == CC_EXPR_TERNARY){
             _Bool truth;
             int err = cc_eval_truthy(ctx, e->lhs, &truth);
@@ -19068,6 +19132,15 @@ cc_eval_address(CcEvalCtx* ctx, CcExpr* e, _Bool lvalue, unsigned depth, CcEvalA
             if(e->kind == CC_EXPR_ADD)
                 return add_overflow(out->offset, offset, &out->offset) ? CC_OVERFLOW_ERROR : 0;
             return sub_overflow(out->offset, offset, &out->offset) ? CC_OVERFLOW_ERROR : 0;
+        }
+        case CC_EXPR_ELVIS:{
+            _Bool truth;
+            err = cc_eval_truthy(ctx, e->lhs, &truth);
+            if(err) return err;
+            err = cc_eval_address(ctx, truth ? e->lhs : e->values[0], lvalue, depth + 1, out);
+            if(err) return err;
+            if(!truth) return 0;
+            return add_overflow(out->offset, (int64_t)e->elvis.offset, &out->offset) ? CC_OVERFLOW_ERROR : 0;
         }
         case CC_EXPR_TERNARY:{
             _Bool truth;
@@ -19694,12 +19767,17 @@ cc_check_linktime_expr_inner(CcParser* p, CcExpr* e, _Bool address, _Bool select
             CcEvalAddress data;
             return cc_eval_slice(&ctx, e, depth, &count, &data);
         }
-        case CC_EXPR_LOGAND: case CC_EXPR_LOGOR: case CC_EXPR_TERNARY: {
+        case CC_EXPR_LOGAND:
+        case CC_EXPR_LOGOR:
+        case CC_EXPR_TERNARY:
+        case CC_EXPR_ELVIS: {
             err = cc_check_linktime_expr(p, e->lhs, 0, depth + 1);
             if(err) return err;
             _Bool truth;
             err = cc_eval_truthy(&ctx, e->lhs, &truth);
             if(err) return err;
+            if(e->kind == CC_EXPR_ELVIS)
+                return cc_check_linktime_expr_inner(p, truth ? e->lhs : e->values[0], address, selected, depth + 1);
             if(e->kind == CC_EXPR_TERNARY)
                 return cc_check_linktime_expr_inner(p, e->values[truth ? 0 : 1], address, selected, depth + 1);
             if((e->kind == CC_EXPR_LOGAND && !truth) || (e->kind == CC_EXPR_LOGOR && truth))
@@ -21418,6 +21496,17 @@ cc_eval_expr_inner(CcEvalCtx* ctx, CcExpr* e, CcExpr*_Nullable*_Nonnull result){
             int err = cc_eval_comma_source(ctx, e, 0, &source);
             if(err) return err;
             return cc_eval_expr(ctx, source, result);
+        }
+        case CC_EXPR_ELVIS: {
+            _Bool truth;
+            int err = cc_eval_truthy(ctx, e->lhs, &truth);
+            if(err) return err;
+            if(!truth) return cc_eval_expr(ctx, e->values[0], result);
+            CcExpr cast = {.kind=CC_EXPR_CAST, .type=e->type, .loc=e->loc, .lhs=e->lhs};
+            err = cc_eval_expr(ctx, &cast, result);
+            if(err) return err;
+            if(e->elvis.offset) (*result)->uinteger += e->elvis.offset;
+            return 0;
         }
         case CC_EXPR_TERNARY: {
             _Bool truthy;

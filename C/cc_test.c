@@ -2683,6 +2683,13 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "elvis separated tokens and printing", __LINE__,
+            SVI("int a = 1 ? /* omitted */ : 3;\n"),
+            .vars = {
+                { SVI("a"), SVI("int"), SVI("(1 ?: 3)") },
+            },
+        },
+        {
             "ternary pointer", __LINE__,
             SVI("int* p;\n"
                "int* q;\n"
@@ -8114,6 +8121,15 @@ TestFunction(test_parse_errors){
             SVI("(test):3:13: error: cannot implicitly convert from 'struct P *' to 'struct B *'\n"),
         },
         {
+            "elvis base conversion reduces atomic pointer alignment", __LINE__,
+            SVI("struct B{int x[4];};\n"
+                "struct D{alignas(16) long pad; struct B;};\n"
+                "alignas(16) struct B b;\n"
+                "void f(struct D *p){struct B out;\n"
+                "__atomic_load(p ?: &b,&out,0);}\n"),
+            SVI("(test):5:1: error: underaligned atomic access requires 16-byte alignment\n"),
+        },
+        {
             "nested pointers cannot weaken writable pointee alignment", __LINE__,
             SVI("typedef int Low __attribute__((aligned(1))); int** p;\nLow** q=p;\n"),
             SVI("(test):2:9: error: cannot implicitly convert from 'int * *' to 'int __attribute__((aligned(1))) * *'\n"),
@@ -12797,6 +12813,16 @@ TestFunction(test_parse_errors){
             "ternary struct condition", __LINE__,
             SVI("struct S{int x;}; struct S s; int x = s ? 1 : 0;\n"),
             SVI("(test):1:41: error: '?:' requires scalar type. The type is 'struct S'\n"),
+        },
+        {
+            "elvis struct condition", __LINE__,
+            SVI("struct S{int x;}; struct S s; int x = s ?: 0;\n"),
+            SVI("(test):1:41: error: '?:' requires scalar type. The type is 'struct S'\n"),
+        },
+        {
+            "elvis constant condition still checks fallback conversion", __LINE__,
+            SVI("int *p=(int*)1 ?:\n(float*)1;\n"),
+            SVI("(test):2:1: error: cannot implicitly convert from 'float *' to 'int *'\n"),
         },
         {
             "void func assigned to int", __LINE__,

@@ -242,6 +242,7 @@ cc_expr_kind_to_operator(CcExprKind kind){
     case CC_EXPR_LSHIFTASSIGN: return "<<=";
     case CC_EXPR_RSHIFTASSIGN: return ">>=";
     case CC_EXPR_TERNARY:      return "?:";
+    case CC_EXPR_ELVIS:        return "?:";
     case CC_EXPR_CALL:         return "()";
     case CC_EXPR_SUBSCRIPT:    return "[]";
     case CC_EXPR_DOT:          return ".";
