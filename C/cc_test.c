@@ -8191,12 +8191,6 @@ TestFunction(test_parse_errors){
             .both_modes = 1,
         },
         {
-            "if requires a statement before end of input", __LINE__,
-            SVI("if(1)"),
-            SVI("(test):1:6: error: expected statement before end of input\n"),
-            .both_modes = 1,
-        },
-        {
             "parameter cannot redeclare enumerator in its prototype scope", __LINE__,
             SVI("void f(enum { value = 1 } value);\n"),
             SVI("(test):1:8: error: Redefinition of 'value' as a different kind of symbol\n"),

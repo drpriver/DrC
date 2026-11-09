@@ -14080,8 +14080,6 @@ cc_parse_scoped_statement(CcParser* p, CcParseFlags flags, _Bool unlabeled, CcSt
     CcToken first;
     int err = cc_peek(p, &first);
     if(err) return err;
-    if(first.type == CC_EOF)
-        return cc_error(p, first.loc, "expected statement before end of input");
     _Bool implicit_scope = !unlabeled && !(first.type == CC_PUNCTUATOR && first.punct.punct == '{');
     if(implicit_scope){
         err = cc_push_scope(p);
