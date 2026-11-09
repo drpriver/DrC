@@ -140,6 +140,13 @@ TestFunction(test_parse_decls){
         StringView next_input;
     } testcases[] = {
         {
+            "long double keyword order and qualifiers", __LINE__,
+            SVI("long double a; double long b; double const long c;"
+                "static_assert(typeof(a)==typeof(b));"
+                "static_assert(typeof(c)==typeof(const long double));"),
+            .both_modes = 1,
+        },
+        {
             "generic skipped association retains conditional middle commas", __LINE__,
             SVI("static_assert(_Generic(0, float: 1 ? 2, 3 : 4, int: 7)==7);"
                 "static_assert(_Generic(0, int: 7, default: 1 ? 2, 3 : 4)==7);"
@@ -8111,6 +8118,18 @@ TestFunction(test_parse_errors){
         _Bool both_modes;
         StringView target_expect[CC_TARGET_COUNT];
     } cases[] = {
+        {
+            "long cannot modify a double typedef", __LINE__,
+            SVI("typedef double D;\nD long x;"),
+            SVI("(test):2:3: error: Second type in declaration\n"),
+            .both_modes = 1,
+        },
+        {
+            "long cannot modify typeof double", __LINE__,
+            SVI("typeof(double) long x;"),
+            SVI("(test):1:16: error: Second type in declaration\n"),
+            .both_modes = 1,
+        },
         {
             "alignof rejects a bitfield member", __LINE__,
             SVI("struct S { unsigned bits:3; } s;\nalignof(s.bits);"),

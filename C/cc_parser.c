@@ -13150,6 +13150,7 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
     constexpr_flags.unevaluated = 1;
     CcSpecifier* spec = &base->spec;
     CcQualType* base_type = &base->type;
+    _Bool saw_double_keyword = 0;
     if(base_type->bits) return cc_unreachable(p, base->loc, "parsing decl specifier with base type set");
     if(spec->bits) return cc_unreachable(p, base->loc, "parsing decl specifier with spec set");
     int err = 0;
@@ -13199,7 +13200,7 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                         spec->sp_int = 1;
                         continue;
                     case CC_long:
-                        if(base_type->bits && !ccqt_bt_eq(*base_type, CCBT_double))
+                        if(base_type->bits && !saw_double_keyword)
                             return cc_error(p, tok.loc, "Second type in declaration");
                         if(ccqt_bt_eq(*base_type, CCBT_double) && spec->sp_long)
                             return cc_error(p, tok.loc, "long long double in declaration");
@@ -13356,6 +13357,7 @@ cc_parse_declaration_specifier(CcParser* p, CcParseFlags flags, CcDeclBase* base
                                 return cc_error(p, tok.loc, "double with other types");
                         }
                         *base_type = ccqt_basic(CCBT_double);
+                        saw_double_keyword = 1;
                         continue;
                     case CC_extern:
                         if(spec->sp_extern)
