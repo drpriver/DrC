@@ -5232,6 +5232,7 @@ int
 cc_skip_to_next_comma_or_paren(CcParser* p, const char* context){
     int err;
     int depth = 0;
+    int conditional_depth = 0;
     CcToken tok;
     for(;;){
         err = cc_next_token(p, &tok);
@@ -5250,11 +5251,17 @@ cc_skip_to_next_comma_or_paren(CcParser* p, const char* context){
                 depth--;
                 break;
             case ',':
-                if(depth == 0){
+                if(depth == 0 && conditional_depth == 0){
                     err = cc_unget(p, &tok);
                     if(err) return err;
                     goto done_skip;
                 }
+                break;
+            case CC_question:
+                if(depth == 0) conditional_depth++;
+                break;
+            case CC_colon:
+                if(depth == 0 && conditional_depth) conditional_depth--;
                 break;
             case CC_amp:
             case CC_amp_assign:
@@ -5262,7 +5269,6 @@ cc_skip_to_next_comma_or_paren(CcParser* p, const char* context){
             case CC_arrow:
             case CC_assign:
             case CC_bang:
-            case CC_colon:
             case CC_dot:
             case CC_double_colon:
             case CC_ellipsis:
@@ -5285,7 +5291,6 @@ cc_skip_to_next_comma_or_paren(CcParser* p, const char* context){
             case CC_plus:
             case CC_plus_assign:
             case CC_plusplus:
-            case CC_question:
             case CC_rshift:
             case CC_rshift_assign:
             case CC_semi:
@@ -5383,6 +5388,7 @@ cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out,
         }
         else if(is_default && !result){
             int depth = 0;
+            int conditional_depth = 0;
             for(;;){
                 err = cc_next_token(p, &tok);
                 if(err) goto done;
@@ -5391,10 +5397,14 @@ cc_parse_Generic(CcParser* p, CcParseFlags flags, CcExpr*_Nullable*_Nonnull out,
                     goto done;
                 }
                 if(tok.type == CC_PUNCTUATOR){
-                    if(depth == 0 && (tok.punct.punct == ',' || tok.punct.punct == ')')){
+                    if(depth == 0 && ((tok.punct.punct == ',' && conditional_depth == 0) || tok.punct.punct == ')')){
                         err = cc_unget(p, &tok);
                         if(err) goto done;
                         break;
+                    }
+                    if(depth == 0){
+                        if(tok.punct.punct == '?') conditional_depth++;
+                        else if(tok.punct.punct == ':' && conditional_depth) conditional_depth--;
                     }
                     if(tok.punct.punct == '(' || tok.punct.punct == '[' || tok.punct.punct == '{') depth++;
                     else if(tok.punct.punct == ')' || tok.punct.punct == ']' || tok.punct.punct == '}') depth--;

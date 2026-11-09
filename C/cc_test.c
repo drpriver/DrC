@@ -140,6 +140,25 @@ TestFunction(test_parse_decls){
         StringView next_input;
     } testcases[] = {
         {
+            "generic skipped association retains conditional middle commas", __LINE__,
+            SVI("static_assert(_Generic(0, float: 1 ? 2, 3 : 4, int: 7)==7);"
+                "static_assert(_Generic(0, int: 7, default: 1 ? 2, 3 : 4)==7);"
+                "static_assert(_Generic(0, float: 1 ? 0 ? 2, 3 : 4, 5 : 6, int: 7)==7);"),
+            .both_modes = 1,
+        },
+        {
+            "generic deferred default retains conditional middle commas", __LINE__,
+            SVI("static_assert(_Generic(0, default: 1 ? 2, 3 : 4, float: 7)==3);"
+                "static_assert(_Generic(0, default: 1 ? 2, 3 : 4, int: 7)==7);"),
+            .both_modes = 1,
+        },
+        {
+            "choose expression skipped operand retains conditional middle commas", __LINE__,
+            SVI("static_assert(__builtin_choose_expr(1, 7, 1 ? 2, 3 : 4)==7);"
+                "static_assert(__builtin_choose_expr(0, 1 ? 2, 3 : 4, 7)==7);"),
+            .both_modes = 1,
+        },
+        {
             "type query operands retain postfix after a type value expression", __LINE__,
             SVI("int a[2][3];"
                 "static_assert(sizeof(int, a)[0]==sizeof(a[0]));"
