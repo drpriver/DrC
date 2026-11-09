@@ -5076,6 +5076,8 @@ cc_parse_primary(CcParser* p, CcParseFlags flags, CcExpr* _Nullable* _Nonnull ou
                 err = cc_parse_type_or_unary_operand(p, alignof_flags, tok.loc, &type, &operand);
                 if(err) return err;
                 if(!operand) return cc_alignof_as_expr(p, type, tok.loc, out);
+                if(cc_expr_field_bit_width(operand))
+                    return cc_error(p, tok.loc, "alignof applied to bitfield");
                 uint32_t alignment;
                 err = cc_expr_alignment(p, operand, &alignment);
                 if(err) return err;

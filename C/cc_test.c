@@ -171,6 +171,14 @@ TestFunction(test_parse_decls){
             .both_modes = 1,
         },
         {
+            "alignof accepts ordinary members and bitfield assignment results", __LINE__,
+            SVI("struct S { unsigned bits:3; unsigned value; } s;"
+                "static_assert(alignof(s.value)==alignof(unsigned));"
+                "static_assert(alignof(s.bits=1)==alignof(unsigned));"
+                "static_assert(alignof(s.bits+=1)==alignof(unsigned));"),
+            .both_modes = 1,
+        },
+        {
             "offsetof subscript accepts a full comma expression", __LINE__,
             SVI("struct S { int a[3]; };"
                 "static_assert(__builtin_offsetof(struct S,a[(0,2)])==2*sizeof(int));"
@@ -8076,6 +8084,18 @@ TestFunction(test_parse_errors){
         _Bool both_modes;
         StringView target_expect[CC_TARGET_COUNT];
     } cases[] = {
+        {
+            "alignof rejects a bitfield member", __LINE__,
+            SVI("struct S { unsigned bits:3; } s;\nalignof(s.bits);"),
+            SVI("(test):2:1: error: alignof applied to bitfield\n"),
+            .both_modes = 1,
+        },
+        {
+            "alignof rejects a bitfield through a pointer", __LINE__,
+            SVI("struct S { unsigned bits:3; } *s;\nalignof(s->bits);"),
+            SVI("(test):2:1: error: alignof applied to bitfield\n"),
+            .both_modes = 1,
+        },
         {
             "prototype enum does not leak out of parameter list", __LINE__,
             SVI("int f(enum { width = 3 } value);\nint array[width];"),
