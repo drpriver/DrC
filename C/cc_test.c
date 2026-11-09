@@ -140,6 +140,14 @@ TestFunction(test_parse_decls){
         StringView next_input;
     } testcases[] = {
         {
+            "type query operands retain postfix after a type value expression", __LINE__,
+            SVI("int a[2][3];"
+                "static_assert(sizeof(int, a)[0]==sizeof(a[0]));"
+                "static_assert(alignof(int, a)[0]==alignof(a[0]));"
+                "static_assert(_Countof(int, a)[0]==3);"),
+            .both_modes = 1,
+        },
+        {
             "array bound can be completed in a later input batch", __LINE__,
             SVI("int x[];"),
             .next_input = SVI("int x[3];"),

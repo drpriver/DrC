@@ -3021,7 +3021,9 @@ cc_parse_type_operand_tail(CcParser* p, CcParseFlags flags, CcQualType type,
         if(err) return err;
     }
     err = cc_expect_punct(p, CC_rparen);
-    if(err || *out) return err;
+    if(err) return err;
+    CcExpr* expression = *out;
+    if(expression) return cc_parse_postfix(p, flags, expression, out);
     err = cc_peek(p, &tok);
     if(err) return err;
     if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lbrace){
