@@ -214,6 +214,7 @@ struct CppPreprocessor {
     const CcTargetConfig* target;
     SrcLoc eof_loc; // location of EOF in the base file
     uint32_t base_file_id;
+    uint64_t macro_name_filter[1024];
 };
 
 static

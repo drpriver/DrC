@@ -596,6 +596,8 @@ TestFunction(test_obj_macros){
         {"identical obj redef", SVI("#define X 42\n#define X 42\nX"), SVI("\n\n42"), __LINE__},
         {"standalone trailing backslash", SVI(" \\"), SVI(" \\"), __LINE__},
         {"backslash after identifier at eof", SVI("word\\"), SVI("word\\"), __LINE__},
+        {"trailing backslash after continuations", SVI("\\\n\\\r\n\\"), SVI("\\"), __LINE__},
+        {"non-splicing backslash after continuations", SVI("\\\n\\\r\n\\x"), SVI("\\x"), __LINE__},
     };
     static int idx = 0;
     for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
@@ -1010,6 +1012,20 @@ TestFunction(test_builtin_macros){
         {"line after leading continuation", SVI("\\\n__LINE__"), SVI("2"), __LINE__, 0},
         {"line after leading CRLF continuation", SVI("\\\r\n__LINE__"), SVI("2"), __LINE__, 0},
         {"line after continuation at line start", SVI("\n\\\n__LINE__"), SVI("\n3"), __LINE__, 0},
+        {"position after spliced identifier", SVI("ab\\\ncd\\\r\nef __COLUMN__ __LINE__"), SVI("abcdef 4 3"), __LINE__, 0},
+        {"position after spliced whitespace", SVI(" \t\\\n  __COLUMN__ __LINE__"), SVI(" 3 2"), __LINE__, 0},
+        {"position after CRLF spliced whitespace", SVI(" \\\r\n\t__COLUMN__ __LINE__"), SVI(" 2 2"), __LINE__, 0},
+        {"identifier splice at EOF", SVI("abc\\\n"), SVI("abc"), __LINE__, 0},
+        {"continuations only at EOF", SVI("\\\n\\\r\n"), SVI(""), __LINE__, 0},
+        {"position after consecutive continuations", SVI("\\\n\\\r\n__COLUMN__ __LINE__"), SVI("1 3"), __LINE__, 0},
+        {"punctuation before continuation at EOF", SVI(";\\\n"), SVI(";"), __LINE__, 0},
+        {"position after spliced arrow", SVI("-\\\n>__COLUMN__ __LINE__"), SVI("->2 2"), __LINE__, 0},
+        {"position after failed operator match", SVI("+\\\r\n__COLUMN__ __LINE__"), SVI("+1 2"), __LINE__, 0},
+        {"spliced plus and minus operators", SVI("+\\\n+ +\\\r\n= -\\\n- -\\\r\n="), SVI("++ += -- -="), __LINE__, 0},
+        {"spliced literal-like identifiers", SVI("L\\\nname u\\\r\n8name"), SVI("Lname u8name"), __LINE__, 0},
+        {"spliced literal prefixes", SVI("u8\\\n\"x\" L\\\n'x'"), SVI("u8\"x\" L'x'"), __LINE__, 0},
+        {"spliced number exponent and separator", SVI("1e\\\n+2 1'\\\n2"), SVI("1e+2 1'2"), __LINE__, 0},
+        {"spliced string body", SVI("\"a\\\nb\""), SVI("\"ab\""), __LINE__, 0},
         {"__COLUMN__", SVI("__COLUMN__"), SVI("1"), __LINE__, 0},
         {"__FILE_ID__", SVI("__FILE_ID__"), SVI("0"), __LINE__, 0}, // just happens to be 0, could change
         {"__LI\\NE__", SVI("__LI\\\nNE__"), SVI("1"), __LINE__, 0},
@@ -1303,6 +1319,15 @@ TestFunction(test_error_locations){
     static const struct {
         const char* name; int line; StringView inp, exp;
     } test_cases[] = {
+        {"unterminated string after scalar span and splice", __LINE__,
+            SVI("\"abc\\\ndef"),
+            SVI("(test):1:1: error: Unterminated string literal\n")},
+        {"unterminated character after CRLF splice", __LINE__,
+            SVI("'abc\\\r\n"),
+            SVI("(test):1:1: error: Unterminated character literal\n")},
+        {"unterminated block comment after scalar spans", __LINE__,
+            SVI("/*abc\nlong"),
+            SVI("(test):1:1: error: Unterminated comment\n")},
         {"va_arg whitespace-only arguments", __LINE__,
             SVI("#define F(...) __VA_ARG__(0)\nF( )"),
             SVI("(test):1:16: error: __VA_ARG__ index 0 out of range for 0 variadic arguments\n"

@@ -24,6 +24,7 @@
 #include "../Drp/ckdint.h"
 #include "../Drp/base64.h"
 #include "../Drp/countof.h"
+#include "../Drp/bit_util.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -111,6 +112,25 @@ cpp_has_argument_tokens(const CppTokens* args){
 }
 
 static
+unsigned
+cpp_macro_name_bit(StringView name){
+    if(!name.length) return 0;
+    const unsigned char* p = (const unsigned char*)name.text;
+    uint32_t h = (uint32_t)name.length * UINT32_C(0x9e3779b1);
+    h ^= p[0] * UINT32_C(0x85ebca6b);
+    h ^= p[name.length / 2] * UINT32_C(0xc2b2ae35);
+    h ^= p[name.length - 1] * UINT32_C(0x27d4eb2f);
+    return (h ^ (h >> 16)) & 65535;
+}
+
+static inline
+_Bool
+cpp_maybe_macro(CppPreprocessor* cpp, StringView name){
+    unsigned bit = cpp_macro_name_bit(name);
+    return (cpp->macro_name_filter[bit >> 6] >> (bit & 63)) & 1;
+}
+
+static
 int
 cpp_define_macro(CppPreprocessor* cpp, StringView name, size_t ntoks, size_t nparams, CppMacro*_Nullable*_Nonnull outmacro){
     Atom key = AT_atomize(cpp->at, name.text, name.length);
@@ -131,6 +151,8 @@ cpp_define_macro(CppPreprocessor* cpp, StringView name, size_t ntoks, size_t npa
     macro->nreplace = ntoks;
     macro->nparams = nparams;
     *slot = macro;
+    unsigned bit = cpp_macro_name_bit(name);
+    cpp->macro_name_filter[bit >> 6] |= UINT64_C(1) << (bit & 63);
     *outmacro = macro;
     return 0;
 }
@@ -846,41 +868,34 @@ cpp_next_c_token_array(CppPreprocessor* cpp, const CppToken*_Nonnull*_Nonnull to
 
 static
 int
-cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){
+cpp_next_pp_token(CppPreprocessor* cpp, CppToken* tok){
     // phase 4
     for(;;){
-        CppToken tok;
-        int err = cpp_next_raw_token(cpp, &tok);
+        int err = cpp_next_raw_token(cpp, tok);
         if(err) return err;
-        if(tok.type == CPP_END_OF_SOURCE_FILE){
+        if(tok->type == CPP_END_OF_SOURCE_FILE){
             continue;
         }
-        if(tok.type == CPP_END_OF_INPUT && cpp->if_stack.count)
+        if(tok->type == CPP_END_OF_INPUT && cpp->if_stack.count)
             return cpp_error(cpp, ma_tail(cpp->if_stack).start, "Unterminated conditional directive");
         if(cpp->if_stack.count && !ma_tail(cpp->if_stack).is_active){
-            if(tok.type == CPP_NEWLINE){
-                *ptok = tok;
+            if(tok->type == CPP_NEWLINE){
                 return 0;
             }
-            if(tok.type == CPP_DIRECTIVE){
+            if(tok->type == CPP_DIRECTIVE){
                 err = cpp_handle_directive_in_inactive_region(cpp);
                 if(err) return err;
                 continue;
             }
             continue; // swallow all other tokens
         }
-        switch(tok.type){
+        switch(tok->type){
             case CPP_NEWLINE:
-                *ptok = tok;
-                return 0;
-                continue;
             case CPP_WHITESPACE:
-                *ptok = tok;
                 return 0;
-                continue;
             case CPP_IDENTIFIER:{
-                if(tok.disabled) goto noexp;
-                Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
+                if(tok->disabled || !cpp_maybe_macro(cpp, tok->txt)) goto noexp;
+                Atom a = AT_get_atom(cpp->at, tok->txt.text, tok->txt.length);
                 if(!a) goto noexp;
                 CppMacro* macro = AM_get(&cpp->macros, a);
                 if(!macro) goto noexp;
@@ -958,23 +973,23 @@ cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){
                         goto invoke_cleanup;
                     }
                     if(arg_seps->count+1 < macro->nparams){
-                        err = cpp_error(cpp, args->count ? args->data[0].loc : tok.loc, "Too few arguments to function-like macro %s(), expected %u, got %zu", a->data, (unsigned)macro->nparams, arg_seps->count + 1);
+                        err = cpp_error(cpp, args->count ? args->data[0].loc : tok->loc, "Too few arguments to function-like macro %s(), expected %u, got %zu", a->data, (unsigned)macro->nparams, arg_seps->count + 1);
                         goto invoke_cleanup;
                     }
-                    err = cpp_expand_func_macro(cpp, macro, tok.loc, args, arg_seps, &cpp->pending);
+                    err = cpp_expand_func_macro(cpp, macro, tok->loc, args, arg_seps, &cpp->pending);
                     invoke_cleanup:
                     cpp_release_scratch_idxes(cpp, arg_seps);
                     cpp_release_scratch(cpp, args);
                     if(err) return err;
                     continue;
                 }
-                err = cpp_expand_obj_macro(cpp, macro, tok.loc, &cpp->pending);
+                err = cpp_expand_obj_macro(cpp, macro, tok->loc, &cpp->pending);
                 if(err) return err;
                 continue;
 
                 noexp:
-                *ptok = tok;
-            }return 0;
+                return 0;
+            }
             case CPP_DIRECTIVE:
                 err = cpp_handle_directive(cpp);
                 if(err) return err;
@@ -986,13 +1001,12 @@ cpp_next_pp_token(CppPreprocessor* cpp, CppToken* ptok){
             case CPP_CHAR:
             case CPP_NUMBER:
             case CPP_OTHER:
-                *ptok = tok;
                 return 0;
             case CPP_HEADER_NAME:
             case CPP_PLACEMARKER:
             case CPP_REENABLE:
             case CPP_END_OF_SOURCE_FILE:
-                return cpp_error(cpp, tok.loc, "%.*s token escaped", sv_p(CppTokenTypeSV[tok.type]));
+                return cpp_error(cpp, tok->loc, "%.*s token escaped", sv_p(CppTokenTypeSV[tok->type]));
         }
     }
 }
@@ -1030,8 +1044,9 @@ void
 cpp_handle_continuation(CppFrame* f){
     StringView txt = f->txt;
     size_t c = f->cursor;
+    if(c >= txt.length || txt.text[c] != '\\') return;
     // skip line continuations
-    for(;c < txt.length && txt.text[c] == '\\';){
+    do {
         if(c + 1 == txt.length){
             break;
         }
@@ -1056,7 +1071,7 @@ cpp_handle_continuation(CppFrame* f){
             continue;
         }
         break;
-    }
+    } while(c < txt.length && txt.text[c] == '\\');
     f->cursor = c;
 }
 
@@ -1164,31 +1179,138 @@ cpp_clean_token(CppPreprocessor* cpp, size_t len, const char* txt){
     return msb_detach_sv(&sb);
 }
 
+static inline
+size_t
+cpp_scan_ordinary_span(StringView txt, size_t cursor, unsigned char delimiter){
+    const uint64_t ones = UINT64_C(0x0101010101010101);
+    const uint64_t highs = UINT64_C(0x8080808080808080);
+    uint64_t repeated_delimiter = ones * delimiter;
+    while(txt.length - cursor >= sizeof(uint64_t)){
+        uint64_t word;
+        memcpy(&word, txt.text + cursor, sizeof word);
+        uint64_t a = word ^ repeated_delimiter;
+        uint64_t b = word ^ (ones * '\\');
+        uint64_t c = word ^ (ones * '\n');
+        uint64_t match = (((a - ones) & ~a) | ((b - ones) & ~b) | ((c - ones) & ~c)) & highs;
+        if(match) break;
+        cursor += sizeof word;
+    }
+    while(cursor < txt.length){
+        unsigned char c = (unsigned char)txt.text[cursor];
+        if(c == delimiter || c == '\\' || c == '\n')
+            break;
+        cursor++;
+    }
+    return cursor;
+}
+
+static inline
+uint64_t
+cpp_swar_ascii_range(uint64_t word, unsigned first, unsigned last){
+    const uint64_t ones = UINT64_C(0x0101010101010101);
+    const uint64_t highs = UINT64_C(0x8080808080808080);
+    uint64_t low = word & ~highs;
+    return ((low | highs) - ones * first) & ((highs | (ones * last)) - low) & ~word & highs;
+}
+
+static inline
+uint64_t
+cpp_swar_equal(uint64_t word, unsigned char c){
+    const uint64_t lows = UINT64_C(0x7f7f7f7f7f7f7f7f);
+    word ^= UINT64_C(0x0101010101010101) * c;
+    return ~(((word & lows) + lows) | word | lows);
+}
+
 static
 int
-cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
+cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok, _Bool header_name){
     retry:;
-    SrcLoc loc = {.file_id = f->file_id, .line = f->line, .column = f->column};
-    cpp_handle_continuation(f);
     size_t start = f->cursor;
-    int c = cpp_next_char(f);
+    if(start == f->txt.length){
+        *tok = (CppToken){.type = CPP_END_OF_SOURCE_FILE, .loc = {.file_id = f->file_id, .line = f->line, .column = f->column}};
+        return 0;
+    }
+    int c = (unsigned char)f->txt.text[start];
+    if(c == '\\'){
+        cpp_handle_continuation(f);
+        start = f->cursor;
+        if(start == f->txt.length){
+            *tok = (CppToken){.type = CPP_END_OF_SOURCE_FILE, .loc = {.file_id = f->file_id, .line = f->line, .column = f->column}};
+            return 0;
+        }
+        c = (unsigned char)f->txt.text[start];
+    }
+    SrcLoc loc = {.file_id = f->file_id, .line = f->line, .column = f->column};
+    uint32_t start_line = f->line;
+    f->cursor = start + 1;
+    if(c == '\n'){
+        f->line++;
+        f->column = 1;
+        *tok = (CppToken){.type = CPP_NEWLINE, .txt = SV("\n"), .loc = loc};
+        return 0;
+    }
+    f->column++;
+    if(header_name && (c == '<' || c == '"')){
+        int closer = c == '<' ? '>' : '"';
+        for(;;){
+            c = cpp_next_char(f);
+            if(c == '\n' || c == -1)
+                return cpp_error(cpp, loc, "Unterminated header name in #include");
+            if(c == closer)
+                break;
+        }
+        *tok = (CppToken){
+            .type = CPP_HEADER_NAME,
+            .loc = loc,
+            .txt = f->line == start_line? (StringView){f->cursor-start, &f->txt.text[start]} : cpp_clean_token(cpp, f->cursor-start, &f->txt.text[start]),
+        };
+        return 0;
+    }
     switch(c){
         default:
             default_:
             *tok = (CppToken){.type = CPP_OTHER, .txt = {1, &f->txt.text[start]}, .loc = loc};
             return 0;
-        case -1:
-            *tok = (CppToken){.type = CPP_END_OF_SOURCE_FILE, .loc = loc};
-            return 0;
-        case '\n':
-            *tok = (CppToken){.type = CPP_NEWLINE, .txt = SV("\n"), .loc = loc};
-            return 0;
         // Whitespace
-        case ' ': case '\t': case '\r': case '\f': case '\v':
-            while(cpp_match_oneof(f, " \t\r\f\v"))
-                ;                                            // don't clean whitespace
+        case ' ': case '\t': case '\r': case '\f': case '\v':{
+            for(;;){
+                StringView txt = f->txt;
+                size_t cursor = f->cursor;
+                const uint64_t highs = UINT64_C(0x8080808080808080);
+                if(cursor == txt.length) goto whitespace_end;
+                unsigned char ch = (unsigned char)txt.text[cursor];
+                if(!(ch == ' ' || ((unsigned)(ch - '\t') < 5 && ch != '\n')))
+                    goto whitespace_end;
+                while(txt.length - cursor >= sizeof(uint64_t)){
+                    uint64_t word;
+                    memcpy(&word, txt.text + cursor, sizeof word);
+                    uint64_t members = (cpp_swar_ascii_range(word, '\t', '\r') & ~cpp_swar_equal(word, '\n')) | cpp_swar_equal(word, ' ');
+                    uint64_t stops = ~members & highs;
+                    if(stops){
+                        cursor += (unsigned)ctz_64(stops) / 8;
+                        goto whitespace_end;
+                    }
+                    cursor += sizeof word;
+                }
+                while(cursor < txt.length){
+                    ch = (unsigned char)txt.text[cursor];
+                    if(!(ch == ' ' || ((unsigned)(ch - '\t') < 5 && ch != '\n')))
+                        break;
+                    cursor++;
+                }
+                whitespace_end:
+                f->column += cursor - f->cursor;
+                f->cursor = cursor;
+                if(cursor == f->txt.length || f->txt.text[cursor] != '\\')
+                    break;
+                cpp_handle_continuation(f);
+                if(f->cursor == cursor)
+                    break;
+            }
+            // don't clean whitespace
             *tok = (CppToken){.type = CPP_WHITESPACE, .txt = {f->cursor-start, &f->txt.text[start]}, .loc = loc};
             return 0;
+        }
         case 0xEF: { // Check for utf-8 bom
             if(cpp_match_2char(f, 0xBB, 0xBF))
                 goto retry;
@@ -1247,21 +1369,39 @@ cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
                 }
             }
             for(;;){
-                c = cpp_peek_char(f);
-                switch(c){
-                    case CASE_a_z:
-                    case CASE_A_Z:
-                    case CASE_0_9:
-                    case '_':
-                        f->cursor++;
-                        f->column++;
-                        continue;
-                    default:
-                        break;
+                StringView txt = f->txt;
+                size_t cursor = f->cursor;
+                const uint64_t highs = UINT64_C(0x8080808080808080);
+                if(cursor == txt.length) goto identifier_end;
+                unsigned char ch = (unsigned char)txt.text[cursor];
+                if(!((unsigned)((ch | 32) - 'a') < 26 || (unsigned)(ch - '0') < 10 || ch == '_'))
+                    goto identifier_end;
+                while(txt.length - cursor >= sizeof(uint64_t)){
+                    uint64_t word;
+                    memcpy(&word, txt.text + cursor, sizeof word);
+                    uint64_t members = cpp_swar_ascii_range(word | UINT64_C(0x2020202020202020), 'a', 'z') | cpp_swar_ascii_range(word, '0', '9') | cpp_swar_equal(word, '_');
+                    uint64_t stops = ~members & highs;
+                    if(stops){
+                        cursor += (unsigned)ctz_64(stops) / 8;
+                        goto identifier_end;
+                    }
+                    cursor += sizeof word;
                 }
-                break;
+                while(cursor < txt.length){
+                    ch = (unsigned char)txt.text[cursor];
+                    if(!((unsigned)((ch | 32) - 'a') < 26 || (unsigned)(ch - '0') < 10 || ch == '_'))
+                        break;
+                    cursor++;
+                }
+                identifier_end:
+                f->column += cursor - f->cursor;
+                f->cursor = cursor;
+                if(cursor == f->txt.length || f->txt.text[cursor] != '\\')
+                    break;
+                cpp_handle_continuation(f);
+                if(f->cursor == cursor) break;
             }
-            *tok = (CppToken){.type = CPP_IDENTIFIER, .txt = cpp_clean_token(cpp, f->cursor-start, &f->txt.text[start]), .loc = loc};
+            *tok = (CppToken){.type = CPP_IDENTIFIER, .txt = f->line == start_line? (StringView){f->cursor-start, &f->txt.text[start]} : cpp_clean_token(cpp, f->cursor-start, &f->txt.text[start]), .loc = loc};
             return 0;
         // Number (pp-number)
         case CASE_0_9:
@@ -1306,7 +1446,7 @@ cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
                 break_:
                 break;
             }
-            *tok = (CppToken){.type = CPP_NUMBER, .txt = cpp_clean_token(cpp, f->cursor-start, &f->txt.text[start]), .loc = loc};
+            *tok = (CppToken){.type = CPP_NUMBER, .txt = f->line == start_line? (StringView){f->cursor-start, &f->txt.text[start]} : cpp_clean_token(cpp, f->cursor-start, &f->txt.text[start]), .loc = loc};
             return 0;
         case '.':{
             c = cpp_peek_char(f);
@@ -1330,6 +1470,12 @@ cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
             CppTokenType type = (terminator == '"') ? CPP_STRING : CPP_CHAR;
             _Bool backslash = 0;
             for(;;){
+                size_t cursor = cpp_scan_ordinary_span(f->txt, f->cursor, (unsigned char)terminator);
+                if(cursor != f->cursor){
+                    backslash = 0;
+                    f->column += cursor - f->cursor;
+                    f->cursor = cursor;
+                }
                 c = cpp_next_char(f);
                 if(c == '\n' || c == -1)
                     return cpp_error(cpp, loc, "Unterminated %s literal",  (terminator == '"')?"string":"character");
@@ -1340,13 +1486,16 @@ cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
                 else
                     backslash = 0;
             }
-            *tok = (CppToken){.type = type, .txt = cpp_clean_token(cpp, f->cursor-start, &f->txt.text[start]), .loc = loc};
+            *tok = (CppToken){.type = type, .txt = f->line == start_line? (StringView){f->cursor-start, &f->txt.text[start]} : cpp_clean_token(cpp, f->cursor-start, &f->txt.text[start]), .loc = loc};
             return 0;
         }
         // Comments
         case '/':{
             if(cpp_match_char(f, '/')){ // C++ comment
                 for(;;){
+                    size_t cursor = cpp_scan_ordinary_span(f->txt, f->cursor, '\n');
+                    f->column += cursor - f->cursor;
+                    f->cursor = cursor;
                     c = cpp_peek_char(f);
                     if(c == -1 || c == '\n')
                         break;
@@ -1359,6 +1508,9 @@ cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
             }
             else if(cpp_match_char(f, '*')){ // C comment
                 for(;;){
+                    size_t cursor = cpp_scan_ordinary_span(f->txt, f->cursor, '*');
+                    f->column += cursor - f->cursor;
+                    f->cursor = cursor;
                     c = cpp_next_char(f);
                     if(c == -1)
                         return cpp_error(cpp, loc, "Unterminated comment");
@@ -1428,28 +1580,37 @@ cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
                 *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("="), .punct='=', .loc = loc};
             return 0;
         case '-':
-            if(cpp_match_char(f, '>')){
-                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("->"), .punct='->', .loc = loc};
-                return 0;
+            switch(cpp_peek_char(f)){
+                case '>':
+                    *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("->"), .punct='->', .loc = loc};
+                    break;
+                case '-':
+                    *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("--"), .punct='--', .loc = loc};
+                    break;
+                case '=':
+                    *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("-="), .punct='-=', .loc = loc};
+                    break;
+                default:
+                    *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("-"), .punct='-', .loc = loc};
+                    return 0;
             }
-            if(cpp_match_char(f, '-')){
-                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("--"), .punct='--', .loc = loc};
-                return 0;
-            }
-            if(cpp_match_char(f, '='))
-                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("-="), .punct='-=', .loc = loc};
-            else
-                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("-"), .punct='-', .loc = loc};
+            f->cursor++;
+            f->column++;
             return 0;
         case '+':
-            if(cpp_match_char(f, '+')){
-                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("++"), .punct='++', .loc = loc};
-                return 0;
+            switch(cpp_peek_char(f)){
+                case '+':
+                    *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("++"), .punct='++', .loc = loc};
+                    break;
+                case '=':
+                    *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("+="), .punct='+=', .loc = loc};
+                    break;
+                default:
+                    *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("+"), .punct='+', .loc = loc};
+                    return 0;
             }
-            if(cpp_match_char(f, '='))
-                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("+="), .punct='+=', .loc = loc};
-            else
-                *tok = (CppToken){.type = CPP_PUNCTUATOR, .txt = SV("+"), .punct='+', .loc = loc};
+            f->cursor++;
+            f->column++;
             return 0;
         case '<':
             if(cpp_match_char(f, ':')){
@@ -1545,28 +1706,7 @@ cpp_tokenize_from_frame(CppPreprocessor* cpp, CppFrame* f, CppToken* tok){
     }
 }
 
-static
-int
-cpp_tokenize_header_name(CppPreprocessor *cpp, CppFrame *f, CppToken *tok){
-    SrcLoc loc = {.file_id=f->file_id, .line=f->line, .column=f->column};
-    size_t start = f->cursor;
-    int opener = cpp_next_char(f);
-    int closer = opener == '<' ? '>' : '"';
-    for(;;){
-        int c = cpp_next_char(f);
-        if(c == '\n' || c == -1)
-            return cpp_error(cpp, loc, "Unterminated header name in #include");
-        if(c == closer) break;
-    }
-    *tok = (CppToken){
-        .type=CPP_HEADER_NAME,
-        .loc=loc,
-        .txt=cpp_clean_token(cpp, f->cursor-start, &f->txt.text[start])
-    };
-    return 0;
-}
-
-static
+force_inline
 int
 cpp_next_raw_token_mode(CppPreprocessor* cpp, CppToken* tok, _Bool header_name){
     while(cpp->pending.count){
@@ -1585,41 +1725,24 @@ cpp_next_raw_token_mode(CppPreprocessor* cpp, CppToken* tok, _Bool header_name){
     }
     CppFrame* f = &ma_tail(cpp->frames);
     if(f->include_depth == 0) cpp->base_file_id = f->file_id;
-    cpp_handle_continuation(f);
-    if(f->cursor == f->txt.length){
-        *tok = (CppToken){
-            .type=CPP_END_OF_SOURCE_FILE,
-            .loc={
-                .file_id=f->file_id,
-                .line=f->line,
-                .column=f->column
-            }
-        };
-    }
-    else {
-        int c = cpp_peek_char(f);
-        int err;
-        if(header_name && (c == '<' || c =='"'))
-            err = cpp_tokenize_header_name(cpp, f, tok);
-        else
-            err = cpp_tokenize_from_frame(cpp, f, tok);
-        if(err) return err;
-        if(tok->type == CPP_NEWLINE)
-            f->line_has_token = 0;
-        else if(tok->type != CPP_WHITESPACE){
-            if(!f->line_has_token && tok->type == CPP_PUNCTUATOR && tok->punct == '#')
-                tok->type = CPP_DIRECTIVE;
-            f->line_has_token = 1;
-        }
-    }
+    int err = cpp_tokenize_from_frame(cpp, f, tok, header_name);
+    if(err) return err;
     if(tok->type == CPP_END_OF_SOURCE_FILE){
         if(cpp->frames.count == 1) cpp->eof_loc = tok->loc;
         cpp->frames.count--;
+        return 0;
+    }
+    if(tok->type == CPP_NEWLINE)
+        f->line_has_token = 0;
+    else if(tok->type != CPP_WHITESPACE){
+        if(!f->line_has_token && tok->type == CPP_PUNCTUATOR && tok->punct == '#')
+            tok->type = CPP_DIRECTIVE;
+        f->line_has_token = 1;
     }
     return 0;
 }
 
-static
+force_inline
 int
 cpp_next_raw_token(CppPreprocessor* cpp, CppToken* tok){
     return cpp_next_raw_token_mode(cpp, tok, 0);
@@ -3130,7 +3253,7 @@ cpp_expand_obj_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_loc
                 CppToken tok = result->data[j];
                 if(tok.type == CPP_PLACEMARKER) continue;
                 if(parent) tok.loc = cpp_chain_loc(cpp, tok.loc, parent);
-                if(tok.type == CPP_IDENTIFIER && !tok.disabled){
+                if(tok.type == CPP_IDENTIFIER && !tok.disabled && cpp_maybe_macro(cpp, tok.txt)){
                     Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
                     if(a){
                         CppMacro* m = AM_get(&cpp->macros, a);
@@ -3149,7 +3272,7 @@ cpp_expand_obj_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_loc
     for(size_t i = macro->nreplace; i--;){
         CppToken tok = repl[i];
         if(parent) tok.loc = cpp_chain_loc(cpp, tok.loc, parent);
-        if(tok.type == CPP_IDENTIFIER && !tok.disabled){
+        if(tok.type == CPP_IDENTIFIER && !tok.disabled && cpp_maybe_macro(cpp, tok.txt)){
             Atom a = AT_get_atom(cpp->at, tok.txt.text, tok.txt.length);
             if(a){
                 CppMacro* m = AM_get(&cpp->macros, a);
@@ -3275,8 +3398,6 @@ cpp_stringify_argument(CppPreprocessor *cpp, CppToken*_Nullable toks, size_t cou
     };
 }
 
-static int cpp_tokenize_from_frame(CppPreprocessor *cpp, CppFrame *f, CppToken *tok);
-
 static
 int
 cpp_paste_tokens(CppPreprocessor *cpp, CppToken left, CppToken right, CppToken *result, SrcLoc loc, SrcLocExp* expansion_parent){
@@ -3300,7 +3421,7 @@ cpp_paste_tokens(CppPreprocessor *cpp, CppToken left, CppToken right, CppToken *
         .file_id = loc.file_id
     };
     CppToken tok;
-    int err = cpp_tokenize_from_frame(cpp, &temp_frame, &tok);
+    int err = cpp_tokenize_from_frame(cpp, &temp_frame, &tok, 0);
     if(err) return err;
     if(temp_frame.cursor != pasted.length || tok.type == CPP_WHITESPACE || cpp_token_is_end(tok)){
         SrcLoc eloc = cpp_chain_loc(cpp, loc, expansion_parent);
@@ -3333,7 +3454,7 @@ cpp_expand_argument(CppPreprocessor *cpp, const CppToken*_Null_unspecified toks,
             tok = toks[i++];
         else
             break;
-        if(tok.type != CPP_IDENTIFIER || tok.disabled){
+        if(tok.type != CPP_IDENTIFIER || tok.disabled || !cpp_maybe_macro(cpp, tok.txt)){
             err = cpp_push_tok(cpp, out, tok);
             if(err) goto finally;
             continue;
@@ -3999,7 +4120,7 @@ cpp_expand_func_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_lo
                 if(t.type == CPP_PLACEMARKER)
                     continue;
                 t.loc = cpp_chain_loc(cpp, t.loc, parent);
-                if(t.type == CPP_IDENTIFIER && !t.disabled){
+                if(t.type == CPP_IDENTIFIER && !t.disabled && cpp_maybe_macro(cpp, t.txt)){
                     Atom a = AT_get_atom(cpp->at, t.txt.text, t.txt.length);
                     if(a){
                         CppMacro* m = AM_get(&cpp->macros, a);
@@ -4054,7 +4175,7 @@ cpp_expand_func_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_lo
                 if(t.type == CPP_PLACEMARKER)
                     continue;
                 t.loc = cpp_chain_loc(cpp, t.loc, parent);
-                if(t.type == CPP_IDENTIFIER && !t.disabled){
+                if(t.type == CPP_IDENTIFIER && !t.disabled && cpp_maybe_macro(cpp, t.txt)){
                     Atom a = AT_get_atom(cpp->at, t.txt.text, t.txt.length);
                     if(a){
                         CppMacro* m = AM_get(&cpp->macros, a);
@@ -4112,7 +4233,7 @@ cpp_expand_func_macro(CppPreprocessor *cpp, CppMacro *macro, SrcLoc expansion_lo
         if(t.type == CPP_PLACEMARKER)
             continue;
         t.loc = cpp_chain_loc(cpp, t.loc, parent);
-        if(t.type == CPP_IDENTIFIER && !t.disabled){
+        if(t.type == CPP_IDENTIFIER && !t.disabled && cpp_maybe_macro(cpp, t.txt)){
             Atom a = AT_get_atom(cpp->at, t.txt.text, t.txt.length);
             if(a){
                 CppMacro* m = AM_get(&cpp->macros, a);
@@ -8404,7 +8525,7 @@ cpp_tokenize_text_impl(CppPreprocessor* cpp, SrcLoc loc, StringView str, CppToke
     };
     for(;;){
         CppToken tok;
-        int err = cpp_tokenize_from_frame(cpp, &frame, &tok);
+        int err = cpp_tokenize_from_frame(cpp, &frame, &tok, 0);
         if(err) return err;
         if(tok.type == CPP_END_OF_SOURCE_FILE) break;
         if(fixed_loc) tok.loc = loc;
