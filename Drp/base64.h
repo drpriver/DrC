@@ -339,7 +339,7 @@ base64_decode(void* restrict dst, size_t dst_length, const uint8_t* restrict src
     enum {BAD=0xff};
     // Unfortunately, gnu ranges is an extension, so we need to have the ugly giant version
 #if 0
-    const uint8_t base64_decode_table[] = {
+    static const uint8_t base64_decode_table[] = {
         [  0 ...  42] = BAD,
         ['+'] = 62, // '+' is 43
         [ 44 ...  46] = BAD,
@@ -368,7 +368,7 @@ base64_decode(void* restrict dst, size_t dst_length, const uint8_t* restrict src
     };
 #else
     // Totally unreadable, but standard-compliant
-    const uint8_t base64_decode_table[] = {
+    static const uint8_t base64_decode_table[] = {
         BAD,  BAD,  BAD,  BAD,  BAD,  BAD,  BAD,  BAD,
         BAD,  BAD,  BAD,  BAD,  BAD,  BAD,  BAD,  BAD,
         BAD,  BAD,  BAD,  BAD,  BAD,  BAD,  BAD,  BAD,

@@ -458,6 +458,13 @@ static const StringView BLogLevelSVs[] = {
 };
 
 typedef struct BuildTarget BuildTarget;
+typedef struct BuildJobPool BuildJobPool;
+// Limit concurrency within a group by sharing a pointer to this
+// struct.
+struct BuildJobPool {
+    size_t limit;
+};
+
 struct BuildTarget {
     Atom name;
     Atom _Nullable description;
@@ -466,6 +473,7 @@ struct BuildTarget {
     Marray(Atom) linker_args;
     enum CompilerFlavor compiler_flavor;
     CmdBuilder cmd;
+    const BuildJobPool* _Nullable job_pool;
     union {
         int (*script)(BuildCtx*, BuildTarget*);
         int (*corop)(BuildCtx*, BuildTarget*);

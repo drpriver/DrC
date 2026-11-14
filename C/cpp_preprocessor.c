@@ -7083,11 +7083,28 @@ cpp_embed_base64(CppPreprocessor* cpp, SrcLoc loc, const CppToken* toks, size_t 
         bytes->buff = decoded.buff;
     }
     uint8_t quartet[4];
+    uint8_t chunk_scratch[768];
     size_t used = 0, consumed = 0, written = 0;
     for(size_t i = 0; i < count; i++){
         CppToken tok = toks[i];
         if(tok.type == CPP_WHITESPACE) continue;
         for(size_t j = 1; j+1 < tok.txt.length; j++){
+            if(!used){
+                size_t chunk = (tok.txt.length - j - 1) & ~(size_t)3;
+                if(chunk && padding && consumed + chunk == length) chunk -= 4;
+                if(chunk > sizeof chunk_scratch / 3 * 4)
+                    chunk = sizeof chunk_scratch / 3 * 4;
+                if(chunk){
+                    size_t size = chunk / 4 * 3;
+                    void* out = decoded.buff ? (unsigned char*)decoded.buff + written : chunk_scratch;
+                    if(base64_decode(out, size, (const uint8_t*)tok.txt.text + j, chunk))
+                        return cpp_error(cpp, loc, "invalid gnu::base64 encoding");
+                    consumed += chunk;
+                    written += size;
+                    j += chunk - 1;
+                    continue;
+                }
+            }
             quartet[used++] = (uint8_t)tok.txt.text[j];
             if(used != 4) continue;
             consumed += 4;

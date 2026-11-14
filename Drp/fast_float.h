@@ -1925,6 +1925,24 @@ fast_float_decimal_left_shift(fast_float_decimal *h, uint32_t shift){
     uint32_t write_index = h->num_digits - 1 + num_new_digits;
     uint64_t n = 0;
 
+    if(write_index < h->capacity){
+        while(read_index >= 0){
+            n += (uint64_t)h->digits[read_index--] << shift;
+            uint64_t quotient = n / 10;
+            h->digits[write_index--] = (uint8_t)(n - 10 * quotient);
+            n = quotient;
+        }
+        while(n > 0){
+            uint64_t quotient = n / 10;
+            h->digits[write_index--] = (uint8_t)(n - 10 * quotient);
+            n = quotient;
+        }
+        h->num_digits += num_new_digits;
+        h->decimal_point += (int32_t)num_new_digits;
+        fast_float_trim(h);
+        return;
+    }
+
     while(read_index >= 0){
         n += (uint64_t)(h->digits[read_index]) << shift;
         uint64_t quotient = n / 10;

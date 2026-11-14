@@ -8601,7 +8601,7 @@ static
 int
 cc_next_token_packed(CcParser* p, CcToken* tok){
     if(p->pending.count){
-        *tok = ma_pop(CcToken)(&p->pending);
+        *tok = p->pending.data[--p->pending.count];
         return 0;
     }
     return cpp_next_c_token(&p->cpp, tok);
@@ -8636,12 +8636,20 @@ cc_next_token(CcParser* p, CcToken* tok){
 static
 int
 cc_unget(CcParser* p, CcToken* tok){
+    if(p->pending.count < p->pending.capacity){
+        p->pending.data[p->pending.count++] = *tok;
+        return 0;
+    }
     return ma_push(CcToken)(&p->pending, cc_allocator(p), *tok);
 }
 
 static
 int
 cc_peek(CcParser* p, CcToken* tok){
+    if(p->pending.count && ma_tail(p->pending).type != CC_EMBED){
+        *tok = ma_tail(p->pending);
+        return 0;
+    }
     int err = cc_next_token(p, tok);
     if(err) return err;
     return cc_unget(p, tok);
@@ -17357,7 +17365,7 @@ cc_define_builtin_types(CcParser* p){
     }
 
     // Register builtin functions
-    {
+    if(!p->builtins.count){
         static const struct { StringView name; CcBuiltinFunc id; } builtins[] = {
             {SVI("__builtin_LINE"), CC__builtin_LINE},
             {SVI("__builtin_COLUMN"), CC__builtin_COLUMN},
@@ -17523,7 +17531,7 @@ cc_define_builtin_types(CcParser* p){
     if(err) return err;
 
     // Register type methods/fields
-    {
+    if(!p->type_intro.count){
         static const struct { StringView name; CcTypeIntrospectionOp op; } typeintro[] = {
             {SVI("name"), CC_TYPE_NAME},
             {SVI("tag"), CC_TYPE_TAG},

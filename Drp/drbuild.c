@@ -2652,6 +2652,13 @@ b_execute_targets(BuildCtx* ctx){
                     if(t->visit_state != UP_TO_DATE)
                         goto Skip;
                 }
+                if(tgt->job_pool){
+                    size_t running = 0;
+                    for(size_t j = 0; j < ctx->jobs.count; j++)
+                        running += ctx->jobs.jobs[j].target->job_pool == tgt->job_pool;
+                    if(running >= (tgt->job_pool->limit ? tgt->job_pool->limit : 1))
+                        goto Skip;
+                }
                 if(tgt->is_phony && (tgt->is_cmd || tgt->is_script || tgt->is_coro))
                     goto do_command;
                 if(tgt->is_cmd && !tgt->should_exec){
@@ -2796,8 +2803,9 @@ b_execute_targets(BuildCtx* ctx){
         }
         size_t idx;
         int exit_code;
-        for(;ctx->jobs.count;){
-            err = cmd_wait_many(ctx->jobs.processes, ctx->jobs.count, &idx, &exit_code, 0);
+        for(_Bool block = 1;ctx->jobs.count;){
+            err = cmd_wait_many(ctx->jobs.processes, ctx->jobs.count, &idx, &exit_code, block);
+            block = 0;
             if(err){
                 b_loglvl(BLOG_ERROR, ctx, "Error while waiting\n");
                 goto finally;
@@ -2832,7 +2840,6 @@ b_execute_targets(BuildCtx* ctx){
                 b_file_info(ctx, o->data, o->length)->valid = 0;
             }
         }
-        // usleep(1);
     }
     finally:
     if(ctx->jobs.count){

@@ -18,7 +18,8 @@
     X(Atom, fuzz_sysroot, "--fuzz-sysroot", "Sysroot for the fuzz compiler.", nil_atom) \
     X(Atom, prefix, "--prefix", "Install prefix. Overrides the PREFIX env var.", nil_atom) \
     X(Atom, bindir, "--bindir", "Directory to install binaries into. Overrides the bindir env var.", nil_atom) \
-    X(Atom, destdir, "--destdir", "Staging directory prepended to install paths. Overrides the DESTDIR env var.", nil_atom)
+    X(Atom, destdir, "--destdir", "Staging directory prepended to install paths. Overrides the DESTDIR env var.", nil_atom) \
+    X(int, test_pool_size, "--test-pool-size", "Limit to how many test targets can run concurrently", 4)
 #include "Drp/drbuild.h"
 #include "Drp/path_util.h"
 #include "Drp/MStringBuilder.h"
@@ -94,6 +95,7 @@ int main(int argc, char** argv, char** envp){
     b_args(ctx, tags, "-o", "tags", "--output-vim", ".syntax.vim", "build.c", "cpp.c", "cc.c", "ctags.c");
 
     BuildTarget* native_tests = b_phony_target(ctx, "native-tests");
+    BuildJobPool test_pool = {.limit = ctx->target.test_pool_size};
     native_tests->description = b_atomize(ctx, "Run the tests compiled with native compiler.");
     BuildTarget* tests = b_phony_target(ctx, "tests");
     tests->description = b_atomize(ctx, "Run all tests.");
@@ -104,7 +106,6 @@ int main(int argc, char** argv, char** envp){
     BuildTarget* coverage_tests = b_phony_target(ctx, "coverage-tests");
     coverage_tests->description = b_atomize(ctx, "Run the tests with coverage enabled.");
     coverage_tests->user_bits |= EXCLUDE_FROM_MAKEFILE;
-    b_add_deps(ctx, tests, native_tests, self_tests);
     BuildTarget* cc_opt, *cc_cov;
     {
         {
@@ -179,6 +180,7 @@ int main(int argc, char** argv, char** envp){
             b_linkinp(ctx, bin, soft_float);
             b_add_dep(ctx, all, bin);
             BuildTarget* cmd = b_cmd_target_prog(ctx, cmd_name, bin);
+            cmd->job_pool = &test_pool;
             cmd->is_phony = 1;
             if(ctx->target.os == OS_APPLE && ctx->target.sanitize)
                 cmd_set_envvar(&cmd->cmd, SV("MallocNanoZone"), SV("0"));
@@ -216,6 +218,7 @@ int main(int argc, char** argv, char** envp){
             b_linkinp(ctx, cov_bin, soft_float);
             Atom cov_cmd_name = b_atomize_f(ctx, "run-coverage-%s", name);
             BuildTarget* cov_cmd = b_cmd_target_prog(ctx, cov_cmd_name->data, cov_bin);
+            cov_cmd->job_pool = &test_pool;
             cov_cmd->is_phony = 1;
             cov_cmd->user_bits |= EXCLUDE_FROM_MAKEFILE;
             if(test_files[i].needs_drc_path){
@@ -285,6 +288,7 @@ int main(int argc, char** argv, char** envp){
     BuildTarget* selfhost;
     {
         selfhost = b_cmd_target_prog(ctx, "selfhost", cc_opt);
+        selfhost->job_pool = &test_pool;
         selfhost->is_phony = 1;
         if(ctx->target.os == OS_APPLE && ctx->target.sanitize)
             cmd_set_envvar(&selfhost->cmd, SV("MallocNanoZone"), SV("0"));
@@ -296,9 +300,11 @@ int main(int argc, char** argv, char** envp){
             if(test_files[i].skip_self_hosted) continue;
             Atom name = b_atomize_f(ctx, "self-%s", test_files[i].name);
             BuildTarget* cmd = b_cmd_target_prog(ctx, name->data, cc_opt);
+            cmd->job_pool = &test_pool;
             cmd->is_phony = 1;
             if(ctx->target.os == OS_APPLE && ctx->target.sanitize)
                 cmd_set_envvar(&cmd->cmd, SV("MallocNanoZone"), SV("0"));
+            b_args(ctx, cmd, "-finline-budget", "128", "-finline-hint-budget", "256");
             b_arg(ctx, cmd, test_files[i].file);
             if(test_files[i].needs_drc_path){
                 b_arginp(ctx, cmd, "--drc", cc_opt);
@@ -312,7 +318,28 @@ int main(int argc, char** argv, char** envp){
                     b_aarg(ctx, cmd, ctx->dash_dash_args.data[j]);
             b_add_dep(ctx, self_tests, cmd);
         }
-        b_add_dep(ctx, tests, self_tests);
+        // Manually optimize job scheduling
+        Atom longest = b_atomize(ctx, "self-ci_test");
+        for(size_t i = 0; i < self_tests->dependencies.count; i++){
+            if(self_tests->dependencies.data[i] != longest) continue;
+            Atom first = self_tests->dependencies.data[0];
+            self_tests->dependencies.data[0] = longest;
+            self_tests->dependencies.data[i] = first;
+            break;
+        }
+        b_add_deps(
+            ctx,
+            tests,
+            b_get_target(ctx, "self-ci_test"),
+            b_get_target(ctx, "self-cpp_test"),
+            b_get_target(ctx, "run-ci_test"),
+            b_get_target(ctx, "self-cc_test"),
+            b_get_target(ctx, "self-cc_lex_test"),
+            b_get_target(ctx, "self-ci_concurrent_test"),
+            b_get_target(ctx, "run-ci_oom_test"),
+            native_tests,
+            self_tests
+        );
     }
 
     {
