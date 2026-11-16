@@ -5059,7 +5059,7 @@ cpp_define_target_macros(CppPreprocessor* cpp){
         };
         Atom c_param = AT_atomize(cpp->at, "c", 1);
         if(!c_param) return CPP_OOM_ERROR;
-        for(size_t i = 0; i < sizeof c_macros / sizeof c_macros[0]; i++){
+        for(size_t i = 0; i < countof(c_macros); i++){
             size_t ntoks = c_macros[i].suffix ? 3 : 1;
             CppMacro* macro;
             err = cpp_define_macro(cpp, c_macros[i].name, ntoks, 1, &macro);
@@ -5663,7 +5663,7 @@ cpp_setup_builtin_headers(CppPreprocessor* cpp){
                                 "#include <immintrin.h>\n"
                                 "#endif\n")},
     };
-    for(size_t i = 0; i < sizeof headers / sizeof headers[0]; i++){
+    for(size_t i = 0; i < countof(headers); i++){
         err = cpp_cache_builtin_header(cpp, headers[i].name, headers[i].content);
         if(err) return err;
     }
@@ -5725,7 +5725,7 @@ cpp_setup_default_includes(CppPreprocessor* cpp){
                     "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
                     "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
                 };
-                for(size_t i = 0; i < sizeof known_paths / sizeof known_paths[0]; i++){
+                for(size_t i = 0; i < countof(known_paths); i++){
                     if(cpp_dir_exists(cpp, known_paths[i])){
                         sdk = known_paths[i];
                         break;
@@ -5828,7 +5828,7 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
         {SVI("__BASE_FILE__"), cpp_builtin_base_file},
         {SVI("__TIMESTAMP__"), cpp_builtin_timestamp},
     };
-    for(size_t i = 0; i < sizeof obj_builtins / sizeof obj_builtins[0]; i++){
+    for(size_t i = 0; i < countof(obj_builtins); i++){
         err = cpp_define_builtin_obj_macro(cpp, obj_builtins[i].name, obj_builtins[i].fn, NULL);
         if(err) return err;
     }
@@ -5881,7 +5881,7 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
         {SVI("__WHERE__"), cpp_builtin_where, 1, 0, 1},
         {SVI("__where"), cpp_builtin_where, 1, 0, 1},
     };
-    for(size_t i = 0; i < sizeof func_builtins / sizeof func_builtins[0]; i++){
+    for(size_t i = 0; i < countof(func_builtins); i++){
         err = cpp_define_builtin_func_macro(cpp, func_builtins[i].name, func_builtins[i].fn, NULL, func_builtins[i].nparams, func_builtins[i].variadic, func_builtins[i].no_expand);
         if(err) return err;
     }

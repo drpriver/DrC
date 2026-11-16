@@ -16,6 +16,7 @@
 #include "Drp/file_util.h"
 #include "Drp/msb_atomize.h"
 #include "Drp/dre.h"
+#include "Drp/countof.h"
 #include "C/cpp_tok.h"
 #include "C/cpp_preprocessor.h"
 #include "C/cc_tok.h"
@@ -667,8 +668,10 @@ ct_add_tag(CtCtx* ctx, CtSymbolKind kind, Atom name, SrcLoc loc){
 static
 const char*
 cc_stringify_error(int err){
-    const char* error_name = err >= 0 && (size_t)err < sizeof _cc_error_names / sizeof _cc_error_names[0] ? _cc_error_names[err] : "Unknown error";
-    return error_name;
+    size_t idx = (size_t)err;
+    if(idx < countof(_cc_error_names))
+        return _cc_error_names[idx];
+    return "Unknown error";
 }
 
 #ifdef __clang__

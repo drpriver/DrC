@@ -19,6 +19,7 @@
 #include "../Drp/MStringBuilder.h"
 #include "../Drp/file_cache.h"
 #include "../Drp/msb_logger.h"
+#include "../Drp/countof.h"
 #include "cpp_preprocessor.h"
 
 #ifdef __clang__
@@ -866,7 +867,7 @@ TestFunction(test_c23){
         },
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < sizeof test_cases / sizeof test_cases[0]; i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
         int line = test_cases[i].line;
         err = cpp_expand_string(test_cases[i].input, &result, __FILE__, __func__, line);
         TestExpectFalse(int, err);
@@ -980,7 +981,7 @@ TestFunction(test_torture){
         },
     };
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < sizeof test_cases / sizeof test_cases[0]; i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(test_cases); i = test_atomic_increment(&idx)){
         int line = test_cases[i].line;
         StringView in = test_cases[i].in;
         StringView out = test_cases[i].out;

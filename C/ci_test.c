@@ -21576,9 +21576,10 @@ TestFunction(test_ci_call_main){
         if(err){TestPrintf("%s:%d: failed to link\n", __FILE__, tc->line); goto finally;}
 
         char*_Null_unspecified argv_buf[5] = {0};
-        for(int j = 0; j < tc->argc; j++) argv_buf[j] = tc->argv[j];
+        for(size_t j = 0; j < (size_t)tc->argc; j++) 
+            argv_buf[j] = tc->argv[j];
         char*_Null_unspecified envp_buf[5] = {0};
-        for(int j = 0; j < (int)(sizeof tc->envp / sizeof tc->envp[0]); j++){
+        for(size_t j = 0; j < countof(tc->envp); j++){
             if(!tc->envp[j]) break;
             envp_buf[j] = tc->envp[j];
         }

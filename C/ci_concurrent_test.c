@@ -17,6 +17,7 @@
 #include "../Drp/file_cache.h"
 #include "../Drp/msb_logger.h"
 #include "../Drp/thread_utils.h"
+#include "../Drp/countof.h"
 #include "cc_parser.h"
 #include "cc_target.h"
 #include "ci_interp.h"
@@ -358,7 +359,7 @@ TestFunction(test_concurrent_callbacks){
         },
     };
 
-    for(size_t t = 0; t < sizeof testcases / sizeof testcases[0]; t++){
+    for(size_t t = 0; t < countof(testcases); t++){
         struct tc* tc = &testcases[t];
         ArenaAllocator arena = {0};
         Allocator al = allocator_from_arena(&arena);

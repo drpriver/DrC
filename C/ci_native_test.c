@@ -1975,7 +1975,7 @@ TestFunction(test_interop){
     };
     int err;
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(testcases); i = test_atomic_increment(&idx)){
         struct tc* tc = &testcases[i];
         size_t failures_before = TEST_stats.failures;
         if(tc->skip){
@@ -2031,7 +2031,7 @@ TestFunction(test_interop){
         err = ci_init_runtime_calls(&interp);
         if(err){TestReport("setup failure"); goto finally;}
 
-        for(size_t s = 0; s < sizeof tc->symbols / sizeof tc->symbols[0]; s++){
+        for(size_t s = 0; s < countof(tc->symbols); s++){
             if(!tc->symbols[s].sym) break;
             err = ci_register_sym(&interp, SV("builtins"), tc->symbols[s].name, tc->symbols[s].sym);
             if(err){TestReport("register sym failure"); goto finally;}
@@ -2224,7 +2224,7 @@ TestFunction(test_interp){
     };
     int err;
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(testcases); i = test_atomic_increment(&idx)){
         struct tc* tc = &testcases[i];
         if(tc->skip){
             TEST_stats.skipped++;
@@ -2279,7 +2279,7 @@ TestFunction(test_interp){
         err = ci_init_runtime_calls(&interp);
         if(err){TestReport("setup failure"); goto finally;}
 
-        for(size_t s = 0; s < sizeof tc->symbols / sizeof tc->symbols[0]; s++){
+        for(size_t s = 0; s < countof(tc->symbols); s++){
             if(!tc->symbols[s].sym) break;
             err = ci_register_sym(&interp, SV("builtins"), tc->symbols[s].name, tc->symbols[s].sym);
             if(err){TestReport("register sym failure"); goto finally;}
@@ -2370,7 +2370,7 @@ TestFunction(test_interp_fail){
     };
     int err;
     static int idx = 0;
-    for(size_t i = test_atomic_increment(&idx); i < sizeof testcases/sizeof testcases[0]; i = test_atomic_increment(&idx)){
+    for(size_t i = test_atomic_increment(&idx); i < countof(testcases); i = test_atomic_increment(&idx)){
         struct tc* tc = &testcases[i];
         if(tc->skip){
             TEST_stats.skipped++;

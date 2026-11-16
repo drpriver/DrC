@@ -1228,7 +1228,7 @@ int
 ci_preload_system_libs(CiInterpreter* ci){
     #if defined(_WIN32) && !defined(NO_NATIVE_CALL)
     static const char*const libs[] = {"ucrtbase", "kernel32", "ntdll"};
-    for(size_t i = 0; i < sizeof libs / sizeof libs[0]; i++)
+    for(size_t i = 0; i < countof(libs); i++)
         LoadLibraryA(libs[i]);
     #endif
     (void)ci;

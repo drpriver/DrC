@@ -1093,8 +1093,10 @@ cc_print_func(CcParser* p, CcFunc* func, MStringBuilder* sb, _Bool ast){
 static
 const char*
 cc_stringify_error(int err){
-    const char* error_name = err >= 0 && (size_t)err < sizeof _cc_error_names / sizeof _cc_error_names[0] ? _cc_error_names[err] : "Unknown error";
-    return error_name;
+    size_t idx = (size_t)err;
+    if(idx < countof(_cc_error_names))
+        return _cc_error_names[idx];
+    return "Unknown error";
 }
 
 #ifdef __clang__

@@ -703,7 +703,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
             .size = sizeof *ctx,
             .align = _Alignof(BuildCtx),
             .kind = TIK_STRUCT,
-            .length = sizeof TI_BuildCtxGlobal.members / sizeof TI_BuildCtxGlobal.members[0],
+            .length = countof(TI_BuildCtxGlobal.members),
             .members = {
                 {
                     .name = b_atomize(ctx, "targets"),
@@ -822,7 +822,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
             .size = sizeof(BuildTargetSettings),
             .align = _Alignof(BuildTargetSettings),
             .kind = TIK_STRUCT,
-            .length = sizeof TI_BuildTargetSettings.members / sizeof TI_BuildTargetSettings.members[0],
+            .length = countof(TI_BuildTargetSettings.members),
             .members = {
                 {
                     .name = b_atomize(ctx, "cc"),
@@ -900,7 +900,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
             .size = sizeof(GlobalCachedSettings),
             .align = _Alignof(GlobalCachedSettings),
             .kind = TIK_STRUCT,
-            .length = sizeof TI_GlobalCachedSettings.members / sizeof TI_GlobalCachedSettings.members[0],
+            .length = countof(TI_GlobalCachedSettings.members),
             .members = {
                 {
                     .name = b_atomize(ctx, "build_cc"),
@@ -939,7 +939,7 @@ b_build_ctx(int argc, char*_Null_unspecified*_Nonnull argv, char*_Null_unspecifi
             .size = sizeof(BuildTarget),
             .align = _Alignof(BuildTarget),
             .kind = TIK_STRUCT,
-            .length = sizeof TI_BuildTarget.members / sizeof TI_BuildTarget.members[0],
+            .length = countof(TI_BuildTarget.members),
             .members = {
                 {
                     .name = b_atomize(ctx, "name"),
@@ -1800,7 +1800,7 @@ compile_commands(BuildCtx* ctx, BuildTarget* t){
         .size = sizeof(CompileCommand),
         .align = _Alignof(CompileCommand),
         .kind = TIK_STRUCT,
-        .length = sizeof TI_CompileCommand.members / sizeof TI_CompileCommand.members[0],
+        .length = countof(TI_CompileCommand.members),
         .members = {
             {
                 .name = b_atomize(ctx, "directory"),
@@ -2504,7 +2504,7 @@ b_parse_depfiles(BuildCtx* ctx){
             SV16I("*.deps"),
             SV16I("*.json"),
         };
-        for(size_t i = 0; i < sizeof exts / sizeof exts[0]; i++){
+        for(size_t i = 0; i < countof(exts); i++){
             StringViewUtf16 ext = exts[i];
             pattern.cursor = ctx->deps_dir->length+1;
             msb16_write_str(&pattern, ext.text, ext.length);

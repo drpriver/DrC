@@ -24,6 +24,7 @@
 #include "Drp/path_util.h"
 #include "Drp/MStringBuilder.h"
 #include "Drp/file_util.h"
+#include "Drp/countof.h"
 // For capture table size
 #include "C/asm/nc_capture_config.h"
 
@@ -296,7 +297,7 @@ int main(int argc, char** argv, char** envp){
         if(BUILD_OS != OS_WINDOWS)
             b_add_dep(ctx, self_tests, selfhost);
 
-        for(size_t i = 0; i < sizeof test_files / sizeof test_files[0]; i++){
+        for(size_t i = 0; i < countof(test_files); i++){
             if(test_files[i].skip_self_hosted) continue;
             Atom name = b_atomize_f(ctx, "self-%s", test_files[i].name);
             BuildTarget* cmd = b_cmd_target_prog(ctx, name->data, cc_opt);
@@ -345,16 +346,14 @@ int main(int argc, char** argv, char** envp){
     {
         BuildTarget* bins[] = {cpp, cc, ctags};
         const char* names[] = {"drcpp", "drc", "drctags"};
-        for(size_t i = 0; i < sizeof bins / sizeof bins[0]; i++){
+        for(size_t i = 0; i < countof(bins); i++){
             BuildTarget* bin = bins[i];
             const char* name = names[i];
-
             Atom run_name = b_atomize_f(ctx, "run-%s", name);
             BuildTarget* run = b_exec_target(ctx, run_name->data, bin);
             run->is_phony = 1;
             for(size_t j = 0; j < ctx->dash_dash_args.count; j++)
                 b_aarg(ctx, run, ctx->dash_dash_args.data[j]);
-
             Atom debug_name = b_atomize_f(ctx, "debug-%s", name);
             BuildTarget* debug = b_cmd_target(ctx, debug_name->data, "lldb");
             debug->should_exec = 1;
@@ -386,7 +385,7 @@ int main(int argc, char** argv, char** envp){
     {
         BuildTarget* docs = b_phony_target(ctx, "docs");
         static const char* doc_files[] = {"README", "EXTENSIONS"};
-        for(size_t i = 0; i < sizeof doc_files / sizeof doc_files[0]; i++){
+        for(size_t i = 0; i < countof(doc_files); i++){
             Atom md_name = b_atomize_f(ctx, "%s.md", doc_files[i]);
             BuildTarget* out = b_targeta(ctx, md_name);
             out->is_generated = 1;

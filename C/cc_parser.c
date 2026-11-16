@@ -2265,7 +2265,7 @@ cc_binop_lookup(CcPunct punct, CcExprKind* kind, int* prec){
         {CC_slash,   CC_EXPR_DIV,    13},
         {CC_percent, CC_EXPR_MOD,    13},
     };
-    for(size_t i = 0; i < sizeof binop_table / sizeof binop_table[0]; i++){
+    for(size_t i = 0; i < countof(binop_table); i++){
         if(binop_table[i].punct == punct){
             *kind = binop_table[i].kind;
             *prec = binop_table[i].prec;
@@ -8746,7 +8746,7 @@ static
 void
 _cc_release_expr(CcParser* p, CcExpr* e, size_t nvalues){
     #if CC_RECYCLE_EXPRS
-    if(nvalues < sizeof p->exprs / sizeof p->exprs[0]){
+    if(nvalues < countof(p->exprs)){
         fl_push(&p->exprs[nvalues], e);
         return;
     }
@@ -12820,7 +12820,7 @@ cc_finalize_enum(CcParser* p, CcEnum* e, _Bool fixed, _Bool packed){
     else {
         const CcBasicTypeKind* types = negative ? cc_enum_signed_types : cc_enum_unsigned_types;
         uint32_t min_size = packed ? 1 : cc_target(p)->sizeof_[CCBT_int];
-        for(size_t i = 0; i < sizeof cc_enum_signed_types / sizeof *cc_enum_signed_types; i++){
+        for(size_t i = 0; i < countof(cc_enum_signed_types); i++){
             CcQualType candidate = ccqt_basic(types[i]);
             if(cc_target(p)->sizeof_[types[i]] < min_size) continue;
             _Bool fits = 1;
@@ -13091,7 +13091,7 @@ cc_parse_enum(CcParser* p, CcParseFlags flags, SrcLoc loc, _Bool member, CcQualT
                 if(!has_fixed_underlying){
                     _Bool unsigned_ = ccqt_is_unsigned(next_type, !cc_target(p)->char_is_signed);
                     const CcBasicTypeKind* types = unsigned_ ? cc_enum_unsigned_types : cc_enum_signed_types;
-                    for(size_t i = 0; i < sizeof cc_enum_signed_types / sizeof *cc_enum_signed_types; i++){
+                    for(size_t i = 0; i < countof(cc_enum_signed_types); i++){
                         CcQualType candidate = ccqt_basic(types[i]);
                         if(cc_enumerator_value_fits(cc_target(p), candidate, next_value, next_negative)){
                             next_type = candidate;
@@ -17154,9 +17154,9 @@ cc_define_builtin_types(CcParser* p){
             {SVI("bitoffset"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, bitoffset)},
             {SVI("is_bitfield"), {.basic.kind=CCBT_unsigned}, offsetof(CiRtField, is_bitfield)},
         };
-        CcField* fields = Allocator_zalloc(al, (sizeof fieldinfos / sizeof fieldinfos[0]), sizeof *fields, _Alignof(CcField));
+        CcField* fields = Allocator_zalloc(al, countof(fieldinfos), sizeof *fields, _Alignof(CcField));
         if(!fields) return CC_OOM_ERROR;
-        for(size_t i = 0; i < sizeof fieldinfos / sizeof fieldinfos[0]; i++){
+        for(size_t i = 0; i < countof(fieldinfos); i++){
             struct f* f = &fieldinfos[i];
             Atom a = AT_atomize(p->cpp.at, f->name.text, f->name.length);
             if(!a) return CC_OOM_ERROR;
@@ -17172,7 +17172,7 @@ cc_define_builtin_types(CcParser* p){
         *s = (CcStruct){
             .kind = CC_STRUCT,
             .name = name,
-            .field_count = sizeof fieldinfos / sizeof fieldinfos[0],
+            .field_count = countof(fieldinfos),
             .fields = fields,
         };
         err = cc_compute_struct_layout(p, s, 0);
@@ -17191,9 +17191,9 @@ cc_define_builtin_types(CcParser* p){
             {SVI("offset"), ccqt_basic(cc_target(p)->size_type), offsetof(CiRtMethod, offset)},
             {SVI("address"), ccqt_basic(cc_target(p)->size_type), offsetof(CiRtMethod, address)},
         };
-        CcField* fields = Allocator_zalloc(al, (sizeof methodinfos / sizeof methodinfos[0]), sizeof *fields, _Alignof(CcField));
+        CcField* fields = Allocator_zalloc(al, countof(methodinfos), sizeof *fields, _Alignof(CcField));
         if(!fields) return CC_OOM_ERROR;
-        for(size_t i = 0; i < sizeof methodinfos / sizeof methodinfos[0]; i++){
+        for(size_t i = 0; i < countof(methodinfos); i++){
             struct f* f = &methodinfos[i];
             Atom a = AT_atomize(p->cpp.at, f->name.text, f->name.length);
             if(!a) return CC_OOM_ERROR;
@@ -17206,7 +17206,7 @@ cc_define_builtin_types(CcParser* p){
         *s = (CcStruct){
             .kind = CC_STRUCT,
             .name = name,
-            .field_count = sizeof methodinfos / sizeof methodinfos[0],
+            .field_count = countof(methodinfos),
             .fields = fields,
         };
         err = cc_compute_struct_layout(p, s, 0);
@@ -17226,7 +17226,7 @@ cc_define_builtin_types(CcParser* p){
         };
         CcField* fields = Allocator_zalloc(al, countof(enuminfos), sizeof *fields, _Alignof(CcField));
         if(!fields) return CC_OOM_ERROR;
-        for(size_t i = 0; i < sizeof enuminfos / sizeof enuminfos[0]; i++){
+        for(size_t i = 0; i < countof(enuminfos); i++){
             struct f* f = &enuminfos[i];
             Atom a = AT_atomize(p->cpp.at, f->name.text, f->name.length);
             if(!a) return CC_OOM_ERROR;
@@ -17242,7 +17242,7 @@ cc_define_builtin_types(CcParser* p){
         *s = (CcStruct){
             .kind = CC_STRUCT,
             .name = name,
-            .field_count = sizeof enuminfos / sizeof enuminfos[0],
+            .field_count = countof(enuminfos),
             .fields = fields,
         };
         err = cc_compute_struct_layout(p, s, 0);
@@ -17282,7 +17282,7 @@ cc_define_builtin_types(CcParser* p){
         };
         CcField* fields = Allocator_zalloc(al, countof(memberinfos), sizeof *fields, _Alignof(CcField));
         if(!fields) return CC_OOM_ERROR;
-        for(size_t i = 0; i < sizeof memberinfos / sizeof memberinfos[0]; i++){
+        for(size_t i = 0; i < countof(memberinfos); i++){
             struct f* f = &memberinfos[i];
             Atom a = AT_atomize(p->cpp.at, f->name.text, f->name.length);
             if(!a) return CC_OOM_ERROR;
@@ -17298,7 +17298,7 @@ cc_define_builtin_types(CcParser* p){
         *s = (CcStruct){
             .kind = CC_STRUCT,
             .name = name,
-            .field_count = sizeof memberinfos / sizeof memberinfos[0],
+            .field_count = countof(memberinfos),
             .fields = fields,
         };
         err = cc_compute_struct_layout(p, s, 0);
@@ -17356,7 +17356,7 @@ cc_define_builtin_types(CcParser* p){
             { SVI("uint8"), CCBT_unsigned_char},
             { SVI("int8_t"), CCBT_signed_char},
         };
-        for(size_t i = 0; i < sizeof to_register / sizeof to_register[0]; i++){
+        for(size_t i = 0; i < countof(to_register); i++){
             Atom name = AT_atomize(p->cpp.at, to_register[i].name.text, to_register[i].name.length);
             if(!name) return CC_OOM_ERROR;
             err = cc_scope_insert_typedef(al, &p->root->scope, name, ccqt_basic(to_register[i].kind), (SrcLoc){0});
@@ -17515,8 +17515,9 @@ cc_define_builtin_types(CcParser* p){
             {SVI("__hotswap"), CC__hotswap},
             {SVI("__compile"), CC__compile},
         };
-        if(AM_reserve(&p->builtins, al, sizeof builtins / sizeof builtins[0])) return CC_OOM_ERROR;
-        for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
+        if(AM_reserve(&p->builtins, al, countof(builtins)))
+            return CC_OOM_ERROR;
+        for(size_t i = 0; i < countof(builtins); i++){
             Atom a = AT_atomize(p->cpp.at, builtins[i].name.text, builtins[i].name.length);
             if(!a) return CC_OOM_ERROR;
             err = AM_put(&p->builtins, al, a, (void*)builtins[i].id);
@@ -17581,8 +17582,9 @@ cc_define_builtin_types(CcParser* p){
             {SVI("element_type"), CC_TYPE_ELEMENT_TYPE},
             {SVI("underlying_type"), CC_TYPE_UNDERLYING_TYPE},
         };
-        if(AM_reserve(&p->type_intro, al, sizeof typeintro / sizeof typeintro[0])) return CC_OOM_ERROR;
-        for(size_t i = 0; i < sizeof typeintro / sizeof typeintro[0]; i++){
+        if(AM_reserve(&p->type_intro, al, countof(typeintro)))
+            return CC_OOM_ERROR;
+        for(size_t i = 0; i < countof(typeintro); i++){
             Atom a = AT_atomize(p->cpp.at, typeintro[i].name.text, typeintro[i].name.length);
             if(!a) return CC_OOM_ERROR;
             err = AM_put(&p->type_intro, al, a, (void*)(uintptr_t)typeintro[i].op);
@@ -17608,7 +17610,7 @@ cc_define_builtin_types(CcParser* p){
             {SVI("__builtin_fabs"), {.basic.kind=CCBT_double}, 1, {{.basic.kind=CCBT_double}}},
             {SVI("__builtin_fabsl"), {.basic.kind=CCBT_long_double}, 1, {{.basic.kind=CCBT_long_double}}},
         };
-        for(size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++){
+        for(size_t i = 0; i < countof(builtins); i++){
             struct b* b = &builtins[i];
             CcFunction* ftype = cc_intern_function(&p->type_cache, al, b->ret, b->params, b->nargs, b->nargs, b->variadic, 0);
             if(!ftype) return CC_OOM_ERROR;

@@ -9,6 +9,7 @@
 #include "Drp/argument_parsing.h"
 #include "C/cpp_preprocessor.h"
 #include "C/cc_target.h"
+#include "Drp/countof.h"
 #ifdef __clang__
 #pragma clang assume_nonnull begin
 #endif
@@ -162,7 +163,7 @@ cpp_kwargs(CppPreprocessor* cpp){
     kw_args[5].dest = cpp_macro_dest(&cpp_cli_macros);
     static ArgParseKwParams kwargs = {
         .args = kw_args,
-        .count = sizeof kw_args / sizeof kw_args[0],
+        .count = countof(kw_args),
     };
 
     return &kwargs;

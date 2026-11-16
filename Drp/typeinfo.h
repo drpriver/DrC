@@ -358,7 +358,7 @@ static const Atom _Nonnull TYPE_ATOMS[] = {
 static
 int
 register_type_atoms(AtomTable* at){
-    for(size_t i = 0; i < sizeof TYPE_ATOMS / sizeof TYPE_ATOMS[0];i++){
+    for(size_t i = 0; i < countof(TYPE_ATOMS);i++){
         int e = AT_store_atom(at, TYPE_ATOMS[i]);
         if(e != 0) __builtin_trap();
     }

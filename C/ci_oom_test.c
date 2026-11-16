@@ -19,6 +19,7 @@
 #include "../Drp/MStringBuilder.h"
 #include "../Drp/file_cache.h"
 #include "../Drp/msb_logger.h"
+#include "../Drp/countof.h"
 #include "cc_parser.h"
 #include "cc_target.h"
 #include "ci_interp.h"
@@ -612,8 +613,6 @@ run_one(Allocator al, StringView program, int64_t*_Nullable setup_allocs_out){
     return err;
 }
 
-enum { NUM_PROGRAMS = sizeof test_programs / sizeof test_programs[0] };
-
 static
 size_t
 recording_count_leaked(RecordingAllocator* r){
@@ -669,7 +668,7 @@ TestFunction(test_oom){
     TESTBEGIN();
     for(_Bool did_work = 1;did_work;){
         did_work = 0;
-        for(size_t p = 0; p < NUM_PROGRAMS; p++){
+        for(size_t p = 0; p < countof(test_programs); p++){
             struct OomTestCase* tc = &test_programs[p];
             {
                 int state = test_atomic_load_acquire(&tc->baseline_done);
@@ -719,7 +718,7 @@ TestFunction(test_oom){
 TestFunction(test_blob_size_overflow){
     TESTBEGIN();
     size_t lengths[] = {SIZE_MAX, SIZE_MAX - 15, (size_t)PTRDIFF_MAX};
-    for(size_t i = 0; i < sizeof lengths / sizeof lengths[0]; i++){
+    for(size_t i = 0; i < countof(lengths); i++){
         // Deny allocations so an unchecked length cannot reach memcpy.
         TestingAllocator ta = {0};
         LOCK_T_init(&ta.lock);
@@ -757,7 +756,7 @@ int main(int argc, char** argv){
     };
     ArgParseKwParams extra = {
         .args = extra_args,
-        .count = sizeof extra_args / sizeof extra_args[0],
+        .count = countof(extra_args),
     };
     return test_main(argc, argv, &extra);
 }

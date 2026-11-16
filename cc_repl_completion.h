@@ -10,6 +10,7 @@
 #include "Drp/Allocators/allocator.h"
 #include "Drp/Allocators/mallocator.h"
 #include "Drp/merge_sort.h"
+#include "Drp/countof.h"
 
 #ifndef MARRAY_STRING_VIEW
 #define MARRAY_STRING_VIEW
@@ -135,8 +136,8 @@ repl_tab_complete(GetInputCtx* ctx, size_t orig_cursor, size_t orig_len, int n_t
         } while(0)
 
         size_t max_candidates = 0;
-        enum { N_KEYWORDS = sizeof cc_keyword_strs / sizeof cc_keyword_strs[0] };
-        enum { N_DIRECTIVES = sizeof cc_directive_strs / sizeof cc_directive_strs[0] };
+        enum { N_KEYWORDS = countof(cc_keyword_strs) };
+        enum { N_DIRECTIVES = countof(cc_directive_strs) };
 
         if(is_directive)
             max_candidates = N_DIRECTIVES;

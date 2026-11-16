@@ -2,6 +2,7 @@
 #define DRP_TUI_C
 #include "tui.h"
 #include "measure_time.h"
+#include "countof.h"
 
 #include <string.h>
 #ifndef _WIN32
@@ -1037,7 +1038,7 @@ tui_cursor(Tui* tui, int* x, int* y){
 
 void
 tui_push_state(Tui* tui){
-    if(tui->canvas.state_cursor +1 >= sizeof tui->canvas.state_stack / sizeof tui->canvas.state_stack[0]){
+    if(tui->canvas.state_cursor +1 >= countof(tui->canvas.state_stack)){
         // __builtin_debugtrap();
         return;
     }
