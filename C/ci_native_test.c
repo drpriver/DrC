@@ -1297,6 +1297,10 @@ TestFunction(test_interop){
                "return bump(x).x-x.x==1.L;\n"),
             {{SV("bump"), (void*)test_ld_record}},
             .exit_code = 1,
+            #if defined __MINGW32__
+            // Native long double arithmetic depends on the thread's x87 precision mode.
+            .skip = 1,
+            #endif
         },
         {
             "long double record: native callback argument and result", __LINE__,
