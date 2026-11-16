@@ -22,7 +22,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-      - run: sudo apt-get install -y libffi-dev gdb
       - run: ${{ matrix.cc }} --version
       - name: Build Linux binaries
         id: linux-build
@@ -40,7 +39,12 @@ jobs:
         timeout-minutes: 10
         env:
           CI_COMPILER: ${{ matrix.cc }}
-        run: bash .github/scripts/linux-crash-diagnostics.sh sanitized
+        run: |
+          if ! command -v gdb >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y gdb
+          fi
+          bash .github/scripts/linux-crash-diagnostics.sh sanitized
       - name: Test unsanitized Linux binaries
         id: linux-unsanitized
         if: ${{ !cancelled() && steps.linux-build.outcome == 'success' }}
@@ -55,7 +59,12 @@ jobs:
         timeout-minutes: 10
         env:
           CI_COMPILER: ${{ matrix.cc }}
-        run: bash .github/scripts/linux-crash-diagnostics.sh unsanitized
+        run: |
+          if ! command -v gdb >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y gdb
+          fi
+          bash .github/scripts/linux-crash-diagnostics.sh unsanitized
       - name: Upload Linux crash evidence
         if: ${{ !cancelled() && (steps.linux-sanitized.outcome == 'failure' || steps.linux-unsanitized.outcome == 'failure') }}
         uses: actions/upload-artifact@v6
@@ -204,7 +213,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - run: sudo apt-get install -y libffi-dev
       - run: gcc build.c -o build && ./build -b Bin coverage >> $GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v6
         with:
@@ -215,7 +223,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - run: sudo apt-get install -y libffi-dev
       - run: clang build.c -o build && ./build -b Bin
       - name: Restore fuzz corpus
         uses: actions/cache/restore@v5
