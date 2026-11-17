@@ -1707,7 +1707,8 @@ assert(x && *x == 42);
 ### `__hotswap(original, replacement)`
 
 Replaces the interpreted function reached by `original` with
-`replacement` at runtime. The original function must have been declared with `hotswappable`.
+`replacement` at runtime. The original function must have been declared with
+`[[drc::hotswappable]]`.
 Both arguments must be function expressions or
 function pointers with the same exact function pointer type.
 

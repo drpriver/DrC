@@ -384,6 +384,9 @@ int main(int argc, char** argv, char** envp){
     }
     {
         BuildTarget* docs = b_phony_target(ctx, "docs");
+        MStringBuilder dndc_path = {.allocator = allocator_from_arena(&ctx->tmp_aa)};
+        _Bool use_python = env_resolve_prog_path(&ctx->env, SV("dndc"), &dndc_path, b_file_exists, ctx) != 0;
+        msb_destroy(&dndc_path);
         static const char* doc_files[] = {"README", "EXTENSIONS"};
         for(size_t i = 0; i < countof(doc_files); i++){
             Atom md_name = b_atomize_f(ctx, "%s.md", doc_files[i]);
@@ -391,7 +394,12 @@ int main(int argc, char** argv, char** envp){
             out->is_generated = 1;
             out->user_bits |= EXCLUDE_FROM_MAKEFILE;
             Atom cmd_name = b_atomize_f(ctx, "compile-%s", doc_files[i]);
-            BuildTarget* cmd = b_cmd_target(ctx, cmd_name->data, "dndc");
+            BuildTarget* cmd = b_cmd_target(ctx, cmd_name->data, use_python ? (BUILD_OS == OS_WINDOWS ? "py" : "python3") : "dndc");
+            if(use_python){
+                b_src_inp(ctx, cmd, "Tools/dndc.py");
+                static BuildJobPool docs_pool = {.limit = 1}; // self-install can otherwise race
+                cmd->job_pool = &docs_pool;
+            }
             cmd->user_bits |= EXCLUDE_FROM_MAKEFILE;
             Atom dnd_name = b_atomize_f(ctx, "%s.dnd", doc_files[i]);
             b_src_inp(ctx, cmd, dnd_name->data);
