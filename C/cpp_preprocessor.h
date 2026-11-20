@@ -76,15 +76,16 @@ struct CppMacro {
     union {
         uint64_t _bits;
         struct {
-            uint64_t is_function_like: 1;
-            uint64_t is_variadic:      1;
-            uint64_t is_builtin:       1;
-            uint64_t no_expand_args:   1;
-            uint64_t _reserved:        4;
-            uint64_t is_disabled:      1;
-            uint64_t _padding:         7;
-            uint64_t nparams:          16;
-            uint64_t nreplace:         32;
+            uint64_t is_function_like:  1;
+            uint64_t is_variadic:       1;
+            uint64_t is_builtin:        1;
+            uint64_t no_expand_args:    1;
+            uint64_t uses_indexed_args: 1;
+            uint64_t _reserved:         3;
+            uint64_t is_disabled:       1;
+            uint64_t _padding:          7;
+            uint64_t nparams:           16;
+            uint64_t nreplace:          32;
         };
     };
     SrcLoc def_loc;

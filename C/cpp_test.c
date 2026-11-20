@@ -318,6 +318,20 @@ TestFunction(test_func_macros){
         {"counter argument cached", SVI("#define F(x) x x\nF(__COUNTER__) __COUNTER__"), SVI("\n0 0 1"), __LINE__},
         {"counter unused and raw", SVI("#define F(x) #x\n#define DROP(x)\nF(__COUNTER__) DROP(__COUNTER__) __COUNTER__"), SVI("\n\n\"__COUNTER__\"  0"), __LINE__},
         {"counter va opt cached", SVI("#define F(...) __VA_OPT__(__VA_ARGS__ __VA_ARGS__)\nF(__COUNTER__) __COUNTER__"), SVI("\n0 0 1"), __LINE__},
+        {"counter indexed argument cached", SVI(
+            "#define F(...) __VA_ARG__(0) __VA_ARG__(0)\n"
+            "F(__COUNTER__) __COUNTER__"), SVI("\n0 0 1"), __LINE__},
+        {"counter shared between variadic pack and indexed argument", SVI(
+            "#define F(...) __VA_ARGS__ __VA_ARG__(1)\n"
+            "F(__COUNTER__, __COUNTER__) __COUNTER__"), SVI("\n0, 1 1 2"), __LINE__},
+        {"indexed argument reused by pack with empty arguments", SVI(
+            "#define PAIR __COUNTER__,__COUNTER__\n"
+            "#define F(tag, ...) __VA_ARG__(2) [__VA_ARGS__]\n"
+            "F(tag,, __COUNTER__, PAIR,) __COUNTER__"), SVI("\n\n0,1 [, 2, 0,1,] 3"), __LINE__},
+        {"raw and unused indexed arguments skip expansion", SVI(
+            "#define F(...) #__VA_ARG__(0) prefix ## __VA_ARG__(1) __VA_ARG__(2) ## suffix\n"
+            "F(__COUNTER__, __COUNTER__, __COUNTER__, __COUNTER__) __COUNTER__"),
+            SVI("\n\"__COUNTER__\" prefix__COUNTER__ __COUNTER__suffix 0"), __LINE__},
         {"empty variadic forms", SVI("#define E\n#define F(...) [__VA_OPT__(yes)]\nF() F( ) F(\n) F(E) F(,)"), SVI("\n\n[] [] [] [] [yes]"), __LINE__},
         {"empty paste operands", SVI("#define C(a,b) a##b\nC(,) C(,word) C(word,)"), SVI("\n word word"), __LINE__},
         {"suppressed token through argument", SVI("#define F(x) x\n#define A F(A)\nF(A) A"), SVI("\n\nA A"), __LINE__},
@@ -483,6 +497,10 @@ TestFunction(test_func_macros){
             "#define F(...) a __VA_OPT__() b\n"
             "F(x)"), SVI("\na  b"), __LINE__},
         // # __VA_OPT__ with ## inside content
+        {"stringify_va_opt_substitutes_before_stringifying", SVI(
+            "#define X value\n"
+            "#define Q(x, ...) #__VA_OPT__(x x ## _suffix)\n"
+            "Q(X, yes) Q(X)"), SVI("\n\n\"value X_suffix\" \"\""), __LINE__},
         {"stringify_va_opt_with_paste", SVI(
             "#define F(...) #__VA_OPT__(a ## b)\n"
             "F(x)\n"
@@ -1348,6 +1366,9 @@ TestFunction(test_error_locations){
         {"direct too few args", __LINE__,
             SVI("#define F(x,y) x y\nF(1)"),
             SVI("(test):2:3: error: Too few arguments to function-like macro F(), expected 2, got 1\n")},
+        {"_Pragma trailing token after string", __LINE__,
+            SVI("_Pragma(\"unknown\" extra)"),
+            SVI("(test):1:19: error: _Pragma requires a string literal\n")},
         {"indirect too many args", __LINE__,
             SVI("#define F(x) x\n"
                "#define M F(1,2)\n"
@@ -1422,6 +1443,19 @@ TestFunction(test_messages){
             SVI("#warning hello\n"),
             SVI("(test):1:2: warning: #warning hello\n"),
         },
+        {"_Pragma expands a nested pragma in message", __LINE__,
+            SVI("#define INNER _Pragma(\"message(\\\"inner\\\")\") \"outer\"\n"
+                "_Pragma(\"message(INNER)\")"),
+            SVI("(test):1:15: info: inner\n"
+                "(test):2:1: ... expanded from here\n"
+                "(test):2:1: info:  outer\n")},
+        {"_Pragma keeps the enclosing macro disabled", __LINE__,
+            SVI("#define STR_RAW(x) #x\n"
+                "#define STR(x) STR_RAW(x)\n"
+                "#define OUT(x,y) _Pragma(\"message(STR(OUT(0)))\")\n"
+                "OUT(1,2)"),
+            SVI("(test):3:18: info: OUT(0)\n"
+                "(test):4:1: ... expanded from here\n")},
         {"object redefinition uses new value", __LINE__,
             SVI("#define X 1\n#define X 2\n__print(X)\n"),
             SVI("(test):2:9: warning: Macro (X) redefined with a different definition\n"
@@ -2854,6 +2888,11 @@ TestFunction(test_embed){
         {SVI("_Embed(\"\\\"data\\\"\")"), SVI("1,2,3,255,0,8")},
         {SVI("#define E \"\\\"data\\\" limit(2)\"\n_Embed( E )"), SVI("\n1,2")},
         {SVI("#define EMBED(...) _Embed(#__VA_ARGS__)\nEMBED(\"data\" limit(2) prefix(9,))"), SVI("\n9,1,2")},
+        {SVI("#define FIRST_BYTE _Embed(\"\\\"data\\\" limit(1)\")\n"
+             "_Embed(\"\\\"empty\\\" if_empty(FIRST_BYTE)\")\n"
+             "#embed \"empty\" if_empty(FIRST_BYTE)"), SVI("\n1\n1")},
+        {SVI("#define OUT(x,y) _Embed(\"\\\"empty\\\" if_empty(OUT(0))\")\n"
+             "OUT(1,2)"), SVI("\nOUT(0)")},
         {SVI("#define F \"data\"\n#define N 2\n_Embed(\"F limit(N)\")"), SVI("\n\n1,2")},
         {SVI("_Embed(\nL\"<data> limit(2)\"\n)"), SVI("1,2")},
         {SVI("#define data wrong\n#embed <data> limit(2)\n"), SVI("\n1,2\n")},
