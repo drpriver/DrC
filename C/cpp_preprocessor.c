@@ -1857,7 +1857,7 @@ cpp_read_directive_macro_name(CppPreprocessor* cpp, CppToken* tok){
 
 static
 int
-cpp_validate_replacement(CppPreprocessor* cpp, CppMacro* macro, const CppToken*_Null_unspecified repl, size_t count){
+cpp_validate_paste_edges(CppPreprocessor* cpp, const CppToken*_Null_unspecified repl, size_t count){
     size_t first = 0, last = count;
     while(first < last && repl[first].type == CPP_WHITESPACE) first++;
     while(last > first && repl[last-1].type == CPP_WHITESPACE) last--;
@@ -1866,8 +1866,16 @@ cpp_validate_replacement(CppPreprocessor* cpp, CppMacro* macro, const CppToken*_
         return cpp_error(cpp, repl[first].loc, "'##' cannot appear at start of replacement list");
     if(repl[last-1].type == CPP_PUNCTUATOR && repl[last-1].punct == '##')
         return cpp_error(cpp, repl[last-1].loc, "'##' cannot appear at end of replacement list");
+    return 0;
+}
+
+static
+int
+cpp_validate_replacement(CppPreprocessor* cpp, CppMacro* macro, const CppToken*_Null_unspecified repl, size_t count){
+    int err = cpp_validate_paste_edges(cpp, repl, count);
+    if(err) return err;
     size_t va_opt_end = 0;
-    for(size_t i = first; i < last; i++){
+    for(size_t i = 0; i < count; i++){
         if(macro->is_variadic && repl[i].type == CPP_IDENTIFIER && sv_equals(repl[i].txt, SV("__VA_ARG__")))
             macro->uses_indexed_args = 1;
         if(repl[i].type == CPP_IDENTIFIER && sv_equals(repl[i].txt, SV("__VA_OPT__"))){
@@ -1876,24 +1884,27 @@ cpp_validate_replacement(CppPreprocessor* cpp, CppMacro* macro, const CppToken*_
             if(i < va_opt_end)
                 return cpp_error(cpp, repl[i].loc, "Nested __VA_OPT__ is not allowed");
             size_t j = i+1;
-            while(j < last && repl[j].type == CPP_WHITESPACE) j++;
-            if(j == last || repl[j].type != CPP_PUNCTUATOR || repl[j].punct != '(')
+            while(j < count && repl[j].type == CPP_WHITESPACE) j++;
+            if(j == count || repl[j].type != CPP_PUNCTUATOR || repl[j].punct != '(')
                 return cpp_error(cpp, repl[i].loc, "Expected '(' after __VA_OPT__");
+            size_t start = j+1;
             size_t depth = 1;
-            for(j++; j < last; j++){
+            for(j++; j < count; j++){
                 if(repl[j].type != CPP_PUNCTUATOR) continue;
                 if(repl[j].punct == '(') depth++;
                 else if(repl[j].punct == ')' && !--depth) break;
             }
-            if(j == last)
+            if(j == count)
                 return cpp_error(cpp, repl[i].loc, "Unterminated __VA_OPT__");
+            err = cpp_validate_paste_edges(cpp, repl + start, j - start);
+            if(err) return err;
             va_opt_end = j;
         }
         if(!macro->is_function_like) continue;
         if(repl[i].type != CPP_PUNCTUATOR || repl[i].punct != '#') continue;
         size_t j = i + 1;
-        while(j < last && repl[j].type == CPP_WHITESPACE) j++;
-        if(j < last && repl[j].type == CPP_IDENTIFIER){
+        while(j < count && repl[j].type == CPP_WHITESPACE) j++;
+        if(j < count && repl[j].type == CPP_IDENTIFIER){
             if(repl[j].param_idx) continue;
             if(macro->is_variadic && (sv_equals(repl[j].txt, SV("__VA_OPT__")) || sv_equals(repl[j].txt, SV("__VA_ARG__"))))
                 continue;
@@ -3741,6 +3752,70 @@ cpp_resolve_va_arg(
 
 static
 int
+cpp_stringify_operand(CppPreprocessor *cpp, const CppToken *repl, size_t nreplace, size_t *position,
+    CppMacro *macro, const CppTokens *args, const Marray(size_t) *arg_seps,
+    CppTokens *_Nullable *_Null_unspecified expanded_args, CppToken *result, SrcLocExp *expansion_parent)
+{
+    SrcLoc loc = repl[*position].loc;
+    size_t j = *position + 1;
+    while(j < nreplace && repl[j].type == CPP_WHITESPACE) j++;
+    if(j == nreplace || repl[j].type != CPP_IDENTIFIER)
+        goto invalid_operand;
+    if(sv_equals(repl[j].txt, SV("__VA_OPT__"))){
+        size_t start, count;
+        int err = cpp_parse_va_opt_content(cpp, repl, nreplace, j+1, repl[j].loc, &start, &count, position, expansion_parent);
+        if(err) return err;
+        _Bool nonempty;
+        err = cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args, &nonempty);
+        if(err) return err;
+        if(!nonempty){
+            *result = (CppToken){.type=CPP_STRING, .txt=SV("\"\""), .loc=loc};
+            return 0;
+        }
+        CppTokens *temp = cpp_get_scratch(cpp);
+        if(!temp) return CPP_OOM_ERROR;
+        err = cpp_substitute_and_paste(cpp, repl+start, count, macro, args, arg_seps, expanded_args, temp, expansion_parent);
+        if(!err){
+            size_t w = 0;
+            for(size_t m = 0; m < temp->count; m++){
+                if(temp->data[m].type != CPP_PLACEMARKER) temp->data[w++] = temp->data[m];
+            }
+            *result = cpp_stringify_argument(cpp, temp->data, w, loc);
+        }
+        cpp_release_scratch(cpp, temp);
+        return err;
+    }
+    CppToken *start;
+    size_t count;
+    if(macro->is_variadic && sv_equals(repl[j].txt, SV("__VA_ARG__"))){
+        size_t arg_idx;
+        int err = cpp_resolve_va_arg(cpp, repl, nreplace, j+1, macro, args, arg_seps, expanded_args, repl[j].loc, expansion_parent, &arg_idx, position);
+        if(err) return err;
+        cpp_get_argument(args, arg_seps, arg_idx, &start, &count);
+    }
+    else {
+        if(!repl[j].param_idx) goto invalid_operand;
+        *position = j;
+        size_t idx = repl[j].param_idx - 1;
+        if(macro->is_variadic && idx == (uint64_t)macro->nparams + 1){
+            size_t nargs = cpp_has_argument_tokens(args) ? arg_seps->count + 1 : 0;
+            size_t va_count = nargs > macro->nparams ? nargs - macro->nparams : 0;
+            Atom a = cpp_atomizef(cpp, "\"%zu\"", va_count);
+            if(!a) return CPP_OOM_ERROR;
+            *result = (CppToken){.type=CPP_STRING, .txt={a->length, a->data}, .loc=loc};
+            return 0;
+        }
+        cpp_get_param_arg(macro, args, arg_seps, idx, &start, &count);
+    }
+    *result = cpp_stringify_argument(cpp, start, count, loc);
+    return 0;
+
+    invalid_operand:
+    return cpp_error(cpp, cpp_chain_loc(cpp, loc, expansion_parent), "'#' is not followed by a macro parameter");
+}
+
+static
+int
 cpp_substitute_and_paste(
     CppPreprocessor *cpp,
     const CppToken *repl, size_t nreplace,
@@ -3755,83 +3830,12 @@ cpp_substitute_and_paste(
     for(size_t i = 0; i < nreplace; i++){
         CppToken t = repl[i];
 
-        // # (stringify) — only in function-like macros
         if(t.type == CPP_PUNCTUATOR && t.punct == '#' && macro->is_function_like){
-            size_t j = i + 1;
-            while(j < nreplace && repl[j].type == CPP_WHITESPACE) j++;
-
-            // # __VA_OPT__(content)
-            if(j < nreplace && repl[j].type == CPP_IDENTIFIER && sv_equals(repl[j].txt, SV("__VA_OPT__"))){
-                size_t cstart, ccount, cparen;
-                err = cpp_parse_va_opt_content(cpp, repl, nreplace, j+1, repl[j].loc, &cstart, &ccount, &cparen, expansion_parent);
-                if(err) return err;
-                CppToken stringified;
-                _Bool nonempty;
-                err = cpp_va_args_nonempty(cpp, macro, args, arg_seps, expanded_args, &nonempty);
-                if(err) return err;
-                if(nonempty){
-                    CppTokens *temp = cpp_get_scratch(cpp);
-                    if(!temp) return CPP_OOM_ERROR;
-                    err = cpp_substitute_and_paste(cpp, repl+cstart, ccount, macro, args, arg_seps, expanded_args, temp, expansion_parent);
-                    if(err){
-                        cpp_release_scratch(cpp, temp);
-                        return err;
-                    }
-                    // Strip placemarkers in-place before stringifying
-                    size_t w = 0;
-                    for(size_t m = 0; m < temp->count; m++)
-                        if(temp->data[m].type != CPP_PLACEMARKER)
-                            temp->data[w++] = temp->data[m];
-                    stringified = cpp_stringify_argument(cpp, temp->data, w, t.loc);
-                    cpp_release_scratch(cpp, temp);
-                }
-                else {
-                    stringified = (CppToken){.type = CPP_STRING, .txt = SV("\"\""), .loc = t.loc};
-                }
-                err = cpp_push_tok(cpp, out, stringified);
-                if(err) return err;
-                i = cparen;
-                continue;
-            }
-
-            // # __VA_ARG__(expr)
-            if(j < nreplace && macro->is_variadic && repl[j].type == CPP_IDENTIFIER && sv_equals(repl[j].txt, SV("__VA_ARG__"))){
-                size_t arg_idx, cparen;
-                err = cpp_resolve_va_arg(cpp, repl, nreplace, j+1, macro, args, arg_seps, expanded_args, repl[j].loc, expansion_parent, &arg_idx, &cparen);
-                if(err) return err;
-                CppToken *arg_start; size_t arg_count;
-                cpp_get_argument(args, arg_seps, arg_idx, &arg_start, &arg_count);
-                CppToken stringified = cpp_stringify_argument(cpp, arg_start, arg_count, t.loc);
-                err = cpp_push_tok(cpp, out, stringified);
-                if(err) return err;
-                i = cparen;
-                continue;
-            }
-
-            // # param
-            if(j >= nreplace || repl[j].param_idx == 0){
-                SrcLoc eloc = cpp_chain_loc(cpp, t.loc, expansion_parent);
-                return cpp_error(cpp, eloc, "'#' is not followed by a macro parameter");
-            }
-            size_t pidx = repl[j].param_idx - 1;
-            // # __VA_COUNT__
-            if(pidx == (uint64_t)macro->nparams + 1 && macro->is_variadic){
-                size_t nargs = cpp_has_argument_tokens(args) ? arg_seps->count + 1 : 0;
-                size_t va_count = nargs > macro->nparams ? nargs - macro->nparams : 0;
-                Atom a = cpp_atomizef(cpp, "\"%zu\"", va_count);
-                if(!a) return CPP_OOM_ERROR;
-                CppToken stringified = {.type = CPP_STRING, .txt = {a->length, a->data}, .loc = t.loc};
-                err = cpp_push_tok(cpp, out, stringified);
-                if(err) return err;
-                i = j;
-                continue;
-            }
-            CppToken *arg_start; size_t arg_count;
-            cpp_get_param_arg(macro, args, arg_seps, pidx, &arg_start, &arg_count);
-            CppToken stringified = cpp_stringify_argument(cpp, arg_start, arg_count, t.loc);
+            CppToken stringified;
+            err = cpp_stringify_operand(cpp, repl, nreplace, &i, macro, args, arg_seps, expanded_args, &stringified, expansion_parent);
+            if(err) return err;
             err = cpp_push_tok(cpp, out, stringified);
             if(err) return err;
-            i = j;
             continue;
         }
 
@@ -3978,8 +3982,11 @@ cpp_substitute_and_paste(
                 continue;
             }
 
-            // Regular token as right operand
             right = repl[j];
+            if(macro->is_function_like && right.type == CPP_PUNCTUATOR && right.punct == '#'){
+                err = cpp_stringify_operand(cpp, repl, nreplace, &skip_to, macro, args, arg_seps, expanded_args, &right, expansion_parent);
+                if(err) return err;
+            }
             CppToken pr;
             err = cpp_paste_tokens(cpp, left, right, &pr, t.loc, expansion_parent);
             if(err) return err;
@@ -5828,8 +5835,8 @@ cpp_define_builtin_macros(CppPreprocessor* cpp){
         {SVI("__calc"), cpp_builtin_calc, 1, 0, 1},
         {SVI("__MIXIN__"), cpp_builtin_mixin, 1, 0, 0},
         {SVI("__mixin"), cpp_builtin_mixin, 1, 0, 0},
-        {SVI("__env"), cpp_builtin_env, 1, 1, 0},
-        {SVI("__ENV__"), cpp_builtin_env, 1, 1, 0},
+        {SVI("__env"), cpp_builtin_env, 1, 1, 1},
+        {SVI("__ENV__"), cpp_builtin_env, 1, 1, 1},
         {SVI("__IF__"), cpp_builtin_if, 3, 0, 1},
         {SVI("__if"), cpp_builtin_if, 3, 0, 1},
         {SVI("__ident"), cpp_builtin_ident, 1, 0, 0},
@@ -6362,15 +6369,17 @@ static
 int
 cpp_builtin_where(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, CppTokens* outtoks, const CppTokens* args, const Marray(size_t)*arg_seps){
     (void)ctx; (void)outtoks; (void)arg_seps;
-    // Find the first non-whitespace token — should be an identifier
     const CppToken* name_tok = NULL;
     for(size_t i = 0; i < args->count; i++){
-        if(args->data[i].type != CPP_WHITESPACE && args->data[i].type != CPP_NEWLINE){
-            name_tok = &args->data[i];
-            break;
-        }
+        const CppToken *tok = &args->data[i];
+        if(tok->type == CPP_WHITESPACE || tok->type == CPP_NEWLINE) continue;
+        if(name_tok)
+            return cpp_error(cpp, tok->loc, "__where__: expected a single macro name");
+        if(tok->type != CPP_IDENTIFIER)
+            return cpp_error(cpp, loc, "__where__: expected a macro name");
+        name_tok = tok;
     }
-    if(!name_tok || name_tok->type != CPP_IDENTIFIER)
+    if(!name_tok)
         return cpp_error(cpp, loc, "__where__: expected a macro name");
     Atom a = AT_get_atom(cpp->at, name_tok->txt.text, name_tok->txt.length);
     CppMacro* m = a ? AM_get(&cpp->macros, a) : NULL;
@@ -6389,8 +6398,12 @@ cpp_builtin_env(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
     CppToken *arg0_toks; size_t arg0_count;
     cpp_get_argument(args, arg_seps, 0, &arg0_toks, &arg0_count);
     MStringBuilder sb = {.allocator = allocator_from_arena(&cpp->synth_arena)};
-    for(size_t i = 0; i < arg0_count; i++){
-        CppToken tok = arg0_toks[i];
+    CppTokens *key = cpp_get_scratch(cpp);
+    if(!key) return CPP_OOM_ERROR;
+    err = cpp_expand_argument(cpp, arg0_toks, arg0_count, key);
+    if(err) goto finally;
+    for(size_t i = 0; i < key->count; i++){
+        CppToken tok = key->data[i];
         if(tok.type == CPP_WHITESPACE || tok.type == CPP_NEWLINE) continue;
         if(tok.type == CPP_STRING){
             err = cpp_decode_text(cpp, tok, &sb);
@@ -6402,18 +6415,14 @@ cpp_builtin_env(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
     }
     StringView sv = msb_borrow_sv(&sb);
     Atom v = env_getenv2(cpp->env, sv.text, sv.length);
-    if(!v && arg_seps->count >= 1){
-        // Fallback: emit the second argument's tokens directly (already expanded)
-        CppToken *fb_toks; size_t fb_count;
-        cpp_get_argument(args, arg_seps, 1, &fb_toks, &fb_count);
-        for(size_t i = 0; i < fb_count; i++){
-            err = cpp_push_tok(cpp, outtoks, fb_toks[i]);
-            if(err) goto finally;
-        }
+    if(!v){
+        CppToken *fallback;
+        size_t count;
+        cpp_get_va_args(args, arg_seps, 1, &fallback, &count);
+        err = cpp_expand_argument(cpp, fallback, count, outtoks);
         goto finally;
     }
-    if(!v) v = cpp_atomizef(cpp, "\"\"");
-    else v = cpp_quote_string(cpp, (StringView){v->length, v->data});
+    v = cpp_quote_string(cpp, (StringView){v->length, v->data});
     if(!v) {
         err = CPP_OOM_ERROR;
         goto finally;
@@ -6425,6 +6434,7 @@ cpp_builtin_env(void* _Null_unspecified ctx, CppPreprocessor* cpp, SrcLoc loc, C
     };
     err = cpp_push_tok(cpp, outtoks, tok);
     finally:
+    cpp_release_scratch(cpp, key);
     msb_destroy(&sb);
     return err;
 

@@ -398,6 +398,14 @@ TestFunction(test_func_macros){
             "#define F(x) x\n#define STR(x) #x\n#define EXPAND(x) STR(x)\n"
             "EXPAND(F\nword)"), SVI("\n\n\n\"F word\""), __LINE__},
         {"token_paste",SVI("#define PASTE(a,b) a##b\nPASTE(foo, bar)"), SVI("\nfoobar"), __LINE__},
+        {"paste a prefix onto a stringified argument", SVI(
+            "#define W(x) L ## #x\n"
+            "W(__COUNTER__) __COUNTER__"), SVI("\nL\"__COUNTER__\" 0"), __LINE__},
+        {"paste a prefix onto stringified variadic operands", SVI(
+            "#define W(...) u8 ## #__VA_OPT__(__VA_ARGS__) L ## #__VA_COUNT__\n"
+            "#define FIRST(...) U ## #__VA_ARG__(0)\n"
+            "W() FIRST(name) W(__COUNTER__) __COUNTER__"),
+            SVI("\n\nu8\"\" L\"0\" U\"name\" u8\"0\" L\"1\" 1"), __LINE__},
         {"token_paste_3",SVI("#define PASTE3(a,b,c) a##b##c\nPASTE3(x,y,z)"),SVI("\nxyz"),__LINE__},
         {"paste_empty_left",SVI("#define PASTE(a,b) a##b\nPASTE(,bar)"),SVI("\nbar"), __LINE__},
         {"paste_empty_right",SVI("#define PASTE(a,b) a##b\nPASTE(foo,)"),SVI("\nfoo"), __LINE__},
@@ -1093,6 +1101,11 @@ TestFunction(test_builtin_macros){
         {"__MIXIN__", SVI("__MIXIN__(__mixin(\"\\\"3\\\"\"))"), SVI("3"), __LINE__, 0},
         {"__mixin", SVI("#define S(x) #x\n__mixin(S(1)\"+1\")"), SVI("\n1+1"), __LINE__, 0},
         {"__env", SVI("__env(\"wolo\")"), SVI("\"woo\""), __LINE__, 0},
+        {"present environment key skips fallback", SVI(
+            "#define KEY \"wolo\"\n"
+            "__env(KEY, __COUNTER__) __COUNTER__"), SVI("\n\"woo\" 0"), __LINE__, 0},
+        {"absent environment key expands entire fallback", SVI(
+            "__ENV__(\"absent\", __COUNTER__, __COUNTER__) __COUNTER__"), SVI("0, 1 2"), __LINE__, 0},
         {"__ENV__", SVI("__ENV__(\"foobar\")"), SVI(""), __LINE__, 0},
         {"__if", SVI("__if(1, 2, 3)"), SVI("2"), __LINE__, 0},
         {"__if", SVI("__if(1, , __calc(1/0))"), SVI(""), __LINE__, 0},
@@ -1369,6 +1382,9 @@ TestFunction(test_error_locations){
         {"_Pragma trailing token after string", __LINE__,
             SVI("_Pragma(\"unknown\" extra)"),
             SVI("(test):1:19: error: _Pragma requires a string literal\n")},
+        {"__where rejects extra tokens before looking up name", __LINE__,
+            SVI("#define MARK 1\n__where(MARK ignored)"),
+            SVI("(test):2:14: error: __where__: expected a single macro name\n")},
         {"indirect too many args", __LINE__,
             SVI("#define F(x) x\n"
                "#define M F(1,2)\n"
@@ -1974,6 +1990,12 @@ TestFunction(test_erroneous_condition){
         {"nested va opt in unused macro", __LINE__,
             SVI("#define F(...) __VA_OPT__(__VA_OPT__(x))\n"),
             SVI("(test):1:27: error: Nested __VA_OPT__ is not allowed\n")},
+        {"leading paste inside unused va opt", __LINE__,
+            SVI("#define F(...) before __VA_OPT__( ## x ) after\n"),
+            SVI("(test):1:35: error: '##' cannot appear at start of replacement list\n")},
+        {"trailing paste inside unused va opt", __LINE__,
+            SVI("#define F(...) before __VA_OPT__( x ## ) after\n"),
+            SVI("(test):1:37: error: '##' cannot appear at end of replacement list\n")},
         {"va opt in object macro", __LINE__,
             SVI("#define X __VA_OPT__(x)\n"),
             SVI("(test):1:11: error: __VA_OPT__ requires a variadic macro\n")},
