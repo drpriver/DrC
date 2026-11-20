@@ -512,6 +512,7 @@ TestFunction(test_func_macros){
         {"va_arg_stringify", SVI("#define F(...) #__VA_ARG__(1)\nF(a, b, c)"), SVI("\n\"b\""), __LINE__},
         {"va_arg_paste", SVI("#define F(...) prefix ## __VA_ARG__(0)\nF(1, 2)"), SVI("\nprefix1"), __LINE__},
         {"va_arg_expr", SVI("#define F(...) __VA_ARG__(__VA_COUNT__ - 1)\nF(a, b, c)"), SVI("\nc"), __LINE__},
+        {"va_arg_nested_index_argument", SVI("#define F(i, ...) __VA_ARG__(i)\nF(F(0, 1), a, b)"), SVI("\nb"), __LINE__},
         {"va_arg_expand", SVI("#define X 42\n#define F(...) __VA_ARG__(0)\nF(X)"), SVI("\n\n42"), __LINE__},
         {"identical func redef", SVI("#define F(a, b) a + b\n#define F(a, b) a + b\nF(1, 2)"), SVI("\n\n1 + 2"), __LINE__},
         {"identical func redef with leading comment", SVI(
@@ -1341,6 +1342,9 @@ TestFunction(test_error_locations){
             SVI("#define F(...) __VA_ARG__(2)\nF(a,b)"),
             SVI("(test):1:16: error: __VA_ARG__ index 2 out of range for 2 variadic arguments\n"
                 "(test):2:1: ... expanded from here\n")},
+        {"va_arg index suppresses enclosing macro", __LINE__,
+            SVI("#define F(x,y,...) #__VA_ARG__(F())\nF(a,b,c)"),
+            SVI("(test):1:33: error: Unexpected token after #if expression\n")},
         {"direct too few args", __LINE__,
             SVI("#define F(x,y) x y\nF(1)"),
             SVI("(test):2:3: error: Too few arguments to function-like macro F(), expected 2, got 1\n")},

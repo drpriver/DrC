@@ -78,7 +78,7 @@ static Marray(size_t)*_Nullable cpp_get_scratch_idxes(CppPreprocessor*);
 static void cpp_release_scratch(CppPreprocessor*, CppTokens*);
 static void cpp_release_pending(CppPreprocessor*, CppTokens*);
 static void cpp_release_scratch_idxes(CppPreprocessor*, Marray(size_t)*);
-static int cpp_substitute_and_paste(CppPreprocessor*, const CppToken*, size_t, const CppMacro*, const CppTokens*, const Marray(size_t)*, CppTokens*_Nullable*_Null_unspecified, CppTokens*, _Bool, SrcLocExp*);
+static int cpp_substitute_and_paste(CppPreprocessor*, const CppToken*, size_t, CppMacro*, const CppTokens*, const Marray(size_t)*, CppTokens*_Nullable*_Null_unspecified, CppTokens*, _Bool, SrcLocExp*);
 static int cpp_expand_argument(CppPreprocessor *cpp, const CppToken*_Null_unspecified toks, size_t count, CppTokens *out);
 LOG_PRINTF(2, 3) static Atom _Nullable cpp_atomizef(CppPreprocessor*, const char* fmt, ...);
 static int cpp_eval_tokens(CppPreprocessor*, CppToken*_Null_unspecified toks, size_t count, int64_t* value, const CppIncludePosition* _Nullable source_pos);
@@ -3622,7 +3622,7 @@ int
 cpp_resolve_va_arg(
     CppPreprocessor *cpp,
     const CppToken *repl, size_t nreplace, size_t after,
-    const CppMacro *macro,
+    CppMacro *macro,
     const CppTokens *args, const Marray(size_t) *arg_seps,
     CppTokens *_Nullable*_Null_unspecified expanded_args,
     SrcLoc loc, SrcLocExp *expansion_parent,
@@ -3664,7 +3664,10 @@ cpp_resolve_va_arg(
     }
 
     int64_t index;
+    _Bool was_disabled = macro->is_disabled;
+    macro->is_disabled = 1;
     err = cpp_eval_tokens(cpp, expr_subst->data, expr_subst->count, &index, NULL);
+    macro->is_disabled = was_disabled;
     cpp_release_scratch(cpp, expr_subst);
     if(err) return err;
 
@@ -3685,7 +3688,7 @@ int
 cpp_substitute_and_paste(
     CppPreprocessor *cpp,
     const CppToken *repl, size_t nreplace,
-    const CppMacro *macro,
+    CppMacro *macro,
     const CppTokens *args,
     const Marray(size_t) *arg_seps,
     CppTokens *_Nullable*_Null_unspecified expanded_args,
