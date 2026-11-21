@@ -5625,6 +5625,340 @@ cleanup:
     return err;
 }
 
+#if defined _MSC_VER
+__declspec(noinline)
+#elif defined __GNUC__ || defined __clang__
+__attribute__((noinline))
+#endif
+static
+int
+cc_parse_postfix_call(CcParser *p, CcParseFlags flags, SrcLoc loc, CcExpr *operand, CcExpr *_Nullable receiver, CcExpr *_Nullable *_Nonnull out){
+    int err;
+    if(flags.vc > CC_RUNTIME_VALUE)
+        return cc_error(p, loc, "function call in constant expression");
+    CcFunction* ftype = ccqt_callable_function(operand->type);
+    if(!ftype)
+        return cc_type_error(p, loc, operand->type, "Called object is not a function or function pointer");
+    if(!ccqt_bt_eq(ftype->return_type, CCBT_void) && !ccqt_is_complete_object(ftype->return_type))
+        return cc_type_error(p, loc, ftype->return_type, "function call requires a complete return type");
+    CcToken peek;
+    err = cc_next_token(p, &peek);
+    if(err) return err;
+    uint32_t pack_index = UINT32_MAX;
+    if(operand->kind == CC_EXPR_FUNCTION){
+        for(size_t i = 0; i < operand->func->params.count; i++)
+            if(operand->func->params.data[i].typed_pack)
+                pack_index = (uint32_t)i;
+    }
+    _Bool typed_pack = pack_index != UINT32_MAX;
+    if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rparen
+    && !receiver && !typed_pack
+    && !(operand->kind == CC_EXPR_FUNCTION && operand->func->params.count)){
+        if(!cc_function_accepts_arity(ftype, 0)){
+            if(ftype->is_variadic)
+                return cc_type_error(p, loc, operand->type, "Too few arguments: expected at least %u, got 0", (unsigned)ftype->param_count);
+            return cc_type_error(p, loc, operand->type, "Expected %u arguments, got 0", (unsigned)ftype->param_count);
+        }
+        CcExpr* node = cc_make_expr(p, CC_EXPR_CALL, loc, ftype->return_type, 0);
+        if(!node) return CC_OOM_ERROR;
+        node->lhs = operand;
+        *out = node;
+        return 0;
+    }
+    _Bool rparen_consumed = 0;
+    if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rparen)
+        rparen_consumed = 1;
+    else
+        cc_unget(p, &peek);
+    CcFuncParam*_Null_unspecified param_names = NULL;
+    size_t param_names_count = 0;
+    if(operand->kind == CC_EXPR_FUNCTION && operand->func->params.count){
+        param_names = operand->func->params.data;
+        param_names_count = operand->func->params.count;
+    }
+    Allocator call_al = cc_scratch_allocator(p);
+    Parray(CcExpression) args = {0};
+    Parray(CcExpression) pack_args = {0};
+    _Bool has_receiver = receiver != NULL;
+    if(receiver){
+        err = pa_push(&args, call_al, receiver);
+        if(err) return CC_OOM_ERROR;
+    }
+    _Bool has_named = 0;
+    _Bool explicit_pack = 0;
+    uint32_t positional_index = has_receiver ? 1 : 0;
+    if(rparen_consumed) goto call_args_done;
+    for(;;){
+        CcToken dot;
+        err = cc_peek(p, &dot);
+        if(err) goto call_cleanup;
+        if(dot.type == CC_PUNCTUATOR && dot.punct.punct == CC_dot){
+            cc_next_token(p, &dot);
+            CcToken name_tok;
+            err = cc_next_token(p, &name_tok);
+            if(err) goto call_cleanup;
+            if(name_tok.type != CC_IDENTIFIER){
+                err = cc_error(p, name_tok.loc, "expected parameter name after '.'");
+                goto call_cleanup;
+            }
+            CcToken eq;
+            err = cc_next_token(p, &eq);
+            if(err) goto call_cleanup;
+            if(eq.type != CC_PUNCTUATOR || eq.punct.punct != CC_assign){
+                err = cc_error(p, eq.loc, "expected '=' after parameter name");
+                goto call_cleanup;
+            }
+            if(!param_names){
+                err = cc_error(p, dot.loc, "named arguments require a function with known parameter names");
+                goto call_cleanup;
+            }
+            Atom name = name_tok.ident.ident;
+            uint32_t idx = UINT32_MAX;
+            for(size_t j = 0; j < param_names_count; j++){
+                if(param_names[j].name == name){
+                    idx = (uint32_t)j;
+                    break;
+                }
+            }
+            if(idx == UINT32_MAX){
+                err = cc_error(p, name_tok.loc, "no parameter named '%.*s'", name->length, name->data);
+                goto call_cleanup;
+            }
+            if(idx == pack_index && pack_args.count){
+                err = cc_error(p, name_tok.loc, "cannot combine an explicit typed pack with trailing arguments");
+                goto call_cleanup;
+            }
+            // Parse the value
+            CcExpr* arg;
+            err = cc_parse_assignment_expr(p, flags, &arg, ftype->params[idx]);
+            if(err) goto call_cleanup;
+            // Ensure args array is big enough
+            if(args.count <= idx){
+                err = pa_zextend(&args, call_al, idx-args.count+1);
+                if(err) goto call_cleanup;
+            }
+            if(args.data[idx] != NULL){
+                err = cc_error(p, name_tok.loc, "duplicate argument for parameter '%.*s'", name->length, name->data);
+                goto call_cleanup;
+            }
+            args.data[idx] = arg;
+            if(idx == pack_index) explicit_pack = 1;
+            has_named = 1;
+        }
+        else if(dot.type == CC_PUNCTUATOR && dot.punct.punct == CC_lbracket){
+            cc_next_token(p, &dot);
+            CcExpr* idx_expr;
+            CcParseFlags index_flags = flags;
+            index_flags.unevaluated = 1;
+            err = cc_parse_assignment_expr(p, index_flags, &idx_expr, CCQT_NONE);
+            if(err) goto call_cleanup;
+            int64_t idx_signed;
+            err = cc_eval_integer(&(CcEvalCtx){p}, idx_expr, &idx_signed);
+            cc_release_expr(p, idx_expr);
+            if(err){
+                if(err == CC_NOT_CONSTANT_ERROR)
+                    err = cc_error(p, dot.loc, "positional designator must be a constant integer expression");
+                goto call_cleanup;
+            }
+            if(idx_signed < 0 || (uint64_t)idx_signed >= ftype->param_count){
+                err = cc_error(p, dot.loc, "positional designator value out of range");
+                goto call_cleanup;
+            }
+            uint32_t idx = (uint32_t)idx_signed;
+            if(idx == pack_index && pack_args.count){
+                err = cc_error(p, dot.loc, "cannot combine an explicit typed pack with trailing arguments");
+                goto call_cleanup;
+            }
+            err = cc_expect_punct(p, CC_rbracket);
+            if(err) goto call_cleanup;
+            CcToken eq;
+            err = cc_next_token(p, &eq);
+            if(err) goto call_cleanup;
+            if(eq.type != CC_PUNCTUATOR || eq.punct.punct != CC_assign){
+                err = cc_error(p, eq.loc, "expected '=' after positional designator");
+                goto call_cleanup;
+            }
+            CcExpr* arg;
+            err = cc_parse_assignment_expr(p, flags, &arg, ftype->params[idx]);
+            if(err) goto call_cleanup;
+            if(args.count <= idx){
+                err = pa_zextend(&args, call_al, idx-args.count+1);
+                if(err) goto call_cleanup;
+            }
+            if(args.data[idx] != NULL){
+                err = cc_error(p, dot.loc, "duplicate argument for position %u", (unsigned)idx);
+                goto call_cleanup;
+            }
+            args.data[idx] = arg;
+            if(idx == pack_index) explicit_pack = 1;
+            has_named = 1;
+        }
+        else {
+            if(has_named){
+                while(positional_index < pack_index && positional_index < args.count && args.data[positional_index] != NULL)
+                    positional_index++;
+            }
+            CcExpr* arg;
+            if(explicit_pack && positional_index >= pack_index){
+                err = cc_error(p, dot.loc, "cannot combine an explicit typed pack with trailing arguments");
+                goto call_cleanup;
+            }
+            CcQualType hint = positional_index < ftype->param_count ? ftype->params[positional_index] : CCQT_NONE;
+            if(typed_pack && positional_index >= pack_index)
+                hint = ccqt_as_slice(ftype->params[pack_index])->pointee;
+            err = cc_parse_assignment_expr(p, flags, &arg, hint);
+            if(err) goto call_cleanup;
+            if(typed_pack && positional_index >= pack_index){
+                err = pa_push(&pack_args, call_al, arg);
+                if(err){
+                    cc_release_expr(p, arg);
+                    err = CC_OOM_ERROR;
+                    goto call_cleanup;
+                }
+            }
+            else if(has_named){
+                if(args.count <= positional_index){
+                    err = pa_zextend(&args, call_al, positional_index-args.count+1);
+                    if(err) goto call_cleanup;
+                }
+                if(args.data[positional_index] != NULL){
+                    err = cc_error(p, arg->loc, "argument position %u already filled by named argument", (unsigned)positional_index);
+                    goto call_cleanup;
+                }
+                args.data[positional_index] = arg;
+            }
+            else {
+                err = pa_push(&args, call_al, arg);
+                if(err){
+                    err = CC_OOM_ERROR;
+                    goto call_cleanup;
+                }
+            }
+            positional_index++;
+        }
+        CcToken sep;
+        err = cc_next_token(p, &sep);
+        if(err) goto call_cleanup;
+        if(sep.type == CC_PUNCTUATOR && sep.punct.punct == CC_rparen)
+            break;
+        if(sep.type != CC_PUNCTUATOR || sep.punct.punct != CC_comma){
+            err = cc_error(p, sep.loc, "Expected ',' or ')' in function call");
+            goto call_cleanup;
+        }
+        err = cc_peek(p, &sep);
+        if(err) goto call_cleanup;
+        if(sep.type == CC_PUNCTUATOR && sep.punct.punct == CC_rparen){
+            cc_next_token(p, &sep);
+            break;
+        }
+    }
+    call_args_done:;
+    SrcLoc call_loc = operand->loc;
+    uint32_t fixed_count = ftype->param_count;
+    if(param_names){
+        for(uint32_t i = 0; i < fixed_count && i < param_names_count; i++){
+            if(i == pack_index) continue;
+            if(i < args.count && args.data[i]) continue;
+            CcExpr* default_value = param_names[i].default_value;
+            if(!default_value) continue;
+            if(args.count <= i){
+                err = pa_zextend(&args, call_al, i-args.count+1);
+                if(err){
+                    err = CC_OOM_ERROR;
+                    goto call_cleanup;
+                }
+            }
+            err = cc_clone_default_arg(p, default_value, call_loc, flags, (CcExpr**)&args.data[i]);
+            if(err) goto call_cleanup;
+        }
+    }
+    if(typed_pack && !explicit_pack){
+        if(args.count < pack_index){
+            err = cc_type_error(p, loc, operand->type, "Too few arguments: expected at least %u, got %u", pack_index, (unsigned)args.count);
+            goto call_cleanup;
+        }
+        if(args.count < ftype->param_count){
+            err = pa_zextend(&args, call_al, ftype->param_count-args.count);
+            if(err){
+                err = CC_OOM_ERROR;
+                goto call_cleanup;
+            }
+        }
+        err = cc_pack_call_args(p, flags, loc, ftype->params[pack_index], &pack_args, 0);
+        if(err) goto call_cleanup;
+        args.data[pack_index] = pack_args.data[0];
+        pack_args.count = 0;
+    }
+    uint32_t nargs = (uint32_t)args.count;
+    for(uint32_t i = 0; i < nargs && i < ftype->param_count; i++){
+        if(!args.data[i]){
+            Atom pn = (param_names && i < param_names_count) ? param_names[i].name : NULL;
+            err = cc_error(p, loc, "missing argument for parameter '%.*s'",
+                pn ? (int)pn->length : 1, pn ? pn->data : "?");
+            goto call_cleanup;
+        }
+    }
+    if(!cc_function_accepts_arity(ftype, nargs)){
+        if(ftype->is_variadic){
+            err = cc_type_error(p, loc, operand->type, "Too few arguments: expected at least %u, got %u", (unsigned)ftype->param_count, (unsigned)nargs);
+            goto call_cleanup;
+        }
+        err = cc_type_error(p, loc, operand->type, "Expected %u arguments, got %u", (unsigned)ftype->param_count, (unsigned)nargs);
+        goto call_cleanup;
+    }
+    for(uint32_t i = 0; i < nargs; i++){
+        CcExpr** argp = (CcExpr**)&args.data[i];
+        if(!cc_is_value_operand_type((*argp)->type)){
+            err = cc_type_error(p, (*argp)->loc, (*argp)->type, "argument must have a complete object type");
+            goto call_cleanup;
+        }
+        if(!ftype->no_prototype && i < ftype->param_count){
+            err = cc_implicit_cast(p, *argp, ftype->params[i], argp);
+            if(err) goto call_cleanup;
+        }
+        else {
+            CcQualType at;
+            cc_arithmetic_operand_type(cc_target(p), *argp, &at);
+            if(ccqt_is_array(at) || ccqt_kind(at) == CC_FUNCTION){
+                err = cc_decay(p, argp);
+                if(err) goto call_cleanup;
+            }
+            else {
+                err = cc_implicit_cast(p, *argp, cc_default_promotion(at), argp);
+                if(err) goto call_cleanup;
+            }
+        }
+    }
+    if(operand->kind == CC_EXPR_FUNCTION){
+        for(const CcPrintfFormat* format = operand->func->printf_formats; format; format = format->next){
+            uint32_t fi = format->string_index - 1;
+            SrcLoc fmt_loc = fi < nargs ? ((CcExpr*)args.data[fi])->loc : loc;
+            err = cc_check_printf_format(p, format, (CcExpr*_Nonnull*_Nonnull)args.data, nargs, fmt_loc);
+            if(err) goto call_cleanup;
+        }
+    }
+    CcExpr* node = cc_make_expr(p, CC_EXPR_CALL, loc, ftype->return_type, nargs);
+    if(!node){
+        err = CC_OOM_ERROR;
+        goto call_cleanup;
+    }
+    node->call.nargs = nargs;
+    node->lhs = operand;
+    memcpy(node->values, args.data, nargs * sizeof(CcExpr*));
+    *out = node;
+    err = 0;
+    call_cleanup:
+    if(err){
+        for(size_t i = 0; i < args.count; i++)
+            if(args.data[i]) cc_release_expr(p, args.data[i]);
+        for(size_t i = 0; i < pack_args.count; i++)
+            if(pack_args.data[i]) cc_release_expr(p, pack_args.data[i]);
+    }
+    pa_cleanup(&args, call_al);
+    pa_cleanup(&pack_args, call_al);
+    return err;
+}
+
 static
 int
 cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Nullable* _Nonnull out){
@@ -6369,331 +6703,11 @@ cc_parse_postfix(CcParser* p, CcParseFlags flags, CcExpr* operand, CcExpr* _Null
                 operand = mnode;
                 continue;
             }
-            case CC_lparen: {
-                if(flags.vc > CC_RUNTIME_VALUE)
-                    return cc_error(p, tok.loc, "function call in constant expression");
-                CcFunction* ftype = ccqt_callable_function(operand->type);
-                if(!ftype)
-                    return cc_type_error(p, tok.loc, operand->type, "Called object is not a function or function pointer");
-                if(!ccqt_bt_eq(ftype->return_type, CCBT_void) && !ccqt_is_complete_object(ftype->return_type))
-                    return cc_type_error(p, tok.loc, ftype->return_type, "function call requires a complete return type");
-                CcToken peek;
-                err = cc_next_token(p, &peek);
+            case CC_lparen:
+                err = cc_parse_postfix_call(p, flags, tok.loc, operand, receiver, &operand);
                 if(err) return err;
-                uint32_t pack_index = UINT32_MAX;
-                if(operand->kind == CC_EXPR_FUNCTION){
-                    for(size_t i = 0; i < operand->func->params.count; i++)
-                        if(operand->func->params.data[i].typed_pack) pack_index = (uint32_t)i;
-                }
-                _Bool typed_pack = pack_index != UINT32_MAX;
-                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rparen && !receiver && !typed_pack
-                    && !(operand->kind == CC_EXPR_FUNCTION && operand->func->params.count)){
-                    if(!cc_function_accepts_arity(ftype, 0)){
-                        if(ftype->is_variadic)
-                            return cc_type_error(p, tok.loc, operand->type, "Too few arguments: expected at least %u, got 0", (unsigned)ftype->param_count);
-                        return cc_type_error(p, tok.loc, operand->type, "Expected %u arguments, got 0", (unsigned)ftype->param_count);
-                    }
-                    CcExpr* node = cc_make_expr(p, CC_EXPR_CALL, tok.loc, ftype->return_type, 0);
-                    if(!node) return CC_OOM_ERROR;
-                    node->lhs = operand;
-                    operand = node;
-                    continue;
-                }
-                _Bool rparen_consumed = 0;
-                if(peek.type == CC_PUNCTUATOR && peek.punct.punct == CC_rparen)
-                    rparen_consumed = 1;
-                else
-                    cc_unget(p, &peek);
-                CcFuncParam*_Null_unspecified param_names = NULL;
-                size_t param_names_count = 0;
-                if(operand->kind == CC_EXPR_FUNCTION && operand->func->params.count){
-                    param_names = operand->func->params.data;
-                    param_names_count = operand->func->params.count;
-                }
-                Allocator call_al = cc_scratch_allocator(p);
-                Parray(CcExpression) args = {0};
-                Parray(CcExpression) pack_args = {0};
-                _Bool has_receiver = receiver != NULL;
-                if(receiver){
-                    err = pa_push(&args, call_al, receiver);
-                    if(err) return CC_OOM_ERROR;
-                    receiver = NULL;
-                }
-                _Bool has_named = 0;
-                _Bool explicit_pack = 0;
-                uint32_t positional_index = has_receiver ? 1 : 0;
-                if(rparen_consumed) goto call_args_done;
-                for(;;){
-                    CcToken dot;
-                    err = cc_peek(p, &dot);
-                    if(err) goto call_cleanup;
-                    if(dot.type == CC_PUNCTUATOR && dot.punct.punct == CC_dot){
-                        cc_next_token(p, &dot);
-                        CcToken name_tok;
-                        err = cc_next_token(p, &name_tok);
-                        if(err) goto call_cleanup;
-                        if(name_tok.type != CC_IDENTIFIER){
-                            err = cc_error(p, name_tok.loc, "expected parameter name after '.'");
-                            goto call_cleanup;
-                        }
-                        CcToken eq;
-                        err = cc_next_token(p, &eq);
-                        if(err) goto call_cleanup;
-                        if(eq.type != CC_PUNCTUATOR || eq.punct.punct != CC_assign){
-                            err = cc_error(p, eq.loc, "expected '=' after parameter name");
-                            goto call_cleanup;
-                        }
-                        if(!param_names){
-                            err = cc_error(p, dot.loc, "named arguments require a function with known parameter names");
-                            goto call_cleanup;
-                        }
-                        Atom name = name_tok.ident.ident;
-                        uint32_t idx = UINT32_MAX;
-                        for(size_t j = 0; j < param_names_count; j++){
-                            if(param_names[j].name == name){
-                                idx = (uint32_t)j;
-                                break;
-                            }
-                        }
-                        if(idx == UINT32_MAX){
-                            err = cc_error(p, name_tok.loc, "no parameter named '%.*s'", name->length, name->data);
-                            goto call_cleanup;
-                        }
-                        if(idx == pack_index && pack_args.count){
-                            err = cc_error(p, name_tok.loc, "cannot combine an explicit typed pack with trailing arguments");
-                            goto call_cleanup;
-                        }
-                        // Parse the value
-                        CcExpr* arg;
-                        err = cc_parse_assignment_expr(p, flags, &arg, ftype->params[idx]);
-                        if(err) goto call_cleanup;
-                        // Ensure args array is big enough
-                        if(args.count <= idx){
-                            err = pa_zextend(&args, call_al, idx-args.count+1);
-                            if(err) goto call_cleanup;
-                        }
-                        if(args.data[idx] != NULL){
-                            err = cc_error(p, name_tok.loc, "duplicate argument for parameter '%.*s'", name->length, name->data);
-                            goto call_cleanup;
-                        }
-                        args.data[idx] = arg;
-                        if(idx == pack_index) explicit_pack = 1;
-                        has_named = 1;
-                    }
-                    else if(dot.type == CC_PUNCTUATOR && dot.punct.punct == CC_lbracket){
-                        cc_next_token(p, &dot);
-                        CcExpr* idx_expr;
-                        CcParseFlags index_flags = flags;
-                        index_flags.unevaluated = 1;
-                        err = cc_parse_assignment_expr(p, index_flags, &idx_expr, CCQT_NONE);
-                        if(err) goto call_cleanup;
-                        int64_t idx_signed;
-                        err = cc_eval_integer(&(CcEvalCtx){p}, idx_expr, &idx_signed);
-                        cc_release_expr(p, idx_expr);
-                        if(err){
-                            if(err == CC_NOT_CONSTANT_ERROR)
-                                err = cc_error(p, dot.loc, "positional designator must be a constant integer expression");
-                            goto call_cleanup;
-                        }
-                        if(idx_signed < 0 || (uint64_t)idx_signed >= ftype->param_count){
-                            err = cc_error(p, dot.loc, "positional designator value out of range");
-                            goto call_cleanup;
-                        }
-                        uint32_t idx = (uint32_t)idx_signed;
-                        if(idx == pack_index && pack_args.count){
-                            err = cc_error(p, dot.loc, "cannot combine an explicit typed pack with trailing arguments");
-                            goto call_cleanup;
-                        }
-                        err = cc_expect_punct(p, CC_rbracket);
-                        if(err) goto call_cleanup;
-                        CcToken eq;
-                        err = cc_next_token(p, &eq);
-                        if(err) goto call_cleanup;
-                        if(eq.type != CC_PUNCTUATOR || eq.punct.punct != CC_assign){
-                            err = cc_error(p, eq.loc, "expected '=' after positional designator");
-                            goto call_cleanup;
-                        }
-                        CcExpr* arg;
-                        err = cc_parse_assignment_expr(p, flags, &arg, ftype->params[idx]);
-                        if(err) goto call_cleanup;
-                        if(args.count <= idx){
-                            err = pa_zextend(&args, call_al, idx-args.count+1);
-                            if(err) goto call_cleanup;
-                        }
-                        if(args.data[idx] != NULL){
-                            err = cc_error(p, dot.loc, "duplicate argument for position %u", (unsigned)idx);
-                            goto call_cleanup;
-                        }
-                        args.data[idx] = arg;
-                        if(idx == pack_index) explicit_pack = 1;
-                        has_named = 1;
-                    }
-                    else {
-                        if(has_named){
-                            while(positional_index < pack_index && positional_index < args.count && args.data[positional_index] != NULL)
-                                positional_index++;
-                        }
-                        CcExpr* arg;
-                        if(explicit_pack && positional_index >= pack_index){
-                            err = cc_error(p, dot.loc, "cannot combine an explicit typed pack with trailing arguments");
-                            goto call_cleanup;
-                        }
-                        CcQualType hint = positional_index < ftype->param_count ? ftype->params[positional_index] : CCQT_NONE;
-                        if(typed_pack && positional_index >= pack_index)
-                            hint = ccqt_as_slice(ftype->params[pack_index])->pointee;
-                        err = cc_parse_assignment_expr(p, flags, &arg, hint);
-                        if(err) goto call_cleanup;
-                        if(typed_pack && positional_index >= pack_index){
-                            err = pa_push(&pack_args, call_al, arg);
-                            if(err){
-                                cc_release_expr(p, arg);
-                                err = CC_OOM_ERROR;
-                                goto call_cleanup;
-                            }
-                        }
-                        else if(has_named){
-                            if(args.count <= positional_index){
-                                err = pa_zextend(&args, call_al, positional_index-args.count+1);
-                                if(err) goto call_cleanup;
-                            }
-                            if(args.data[positional_index] != NULL){
-                                err = cc_error(p, arg->loc, "argument position %u already filled by named argument", (unsigned)positional_index);
-                                goto call_cleanup;
-                            }
-                            args.data[positional_index] = arg;
-                        }
-                        else {
-                            err = pa_push(&args, call_al, arg);
-                            if(err){
-                                err = CC_OOM_ERROR;
-                                goto call_cleanup;
-                            }
-                        }
-                        positional_index++;
-                    }
-                    CcToken sep;
-                    err = cc_next_token(p, &sep);
-                    if(err) goto call_cleanup;
-                    if(sep.type == CC_PUNCTUATOR && sep.punct.punct == CC_rparen)
-                        break;
-                    if(sep.type != CC_PUNCTUATOR || sep.punct.punct != CC_comma){
-                        err = cc_error(p, sep.loc, "Expected ',' or ')' in function call");
-                        goto call_cleanup;
-                    }
-                    err = cc_peek(p, &sep);
-                    if(err) goto call_cleanup;
-                    if(sep.type == CC_PUNCTUATOR && sep.punct.punct == CC_rparen){
-                        cc_next_token(p, &sep);
-                        break;
-                    }
-                }
-                call_args_done:;
-                SrcLoc call_loc = operand->loc;
-                uint32_t fixed_count = ftype->param_count;
-                if(param_names){
-                    for(uint32_t i = 0; i < fixed_count && i < param_names_count; i++){
-                        if(i == pack_index) continue;
-                        if(i < args.count && args.data[i]) continue;
-                        CcExpr* default_value = param_names[i].default_value;
-                        if(!default_value) continue;
-                        if(args.count <= i){
-                            err = pa_zextend(&args, call_al, i-args.count+1);
-                            if(err){
-                                err = CC_OOM_ERROR;
-                                goto call_cleanup;
-                            }
-                        }
-                        err = cc_clone_default_arg(p, default_value, call_loc, flags, (CcExpr**)&args.data[i]);
-                        if(err) goto call_cleanup;
-                    }
-                }
-                if(typed_pack && !explicit_pack){
-                    if(args.count < pack_index){
-                        err = cc_type_error(p, tok.loc, operand->type, "Too few arguments: expected at least %u, got %u", pack_index, (unsigned)args.count);
-                        goto call_cleanup;
-                    }
-                    if(args.count < ftype->param_count){
-                        err = pa_zextend(&args, call_al, ftype->param_count-args.count);
-                        if(err){
-                            err = CC_OOM_ERROR;
-                            goto call_cleanup;
-                        }
-                    }
-                    err = cc_pack_call_args(p, flags, tok.loc, ftype->params[pack_index], &pack_args, 0);
-                    if(err) goto call_cleanup;
-                    args.data[pack_index] = pack_args.data[0];
-                    pack_args.count = 0;
-                }
-                uint32_t nargs = (uint32_t)args.count;
-                for(uint32_t i = 0; i < nargs && i < ftype->param_count; i++){
-                    if(!args.data[i]){
-                        Atom pn = (param_names && i < param_names_count) ? param_names[i].name : NULL;
-                        err = cc_error(p, tok.loc, "missing argument for parameter '%.*s'",
-                            pn ? (int)pn->length : 1, pn ? pn->data : "?");
-                        goto call_cleanup;
-                    }
-                }
-                if(!cc_function_accepts_arity(ftype, nargs)){
-                    if(ftype->is_variadic){
-                        err = cc_type_error(p, tok.loc, operand->type, "Too few arguments: expected at least %u, got %u", (unsigned)ftype->param_count, (unsigned)nargs);
-                        goto call_cleanup;
-                    }
-                    err = cc_type_error(p, tok.loc, operand->type, "Expected %u arguments, got %u", (unsigned)ftype->param_count, (unsigned)nargs);
-                    goto call_cleanup;
-                }
-                for(uint32_t i = 0; i < nargs; i++){
-                    CcExpr** argp = (CcExpr**)&args.data[i];
-                    if(!cc_is_value_operand_type((*argp)->type)){
-                        err = cc_type_error(p, (*argp)->loc, (*argp)->type, "argument must have a complete object type");
-                        goto call_cleanup;
-                    }
-                    if(!ftype->no_prototype && i < ftype->param_count){
-                        err = cc_implicit_cast(p, *argp, ftype->params[i], argp);
-                        if(err) goto call_cleanup;
-                    }
-                    else {
-                        CcQualType at;
-                        cc_arithmetic_operand_type(cc_target(p), *argp, &at);
-                        if(ccqt_is_array(at) || ccqt_kind(at) == CC_FUNCTION){
-                            err = cc_decay(p, argp);
-                            if(err) goto call_cleanup;
-                        }
-                        else {
-                            err = cc_implicit_cast(p, *argp, cc_default_promotion(at), argp);
-                            if(err) goto call_cleanup;
-                        }
-                    }
-                }
-                if(operand->kind == CC_EXPR_FUNCTION){
-                    for(const CcPrintfFormat* format = operand->func->printf_formats; format; format = format->next){
-                        uint32_t fi = format->string_index - 1;
-                        SrcLoc fmt_loc = fi < nargs ? ((CcExpr*)args.data[fi])->loc : tok.loc;
-                        err = cc_check_printf_format(p, format, (CcExpr*_Nonnull*_Nonnull)args.data, nargs, fmt_loc);
-                        if(err) goto call_cleanup;
-                    }
-                }
-                CcExpr* node = cc_make_expr(p, CC_EXPR_CALL, tok.loc, ftype->return_type, nargs);
-                if(!node){
-                    err = CC_OOM_ERROR;
-                    goto call_cleanup;
-                }
-                node->call.nargs = nargs;
-                node->lhs = operand;
-                memcpy(node->values, args.data, nargs * sizeof(CcExpr*));
-                operand = node;
-                err = 0;
-                call_cleanup:
-                if(err){
-                    for(size_t i = 0; i < args.count; i++)
-                        if(args.data[i]) cc_release_expr(p, args.data[i]);
-                    for(size_t i = 0; i < pack_args.count; i++)
-                        if(pack_args.data[i]) cc_release_expr(p, pack_args.data[i]);
-                }
-                pa_cleanup(&args, call_al);
-                pa_cleanup(&pack_args, call_al);
-                if(err) return err;
+                receiver = NULL;
                 continue;
-            }
             default:
                 cc_unget(p, &tok);
                 goto done;
@@ -8741,6 +8755,18 @@ cc_expect_punct_supp(CcParser* p, CcPunct punct, const char* supp){
     return 0;
 }
 
+#if defined _MSC_VER
+__declspec(noinline)
+#elif defined __GNUC__ || defined __clang__
+__attribute__((noinline))
+#endif
+static
+CcExpr *_Nullable
+cc_alloc_fresh_expr(CcParser *p, size_t nvalues){
+    CcExpr *e = Allocator_zalloc_extra(cc_allocator(p), nvalues, sizeof *e->values, sizeof *e, _Alignof(CcExpr));
+    return e;
+}
+
 static
 CcExpr* _Nullable
 _cc_alloc_expr(CcParser* p, size_t nvalues){
@@ -8753,8 +8779,7 @@ _cc_alloc_expr(CcParser* p, size_t nvalues){
         }
     }
     #endif
-    CcExpr* e = Allocator_zalloc_extra(cc_allocator(p), nvalues, sizeof *e->values, sizeof *e, _Alignof(CcExpr));
-    return e;
+    return cc_alloc_fresh_expr(p, nvalues);
 }
 static
 void
