@@ -374,6 +374,32 @@ ma_shrink_to_size(MARRAY_T)(MARRAY*, Allocator);
 #define MARRAY_DEFAULT_CAPACITY 8
 #endif
 
+#ifndef DRP_MARRAY_GROW_DEFINED
+#define DRP_MARRAY_GROW_DEFINED
+// Share the resize loop across element types.
+#if defined _MSC_VER
+__declspec(noinline)
+#elif defined __GNUC__ || defined __clang__
+__attribute__((noinline))
+#endif
+static
+void *_Nullable
+marray_grow(Allocator a, void *_Nullable data, size_t *capacity, size_t required, size_t initial_capacity, size_t element_size, size_t alignment){
+    size_t new_capacity;
+    if(required < initial_capacity)
+        new_capacity = initial_capacity;
+    else {
+        new_capacity = marray_resize_to_some_weird_number(*capacity);
+        while(new_capacity && new_capacity < required)
+            new_capacity = marray_resize_to_some_weird_number(new_capacity);
+        if(!new_capacity) return NULL;
+    }
+    void *p = Allocator_realloc(a, data, *capacity, new_capacity, element_size, alignment);
+    if(p) *capacity = new_capacity;
+    return p;
+}
+#endif
+
 MARRAY_LINKAGE
 warn_unused
 int
@@ -383,22 +409,10 @@ ma_ensure_additional(MARRAY_T)(MARRAY* marray, Allocator a, size_t n_additional)
         return 1;
     if(marray->capacity >= required_capacity)
         return 0;
-    size_t new_capacity;
-    if(required_capacity < MARRAY_DEFAULT_CAPACITY)
-        new_capacity = MARRAY_DEFAULT_CAPACITY;
-    else {
-        new_capacity = marray_resize_to_some_weird_number(marray->capacity);
-        if(!new_capacity) return 1;
-        while(new_capacity < required_capacity) {
-            new_capacity = marray_resize_to_some_weird_number(new_capacity);
-            if(!new_capacity) return 1;
-        }
-    }
-    void* p = Allocator_realloc(a, marray->data, marray->capacity, new_capacity, sizeof *marray->data, _Alignof(MARRAY_T));
+    void *p = marray_grow(a, marray->data, &marray->capacity, required_capacity, MARRAY_DEFAULT_CAPACITY, sizeof *marray->data, _Alignof(MARRAY_T));
     if(unlikely(!p))
         return 1;
     marray->data = p;
-    marray->capacity = new_capacity;
     return 0;
 }
 
