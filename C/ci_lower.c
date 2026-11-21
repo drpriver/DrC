@@ -1278,7 +1278,8 @@ ci_emit_checked(CiLowerCtx* ctx, CiCheckedOp operation, uint32_t dst, uint32_t d
             .res_unsigned = uns,
             .loc = loc,
         }});
-        if(err || dsz == width) return err;
+        if(err) return err;
+        if(dsz == width) return 0;
         err = ci_emit_copy(ctx, dst, result, dsz, loc);
         if(err) return err;
         uint32_t restored, narrowed;
@@ -1427,7 +1428,7 @@ ci_layout_decls(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
 
 static
 int
-ci_lower_global_storage_addr(CiLowerCtx* ctx, CcVariable* var, uint32_t* slot){
+ci_lower_global_storage_addr(CiLowerCtx* ctx, CcVariable* var, SrcLoc loc, uint32_t* slot){
     int err = ci_deps_add_var(&ctx->deps, ctx->a, var, CI_VAR_DEP_USED);
     if(err) return err;
     err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, slot);
@@ -1437,7 +1438,7 @@ ci_lower_global_storage_addr(CiLowerCtx* ctx, CcVariable* var, uint32_t* slot){
         .slot=*slot,
         .slot_size=ctx->ptr_size,
         .var=var,
-        .loc=var->loc,
+        .loc=loc,
     }});
 }
 
@@ -1530,7 +1531,7 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             uint32_t slot = ci_variable_slot(ctx, n->vla.object);
             uint32_t addr = 0;
             if(!n->vla.object->automatic){
-                err = ci_lower_global_storage_addr(ctx, n->vla.object, &addr);
+                err = ci_lower_global_storage_addr(ctx, n->vla.object, n->loc, &addr);
                 if(err) return err;
                 err = ci_alloc_slot(ctx, ctx->ptr_size, ctx->ptr_size, &slot);
                 if(err) return err;
@@ -1565,7 +1566,8 @@ ci_lower_stmt_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcStmtNode* n){
             {
                 _Bool handled;
                 err = ci_try_preinit_global(ci, ctx, n->exprs[0], &handled);
-                if(err || handled) return err;
+                if(err) return err;
+                if(handled) return 0;
             }
             if(n->exprs[0]->kind == CC_EXPR_ASSIGN && n->exprs[0]->lhs->kind == CC_EXPR_VARIABLE){
                 CcVariable* var = n->exprs[0]->lhs->var;
@@ -2060,45 +2062,18 @@ ci_emit_pointer_offset(CiInterpreter* ci, CiLowerCtx* ctx, CcQualType pointee, S
 
 static
 int
-ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr dst, _Bool zero){
+ci_lower_init_entries(CiInterpreter* ci, CiLowerCtx* ctx, CcQualType type, CcInitList* list, CiLowerAddr dst){
     int err;
-    CcParser* p = &ci->parser;
-    uint32_t sz;
-    err = cc_sizeof_as_uint(p, e->type, e->loc, &sz);
-    if(err) return err;
-    dst.is_volatile |= e->type.is_volatile;
-    if(zero){
-        _Bool handled;
-        err = ci_try_lower_init_template(ci, ctx, e, dst, sz, &handled);
-        if(err || handled) return err;
-    }
-    CiOp* op;
-    if(zero){
-        err = ci_code_alloc(ctx->out, ctx->a, &op);
-        if(err) return err;
-        *op = (CiOp){
-            .zero = {
-                .is_volatile = dst.is_volatile,
-                .kind = ci_zero_kind(sz, dst.align_log2),
-                .slot = dst.slot,
-                .offset = dst.disp,
-                .align_log2 = dst.align_log2,
-                .size = sz,
-                .loc = e->loc,
-            }
-        };
-    }
-    CcInitList* l = e->init_list;
     uint64_t written_end = 0;
-    for(uint32_t i = 0; i < l->count; i++){
-        CcInitEntry* entry = &l->entries[i];
+    for(uint32_t i = 0; i < list->count; i++){
+        CcInitEntry* entry = &list->entries[i];
         CiFieldLoc entry_loc;
-        int entry_path_err = ci_init_entry_loc(ci, e->type, entry, &entry_loc);
+        int entry_path_err = ci_init_entry_loc(ci, type, entry, &entry_loc);
         if(entry_path_err) return entry_path_err;
         CcExpr* value = entry->value;
         if(!value) continue;
         uint32_t esz;
-        err = cc_expr_sizeof_as_uint(p, value, &esz);
+        err = cc_expr_sizeof_as_uint(&ci->parser, value, &esz);
         if(err) return err;
         uint32_t off = dst.disp + (uint32_t)entry_loc.byte_offset;
         uint64_t start = entry_loc.byte_offset;
@@ -2109,9 +2084,9 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
             // A backwards designator may replace an already written subobject.
             if(start < written_end && esz){
                 for(uint32_t j = 0; j < i; j++){
-                    CcInitEntry* prev = &l->entries[j];
+                    CcInitEntry* prev = &list->entries[j];
                     if(!prev->value) continue;
-                    if(cc_field_paths_overlap(e->type, entry->path, prev->path)){
+                    if(cc_field_paths_overlap(type, entry->path, prev->path)){
                         overwritten = 1;
                         break;
                     }
@@ -2127,13 +2102,14 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
         CiLowerVal v;
         err = ci_lower_expr(ci, ctx, value, CI_NO_SLOT, &v);
         if(err) return err;
+        CiOp* op;
         err = ci_code_alloc(ctx->out, ctx->a, &op);
         if(err) return err;
         if(entry_loc.bit_width){
             *op = (CiOp){
                 .store_bf = {
                     .is_volatile = dst.is_volatile,
-                    .kind = ci_store_bitfield_kind(esz, ci_bitfield_needs_bytes(e->type, entry->path, esz)? 1 : 0, min_u32(cc_offset_alignment(dst.align_log2, entry_loc.byte_offset), ci_slot_alignment(ctx->frame_alignment, v.slot))),
+                    .kind = ci_store_bitfield_kind(esz, ci_bitfield_needs_bytes(type, entry->path, esz)? 1 : 0, min_u32(cc_offset_alignment(dst.align_log2, entry_loc.byte_offset), ci_slot_alignment(ctx->frame_alignment, v.slot))),
                     .slot = dst.slot,
                     .src = v.slot,
                     .src_size = esz,
@@ -2164,6 +2140,36 @@ ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr ds
         ctx->temp = temp;
     }
     return 0;
+}
+
+static
+int
+ci_lower_init_list(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr dst, _Bool zero){
+    uint32_t sz;
+    int err = cc_sizeof_as_uint(&ci->parser, e->type, e->loc, &sz);
+    if(err) return err;
+    dst.is_volatile |= e->type.is_volatile;
+    if(zero){
+        _Bool handled;
+        err = ci_try_lower_init_template(ci, ctx, e, dst, sz, &handled);
+        if(err) return err;
+        if(handled) return 0;
+        CiOp* op;
+        err = ci_code_alloc(ctx->out, ctx->a, &op);
+        if(err) return err;
+        *op = (CiOp){
+            .zero = {
+                .is_volatile = dst.is_volatile,
+                .kind = ci_zero_kind(sz, dst.align_log2),
+                .slot = dst.slot,
+                .offset = dst.disp,
+                .align_log2 = dst.align_log2,
+                .size = sz,
+                .loc = e->loc,
+            }
+        };
+    }
+    return ci_lower_init_entries(ci, ctx, e->type, e->init_list, dst);
 }
 
 static
@@ -8562,17 +8568,25 @@ ci_lower_addr_inner(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* lv, _Bool one_pa
     if(lv->kind == CC_EXPR_ASSIGN && ccqt_kind(lv->type) == CC_VLA)
         return ci_lower_vla_assign(ci, ctx, lv, out);
     if(lv->kind == CC_EXPR_VARIABLE && ccqt_kind(lv->type) == CC_VLA){
-        if(!lv->var->automatic){
-            CcExpr ref = *lv;
-            CcPointer pointer = {.kind=CC_POINTER, .pointee=ccqt_as_vla(lv->type)->element};
-            ref.type = (CcQualType){.bits=(uintptr_t)&pointer};
-            CiLowerVal value;
-            err = ci_lower_expr(ci, ctx, &ref, CI_NO_SLOT, &value);
-            if(err) return err;
-            *out = (CiLowerAddr){.slot=value.slot};
+        if(lv->var->automatic){
+            *out = (CiLowerAddr){.slot=ci_variable_slot(ctx,lv->var)};
             return 0;
         }
-        *out = (CiLowerAddr){.slot=ci_variable_slot(ctx,lv->var)};
+        // A top-level VLA stores its base pointer in global storage.
+        uint32_t slot;
+        err = ci_lower_global_storage_addr(ctx, lv->var, lv->loc, &slot);
+        if(err) return err;
+        uint32_t alignment = ctz_32(_Alignof(void*));
+        err = ci_code_push(ctx->out, ctx->a, (CiOp){.load={
+            .kind=ci_load_kind(ctx->frame_alignment, ctx->ptr_size, alignment, slot),
+            .slot=slot,
+            .slot_size=ctx->ptr_size,
+            .src=slot,
+            .align_log2=alignment,
+            .loc=lv->loc,
+        }});
+        if(err) return err;
+        *out = (CiLowerAddr){.slot=slot};
         return 0;
     }
     CcParser* p = &ci->parser;
@@ -10671,6 +10685,36 @@ ci_static_slice(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e, uint32_t off
 
 static
 int
+ci_static_write_init_entry(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* value, CiFieldLoc entry_loc, uint32_t offset){
+    uint32_t sz;
+    int err = cc_expr_sizeof_as_uint(&ci->parser, value, &sz);
+    if(err) return err;
+    uint64_t at = (uint64_t)offset + entry_loc.byte_offset;
+    if(at > data->size) return _cc_not_constant_error;
+    if(!entry_loc.bit_width) return ci_static_write(ci, data, value, (uint32_t)at, sz);
+    unsigned char bits[16] = {0};
+    if(sz > sizeof bits) return _cc_not_constant_error;
+    CiFoldValue folded;
+    err = ci_initializer_fold(ci, value, &folded, data->runtime_ctx);
+    if(err) return err;
+    if(folded.sz != sz) return _cc_not_constant_error;
+    memcpy(bits, folded.bits, sz);
+    uint32_t first = entry_loc.bit_offset / 8;
+    uint32_t end = (entry_loc.bit_offset + entry_loc.bit_width + 7u) / 8;
+    if(at + end > data->size) return _cc_not_constant_error;
+    ci_static_forget_relocs(data, (uint32_t)at + first, end - first);
+    for(uint32_t bit = 0; bit < entry_loc.bit_width; bit++){
+        uint32_t pos = entry_loc.bit_offset + bit;
+        if(at + pos / 8 >= data->size || bit / 8 >= sz) return _cc_not_constant_error;
+        unsigned char mask = (unsigned char)(1u << (pos % 8));
+        unsigned char* byte = data->bytes + at + pos / 8;
+        *byte = (*byte & ~mask) | ((bits[bit / 8] & (1u << (bit % 8)))? mask : 0);
+    }
+    return 0;
+}
+
+static
+int
 ci_static_write(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e, uint32_t offset, uint32_t size){
     DRP_PROFILE_BEGIN(profile, "initializer.write");
     CcParser* p = &ci->parser;
@@ -10752,35 +10796,8 @@ ci_static_write(CiInterpreter* ci, CiStaticBuffer* data, CcExpr* e, uint32_t off
             int entry_path_err = ci_init_entry_loc(ci, e->type, entry, &entry_loc);
             if(entry_path_err) return entry_path_err;
             if(!entry->value) continue;
-            uint32_t sz;
-            err = cc_expr_sizeof_as_uint(p, entry->value, &sz);
+            err = ci_static_write_init_entry(ci, data, entry->value, entry_loc, offset);
             if(err) return err;
-            uint64_t at = (uint64_t)offset + entry_loc.byte_offset;
-            if(at > data->size) return _cc_not_constant_error;
-            if(entry_loc.bit_width){
-                unsigned char bits[16] = {0};
-                if(sz > sizeof bits) return _cc_not_constant_error;
-                CiFoldValue folded;
-                err = ci_initializer_fold(ci, entry->value, &folded, data->runtime_ctx);
-                if(err) return err;
-                if(folded.sz != sz) return _cc_not_constant_error;
-                memcpy(bits, folded.bits, sz);
-                uint32_t first = entry_loc.bit_offset / 8;
-                uint32_t end = (entry_loc.bit_offset + entry_loc.bit_width + 7u) / 8;
-                if(at + end > data->size) return _cc_not_constant_error;
-                ci_static_forget_relocs(data, (uint32_t)at + first, end - first);
-                for(uint32_t bit = 0; bit < entry_loc.bit_width; bit++){
-                    uint32_t pos = entry_loc.bit_offset + bit;
-                    if(at + pos / 8 >= data->size || bit / 8 >= sz) return _cc_not_constant_error;
-                    unsigned char mask = (unsigned char)(1u << (pos % 8));
-                    unsigned char* byte = data->bytes + at + pos / 8;
-                    *byte = (*byte & ~mask) | ((bits[bit / 8] & (1u << (bit % 8)))? mask : 0);
-                }
-            }
-            else {
-                err = ci_static_write(ci, data, entry->value, (uint32_t)at, sz);
-                if(err) return err;
-            }
         }
         return 0;
     }
@@ -10896,30 +10913,24 @@ ci_partial_init_template(CiInterpreter* ci, CiStaticBuffer* buffer, CcExpr* e, C
     Allocator al = ci_allocator(ci);
     Marray(CcInitEntry) entries = {0};
     CiStaticBuffer probe = {.size = buffer->size, .runtime_ctx = buffer->runtime_ctx};
-    CcInitList* single = NULL;
     CcInitList* runtime = NULL;
     unsigned char* probe_bytes = NULL;
     int err = ci_collect_template_entries(ci, e, (CcFieldPath){0}, &entries);
     if(err) goto cleanup;
     runtime = Allocator_zalloc_extra(al, entries.count, sizeof *runtime->entries, sizeof *runtime, _Alignof(CcInitList));
-    single = Allocator_zalloc_extra(al, 1, sizeof *single->entries, sizeof *single, _Alignof(CcInitList));
     probe_bytes = Allocator_zalloc(al, probe.size, 1, _Alignof(unsigned char));
-    if(!runtime || !single || !probe_bytes){ err = CI_OOM_ERROR; goto cleanup; }
+    if(!runtime || !probe_bytes){ err = CI_OOM_ERROR; goto cleanup; }
     probe.bytes = probe_bytes;
-    single->count = 1;
     runtime->loc = e->loc;
-    CcExpr candidate = *e;
-    candidate.init_list = single;
     uint32_t constants = 0;
     for(size_t i = 0; i < entries.count; i++){
         CcInitEntry entry = entries.data[i];
         CiFieldLoc entry_loc;
         err = ci_init_entry_loc(ci, e->type, &entry, &entry_loc);
         if(err) goto cleanup;
-        single->entries[0] = entry;
         memset(probe.bytes, 0, probe.size);
         probe.relocs.count = 0;
-        err = ci_static_write(ci, &probe, &candidate, 0, probe.size);
+        err = ci_static_write_init_entry(ci, &probe, entry.value, entry_loc, 0);
         if(!err){
             for(size_t j = 0; j < probe.relocs.count; j++)
                 if(probe.relocs.data[j].initialize){ err = _cc_not_constant_error; break; }
@@ -10963,7 +10974,6 @@ ci_partial_init_template(CiInterpreter* ci, CiStaticBuffer* buffer, CcExpr* e, C
         for(uint32_t i = 0; i < runtime->count; i++) cc_field_path_free(al, runtime->entries[i].path);
         Allocator_free_extra(al, runtime, entries.count, sizeof *runtime->entries, sizeof *runtime, _Alignof(CcInitList));
     }
-    if(single) Allocator_free_extra(al, single, 1, sizeof *single->entries, sizeof *single, _Alignof(CcInitList));
     if(probe_bytes) Allocator_free(al, probe_bytes, probe.size, 1, _Alignof(unsigned char));
     ma_cleanup(CiStaticReloc)(&probe.relocs, al);
     for(size_t i = 0; i < entries.count; i++) cc_field_path_free(al, entries.data[i].path);
@@ -10975,6 +10985,7 @@ static
 int
 ci_try_lower_init_template(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowerAddr dst, uint32_t size, _Bool* handled){
     *handled = 0;
+    if(e->is_lvalue && (e->type.is_volatile || e->type.is_atomic)) return 0;
     // One constant-load and one copy replace the zero-fill and at least four stores.
     if(!size || ci_init_store_count(e) < 4) return 0;
     Allocator al = ci_allocator(ci);
@@ -11071,9 +11082,7 @@ ci_try_lower_init_template(CiInterpreter* ci, CiLowerCtx* ctx, CcExpr* e, CiLowe
     };
     ctx->temp = temp;
     if(residual && residual->count){
-        CcExpr runtime = *e;
-        runtime.init_list = residual;
-        err = ci_lower_init_list(ci, ctx, &runtime, dst, 0);
+        err = ci_lower_init_entries(ci, ctx, e->type, residual, dst);
         if(err) goto cleanup;
     }
     *handled = 1;
