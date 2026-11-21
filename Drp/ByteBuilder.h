@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include "Allocators/allocator.h"
 #include "ckdint.h"
+#include "builder_growth.h"
 #include "ByteBuffer.h"
 
 #ifdef __clang__
@@ -127,19 +128,9 @@ bb_ensure_additional(ByteBuilder *bb, size_t len){
     if(add_overflow(bb->cursor, len, &required))
         goto overflow;
     if(required > bb->capacity){
-        size_t new_size = 16;
-        if(bb->capacity){
-            if(add_overflow(bb->capacity, bb->capacity / 2, &new_size))
-                goto overflow;
-        }
-        while(new_size < required){
-            if(mul_overflow(new_size, (size_t)2, &new_size))
-                goto overflow;
-        }
-        if(add_overflow(new_size, (size_t)15, &new_size))
-            goto overflow;
-        new_size &= ~(size_t)15;
-        return _bb_resize(bb, new_size);
+        void* data = drp_builder_grow(bb->allocator, bb->data, &bb->capacity, required, 1, bb->alignment ? bb->alignment : MALLOC_ALIGNMENT);
+        if(!data) goto overflow;
+        bb->data = data;
     }
     return 0;
     overflow:

@@ -430,25 +430,33 @@ struct CC_ALIGN(8) CcAligned {
 };
 _Static_assert(_Alignof(CcAligned)==8, "");
 
+#if defined _MSC_VER
+__declspec(noinline)
+#elif defined __GNUC__ || defined __clang__
+__attribute__((noinline))
+#endif
+static
+CcQualType
+ccqt_unwrap_aligned(CcQualType t){
+    do {
+        CcQualType underlying = ((CcAligned*)(t.bits & ~(uintptr_t)7))->underlying;
+        underlying.quals |= t.quals;
+        t = underlying;
+    } while(ccqt_raw_kind(t) == CC_ALIGNED);
+    return t;
+}
+
 static inline
 CcTypeKind
 ccqt_kind(CcQualType t){
-    for(;;){
-        CcTypeKind kind = ccqt_raw_kind(t);
-        if(kind != CC_ALIGNED) return kind;
-        t = ((CcAligned*)(t.bits & ~(uintptr_t)7))->underlying;
-    }
+    CcTypeKind kind = ccqt_raw_kind(t);
+    return kind == CC_ALIGNED ? ccqt_raw_kind(ccqt_unwrap_aligned(t)) : kind;
 }
 
 static inline
 CcQualType
 ccqt_unaligned(CcQualType t){
-    while(ccqt_raw_kind(t) == CC_ALIGNED){
-        CcQualType underlying = ((CcAligned*)(t.bits & ~(uintptr_t)7))->underlying;
-        underlying.quals |= t.quals;
-        t = underlying;
-    }
-    return t;
+    return ccqt_raw_kind(t) == CC_ALIGNED ? ccqt_unwrap_aligned(t) : t;
 }
 static inline CcBasicTypeKind ccqt_basic_kind(CcQualType t){ return ccqt_unaligned(t).basic.kind; }
 

@@ -11,6 +11,7 @@
 #include "stringview.h"
 #include "Allocators/allocator.h"
 #include "ckdint.h"
+#include "builder_growth.h"
 
 #if 0
 #include "debugging.h"
@@ -221,19 +222,9 @@ _check_msb16_remaining_size(MStringBuilder16* msb16, size_t len){
     if(add_overflow(msb16->cursor, len, &required))
         goto overflow;
     if(required > msb16->capacity){
-        size_t new_size = 16;
-        if(msb16->capacity){
-            if(add_overflow(msb16->capacity, msb16->capacity / 2, &new_size))
-                goto overflow;
-        }
-        while(new_size < required){
-            if(mul_overflow(new_size, (size_t)2, &new_size))
-                goto overflow;
-        }
-        if(add_overflow(new_size, (size_t)15, &new_size))
-            goto overflow;
-        new_size &= ~(size_t)15;
-        return _msb16_resize(msb16, new_size);
+        void *data = drp_builder_grow(msb16->allocator, msb16->data, &msb16->capacity, required, sizeof *msb16->data, _Alignof(uint16_t));
+        if(!data) goto overflow;
+        msb16->data = data;
     }
     return 0;
     overflow:
