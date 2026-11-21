@@ -765,12 +765,11 @@ ci_interp_run_c(CiInterpreter* ci, CiInterpFrame* root, CiStack* stack, void* _N
     dispatch:;
     if(pc >= frame->code->op_count) goto finish;
     const CiOp* op = &frame->code->ops[pc];
-    execute_op:;
     switch(op->kind){
     #define CI_OP_BEGIN(name) case name:
     #define CI_OP_END(name) goto dispatch
     #define CI_OP_SYNC_PC() (frame->pc = pc)
-    #define CI_OP_CALL(code) do { op = (code)->ops; goto execute_op; } while(0)
+    #define CI_OP_CALL(code) do { op = (code)->ops; goto frame_save; } while(0)
     #define CI_OP_ENTER(child) do { frame = (child); pc = frame->pc; goto dispatch; } while(0)
     #define CI_OP_ERROR(value) do { frame->pc = pc; error = (value); goto cleanup; } while(0)
         #ifdef __clang__
@@ -819,12 +818,11 @@ ci_interp_step(CiInterpreter* ci, CiInterpFrame* root, CiInterpFrame* _Nonnull* 
     size_t pc = frame->pc;
     if(pc >= frame->code->op_count) goto finish;
     const CiOp* op = &frame->code->ops[pc];
-    execute_op:;
     switch(op->kind){
     #define CI_OP_BEGIN(name) case name:
     #define CI_OP_END(name) frame->pc = pc; goto finish
     #define CI_OP_SYNC_PC() ((void)0)
-    #define CI_OP_CALL(code) do { op = (code)->ops; goto execute_op; } while(0)
+    #define CI_OP_CALL(code) do { op = (code)->ops; goto frame_save; } while(0)
     #define CI_OP_ENTER(child) do { frame = (child); goto finish; } while(0)
     #define CI_OP_ERROR(value) do { error = (value); goto finish; } while(0)
         #ifdef __clang__

@@ -10590,14 +10590,16 @@
 
 {
     CI_OP_BEGIN(CI_OP_FRAME_SAVE);
+    frame_save:;
     int err = ci_stack_save(stack, 1);
     if(err) CI_OP_ERROR(err);
     op++;
-    goto execute_op;
+    goto frame_enter;
     CI_OP_END(CI_OP_FRAME_SAVE);
 }
 {
     CI_OP_BEGIN(CI_OP_FRAME_ENTER);
+    frame_enter:;
     const CiCode* code = (const CiCode*)((const char*)(op - 1) - offsetof(CiCode, ops));
     CiInterpFrame* child = NULL;
     int err = ci_alloc_frame(ci, stack, frame, code->frame_size, (uint32_t)code->alignment, &child);
