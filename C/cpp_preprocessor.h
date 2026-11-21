@@ -171,6 +171,7 @@ struct CppPreprocessor {
     ArenaAllocator synth_arena; // For things that need to be synthesized
     AtomMap(CppMacro) macros;
     AtomMap(CppPragma) pragmas;
+    StringView (*_Nullable has_c_attribute)(StringView prefix, StringView name);
     FileCache* fc;
     AtomTable* at;
     Logger* logger;

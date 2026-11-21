@@ -32,6 +32,20 @@
 #pragma clang assume_nonnull begin
 #endif
 
+enum CcAttributeKind TYPED_ENUM(uint32_t) {
+    CC_ATTR_UNKNOWN = 0,
+    CC_ATTR_NORETURN,
+    CC_ATTR_HOTSWAPPABLE,
+    CC_ATTR_PACKED,
+    CC_ATTR_ALWAYS_INLINE,
+    CC_ATTR_NOINLINE,
+    CC_ATTR_TRANSPARENT_UNION,
+    CC_ATTR_ALIGNED,
+    CC_ATTR_VECTOR_SIZE,
+    CC_ATTR_FORMAT,
+};
+TYPEDEF_ENUM(CcAttributeKind, uint32_t);
+
 enum {CC_CONTROL_LOOP_MAX=255};
 
 typedef struct CcParsedParams CcParsedParams;
@@ -314,7 +328,7 @@ struct CcSpecifier {
                      sp_qualbits:    4,
 
                      _sp_infer:      1,
-                     sp_complex:     1,
+                     _sp_complex:    1,
                      _padding1:      32-24;
         };
         struct {
@@ -345,7 +359,7 @@ struct CcSpecifier {
                      sp_restrict:     1,
 
                      sp_infer_type:   1,
-                     _sp_complex:     1,
+                     sp_complex:      1,
                      _padding2:       32-24;
         };
     };
@@ -9316,6 +9330,76 @@ cc_parse_alignment_argument(CcParser* p, CcParseFlags flags, SrcLoc loc, CcAttri
     return cc_expect_punct(p, CC_rparen);
 }
 
+static
+StringView
+cc_attribute_spelling(StringView name){
+    if(sv_startswith(name, SV("__")))
+        name = sv_slice(name, 2, name.length);
+    if(sv_endswith(name, SV("__")))
+        name = sv_slice(name, 0, name.length-2);
+    return name;
+}
+
+static
+CcAttributeKind
+cc_attribute_kind(StringView prefix, StringView name){
+    name = cc_attribute_spelling(name);
+    if(sv_equals(name, SV("_Noreturn")) || sv_equals(name, SV("noreturn")))
+        return CC_ATTR_NORETURN;
+    if(!prefix.length)
+        return CC_ATTR_UNKNOWN;
+    prefix = cc_attribute_spelling(prefix);
+    if(sv_equals(prefix, SV("drc"))){
+        if(sv_equals(name, SV("hotswappable"))) return CC_ATTR_HOTSWAPPABLE;
+        return CC_ATTR_UNKNOWN;
+    }
+    else if(sv_equals(prefix, SV("gnu"))){
+        switch(name.length){
+            case 6:
+                if(sv_equals(name, SV("format"))) return CC_ATTR_FORMAT;
+                if(sv_equals(name, SV("packed"))) return CC_ATTR_PACKED;
+                break;
+            case 7:
+                if(sv_equals(name, SV("aligned"))) return CC_ATTR_ALIGNED;
+                break;
+            case 8:
+                if(sv_equals(name, SV("noinline"))) return CC_ATTR_NOINLINE;
+                if(sv_equals(name, SV("noreturn"))) return CC_ATTR_NORETURN;
+                break;
+            case 11:
+                if(sv_equals(name, SV("vector_size"))) return CC_ATTR_VECTOR_SIZE;
+                break;
+            case 13:
+                if(sv_equals(name, SV("always_inline"))) return CC_ATTR_ALWAYS_INLINE;
+                break;
+            case 17:
+                if(sv_equals(name, SV("transparent_union"))) return CC_ATTR_TRANSPARENT_UNION;
+                break;
+            default: break;
+        }
+        return CC_ATTR_UNKNOWN;
+    }
+    else {
+        return CC_ATTR_UNKNOWN;
+    }
+}
+
+static
+StringView
+cc_has_c_attribute(StringView prefix, StringView name){
+    CcAttributeKind kind = cc_attribute_kind(prefix, name);
+    switch(kind){
+        case CC_ATTR_UNKNOWN:
+            return SV("0");
+        case CC_ATTR_NORETURN:
+            if(!prefix.length) return SV("202311L");
+            goto fallthrough;
+        default:
+            fallthrough:
+            return SV("1");
+    }
+}
+
 // cc_match_gnu_attribute
 // ----------------------
 // Tries to match a gnu-style attribute.
@@ -9330,8 +9414,8 @@ cc_parse_alignment_argument(CcParser* p, CcParseFlags flags, SrcLoc loc, CcAttri
 // loc:
 //     Source location for error reporting.
 //
-// attr_name:
-//     Canonicalized attribute name (without any __).
+// kind:
+//     Attribute identified by the parser.
 //
 // attrs:
 //     Attribute flags to update.
@@ -9341,35 +9425,36 @@ cc_parse_alignment_argument(CcParser* p, CcParseFlags flags, SrcLoc loc, CcAttri
 // 0 on success. Error code on failure.
 static
 int
-cc_match_gnu_attribute(CcParser* p, CcParseFlags flags, SrcLoc loc, StringView attr_name, CcAttributes* attrs){
+cc_match_gnu_attribute(CcParser* p, CcParseFlags flags, SrcLoc loc, CcAttributeKind kind, CcAttributes* attrs){
     CcParseFlags constexpr_flags = flags;
     constexpr_flags.vc = CC_CONSTEXPR_VALUE;
     int err = 0;
     CcToken tok;
-    if(sv_equals(attr_name, SV("packed"))){
+    switch(kind){
+    case CC_ATTR_PACKED:
         attrs->packed = 1;
-    }
-    else if(sv_equals(attr_name, SV("always_inline"))){
+        break;
+    case CC_ATTR_ALWAYS_INLINE:
         attrs->always_inline = 1;
-    }
-    else if(sv_equals(attr_name, SV("noinline"))){
+        break;
+    case CC_ATTR_NOINLINE:
         attrs->noinline = 1;
-    }
-    else if(sv_equals(attr_name, SV("transparent_union"))){
+        break;
+    case CC_ATTR_TRANSPARENT_UNION:
         attrs->transparent_union = 1;
-    }
-    else if(sv_equals(attr_name, SV("aligned"))){
+        break;
+    case CC_ATTR_ALIGNED: {
         err = cc_peek(p, &tok);
         if(err) return err;
         if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen){
             err = cc_parse_alignment_argument(p, flags, loc, attrs, "aligned attribute");
             if(err) return err;
         }
-        else {
+        else
             cc_add_alignment_attribute(attrs, cc_target(p)->max_align);
-        }
+        break;
     }
-    else if(sv_equals(attr_name, SV("vector_size"))){
+    case CC_ATTR_VECTOR_SIZE:{
         constexpr_flags.unevaluated = 1;
         err = cc_expect_punct(p, CC_lparen);
         if(err) return err;
@@ -9392,8 +9477,9 @@ cc_match_gnu_attribute(CcParser* p, CcParseFlags flags, SrcLoc loc, StringView a
         attrs->vector_size = (uint16_t)vs;
         err = cc_expect_punct(p, CC_rparen);
         if(err) return err;
+        break;
     }
-    else if(sv_equals(attr_name, SV("format"))){
+    case CC_ATTR_FORMAT:{
         constexpr_flags.unevaluated = 1;
         err = cc_expect_punct(p, CC_lparen);
         if(err) return err;
@@ -9436,8 +9522,9 @@ cc_match_gnu_attribute(CcParser* p, CcParseFlags flags, SrcLoc loc, StringView a
             err = cc_merge_printf_formats(p, &format, &attrs->printf_formats);
             if(err) return err;
         }
+        break;
     }
-    else {
+    default: {
         err = cc_peek(p, &tok);
         if(err) return err;
         if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen){
@@ -9455,6 +9542,7 @@ cc_match_gnu_attribute(CcParser* p, CcParseFlags flags, SrcLoc loc, StringView a
                 }
             }
         }
+    }
     }
     return 0;
 }
@@ -9491,11 +9579,7 @@ cc_parse_attributes(CcParser* p, CcParseFlags flags, CcAttributes* attrs){
                 attr_name = (StringView){.text = tok.ident.ident->data, .length = tok.ident.ident->length};
             else
                 attr_name = SV("");
-            if(sv_startswith(attr_name, SV("__")))
-                attr_name = sv_slice(attr_name, 2, attr_name.length);
-            if(sv_endswith(attr_name, SV("__")))
-                attr_name = sv_slice(attr_name, 0, attr_name.length-2);
-            err = cc_match_gnu_attribute(p, flags, tok.loc, attr_name, attrs);
+            err = cc_match_gnu_attribute(p, flags, tok.loc, cc_attribute_kind(SV("gnu"), attr_name), attrs);
             if(err) return err;
             err = cc_peek(p, &tok);
             if(err) return err;
@@ -9562,51 +9646,33 @@ cc_parse_c23_attributes(CcParser* p, CcParseFlags flags, CcAttributes* attrs){
                 goto c23_skip_args;
             }
             StringView attr_name = {.text = tok.ident.ident->data, .length = tok.ident.ident->length};
-            _Bool is_gnu = 0,
-                  is_drc = 0;
+            StringView prefix = {0};
             err = cc_peek(p, &tok);
             if(err) return err;
             if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_double_colon){
                 err = cc_next_token(p, &tok);
                 if(err) return err;
-                StringView prefix = attr_name;
-                if(sv_startswith(prefix, SV("__")))
-                    prefix = sv_slice(prefix, 2, prefix.length);
-                if(sv_endswith(prefix, SV("__")))
-                    prefix = sv_slice(prefix, 0, prefix.length-2);
-                is_gnu = sv_equals(prefix, SV("gnu"));
-                is_drc = sv_equals(prefix, SV("drc"));
+                prefix = attr_name;
                 err = cc_next_token(p, &tok);
                 if(err) return err;
                 if(tok.type != CC_IDENTIFIER && tok.type != CC_KEYWORD)
                     return cc_error(p, tok.loc, "expected attribute name after '::'");
-                if(tok.type == CC_IDENTIFIER)
-                    attr_name = (StringView){.text = tok.ident.ident->data, .length = tok.ident.ident->length};
-                else {
-                    goto c23_skip_args;
-                }
-                if(!is_gnu && !is_drc)
-                    goto c23_skip_args;
+                if(tok.type == CC_KEYWORD) goto c23_skip_args;
+                attr_name = (StringView){.text = tok.ident.ident->data, .length = tok.ident.ident->length};
             }
-            if(sv_startswith(attr_name, SV("__")))
-                attr_name = sv_slice(attr_name, 2, attr_name.length);
-            if(sv_endswith(attr_name, SV("__")))
-                attr_name = sv_slice(attr_name, 0, attr_name.length-2);
-            if(is_drc){
-                if(sv_equals(attr_name, SV("hotswappable"))){
-                    attrs->hotswappable = 1;
-                    err = cc_peek(p, &tok);
-                    if(err) return err;
-                    if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen)
-                        return cc_error(p, tok.loc, "drc::hotswappable takes no arguments");
-                    goto c23_skip_comma;
-                }
-                goto c23_skip_args;
+            CcAttributeKind kind = cc_attribute_kind(prefix, attr_name);
+            if(kind == CC_ATTR_HOTSWAPPABLE){
+                attrs->hotswappable = 1;
+                err = cc_peek(p, &tok);
+                if(err) return err;
+                if(tok.type == CC_PUNCTUATOR && tok.punct.punct == CC_lparen)
+                    return cc_error(p, tok.loc, "drc::hotswappable takes no arguments");
+                goto c23_skip_comma;
             }
-            if(sv_equals(attr_name, SV("noreturn")))
+            if(kind == CC_ATTR_NORETURN)
                 attrs->is_noreturn = 1;
-            else if(is_gnu){
-                err = cc_match_gnu_attribute(p, flags, tok.loc, attr_name, attrs);
+            else if(kind != CC_ATTR_UNKNOWN){
+                err = cc_match_gnu_attribute(p, flags, tok.loc, kind, attrs);
                 if(err) return err;
                 goto c23_skip_comma;
             }
@@ -17524,6 +17590,7 @@ cc_define_builtin_types(CcParser* p){
             if(err) return CC_OOM_ERROR;
         }
     }
+    p->cpp.has_c_attribute = cc_has_c_attribute;
     err = cpp_define_builtin_func_macro(&p->cpp, SV("__has_builtin"), cc_has_builtin, p, 1, 0, 1);
     if(err) return err;
     err = cpp_define_builtin_func_macro(&p->cpp, SV("__has_feature"), cc_has_feature, p, 1, 0, 1);

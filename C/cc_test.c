@@ -6063,6 +6063,27 @@ TestFunction(test_parse_decls){
             },
         },
         {
+            "compiler C attribute queries", __LINE__,
+            SVI("#define ATTR(x) x\n#define NS __gnu__\n"
+                "#if !defined(__has_c_attribute) || __has_c_attribute(ATTR(__noreturn__)) != 202311L\n"
+                "#error missing noreturn\n"
+                "#endif\n"
+                "#if !__has_c_attribute(NS :: __packed__) || !__has_c_attribute(drc::hotswappable)\n"
+                "#error missing scoped attribute\n"
+                "#endif\n"
+                "#if __has_c_attribute(packed)\n"
+                "#error unexpected attribute support\n"
+                "#endif\n"
+                "#if __has_c_attribute(other::packed)\n"
+                "#error unexpected attribute support\n"
+                "#endif\n"
+                "#if __has_c_attribute(gnu::unknown)\n"
+                "#error unexpected attribute support\n"
+                "#endif\n"
+                "[[noreturn]] void stop(void);\n"),
+            .funcs = {{SVI("stop"), SVI("void(void)")}},
+        },
+        {
             "__has_builtin", __LINE__,
             SVI("#if __has_builtin(__builtin_expect)\n"
                "int has_expect;\n"
